@@ -1,13 +1,17 @@
 import { createRoute } from '@tanstack/react-router';
 import type { AppParentRoute } from '@/app/routes-base';
-import { ModulePlaceholder } from '@/shared/ui/ModulePlaceholder';
+import { validateTypedListSearch } from './commercial-ui';
+import { NewSalesOrderPage } from './NewSalesOrderPage';
+import { SalesOrderDetailPage } from './SalesOrderDetailPage';
+import { SalesOrdersListPage } from './SalesOrdersListPage';
 
 export function salesOrdersRoutes(parent: AppParentRoute) {
   return [
     createRoute({
       getParentRoute: () => parent,
       path: 'sales-orders',
-      component: () => <ModulePlaceholder title="Sales orders" />,
+      validateSearch: validateTypedListSearch,
+      component: SalesOrdersListPage,
     }),
     createRoute({
       getParentRoute: () => parent,
@@ -18,12 +22,8 @@ export function salesOrdersRoutes(parent: AppParentRoute) {
         contractId: typeof s.contractId === 'string' ? s.contractId : undefined,
         customerId: typeof s.customerId === 'string' ? s.customerId : undefined,
       }),
-      component: () => <ModulePlaceholder title="New sales order" />,
+      component: NewSalesOrderPage,
     }),
-    createRoute({
-      getParentRoute: () => parent,
-      path: 'sales-orders/$id',
-      component: () => <ModulePlaceholder title="Sales order" />,
-    }),
+    createRoute({ getParentRoute: () => parent, path: 'sales-orders/$id', component: SalesOrderDetailPage }),
   ] as const;
 }

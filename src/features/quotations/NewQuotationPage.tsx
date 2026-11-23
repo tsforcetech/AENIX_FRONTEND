@@ -4,6 +4,8 @@ import { Plus, Send, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
+import { SERVICE_CATEGORIES, serviceCategoryLabel } from '@/domain/workflow';
+import { locationLabel } from '@/features/sales-orders/commercial-ui';
 import { useCustomerOptions, useServiceOptions } from '@/shared/data/lookups';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
@@ -26,16 +28,22 @@ const lineSchema = z.object({
   unitCost: z.coerce.number().min(0, '≥ 0'),
 });
 
-const schema = z.object({
-  customerId: z.string().min(1, 'Choose a customer'),
-  mode: z.enum(['Road', 'Sea', 'Air']),
-  origin: z.string().trim().min(2, 'Enter the origin').max(80),
-  destination: z.string().trim().min(2, 'Enter the destination').max(80),
-  agreement: z.enum(['One-time', 'Long-term']),
-  validUntil: z.string().min(1, 'Choose a date'),
-  terms: z.string().max(2000),
-  lines: z.array(lineSchema).min(1, 'Add at least one price line'),
-});
+const schema = z
+  .object({
+    customerId: z.string().min(1, 'Choose a customer'),
+    serviceCategory: z.enum(['Transport', 'Warehouse', 'Service']),
+    mode: z.enum(['Road', 'Sea', 'Air']),
+    origin: z.string().trim().min(2, 'Enter a location').max(80),
+    destination: z.string().trim().max(80),
+    agreement: z.enum(['One-time', 'Long-term']),
+    validUntil: z.string().min(1, 'Choose a date'),
+    terms: z.string().max(2000),
+    lines: z.array(lineSchema).min(1, 'Add at least one price line'),
+  })
+  .superRefine((v, ctx) => {
+    if (v.serviceCategory === 'Transport' && v.destination.length < 2)
+      ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
+  });
 type FormInput = z.input<typeof schema>;
 type FormOutput = z.output<typeof schema>;
 
@@ -79,6 +87,7 @@ function QuotationForm({
     resolver: zodResolver(schema),
     defaultValues: {
       customerId: prefill?.customerId ?? '',
+      serviceCategory: prefill?.serviceCategory ?? 'Transport',
       mode: prefill?.mode ?? 'Road',
       origin: prefill?.origin ?? '',
       destination: prefill?.destination ?? '',
@@ -92,6 +101,7 @@ function QuotationForm({
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'lines' });
   const watchedLines = useWatch({ control, name: 'lines' }) ?? [];
+  const category = useWatch({ control, name: 'serviceCategory' });
   const t = totals(
     watchedLines.map((l) => ({
       quantity: Number(l?.quantity) || 0,
@@ -109,7 +119,13 @@ function QuotationForm({
 
   const save = (submit: boolean) => async (v: FormOutput) => {
     setSubmitMode(submit ? 'submit' : 'draft');
-    const q = await create.mutateAsync({ ...v, enquiryId, submit });
+    const q = await create.mutateAsync({
+      ...v,
+      mode: v.serviceCategory === 'Transport' ? v.mode : undefined,
+      destination: v.serviceCategory === 'Transport' ? v.destination : '',
+      enquiryId,
+      submit,
+    });
     toast({
       title: `${q.number} ${submit ? 'submitted for approval' : 'saved as draft'}`,
       body: q.status === 'Pending approval' ? 'An approver can now review the price and margin.' : undefined,
@@ -139,7 +155,7 @@ function QuotationForm({
       />
       <form onSubmit={onSubmit} noValidate className="space-y-6">
         <Card>
-          <CardHeader title="Customer & lane" />
+          <CardHeader title="Customer & service" />
           <CardBody className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
             <SelectField
               label="Customer"
@@ -151,10 +167,10 @@ function QuotationForm({
               {...register('customerId')}
             />
             <SelectField
-              label="Mode"
+              label="Service type"
               required
-              options={['Road', 'Sea', 'Air'].map((m) => ({ value: m, label: `${m} freight` }))}
-              {...register('mode')}
+              options={SERVICE_CATEGORIES.map((c) => ({ value: c, label: serviceCategoryLabel[c] }))}
+              {...register('serviceCategory')}
             />
             <SelectField
               label="Agreement"
@@ -166,13 +182,28 @@ function QuotationForm({
               ]}
               {...register('agreement')}
             />
-            <TextField label="Origin" required error={errors.origin?.message} {...register('origin')} />
+            {category === 'Transport' ? (
+              <SelectField
+                label="Transport mode"
+                required
+                options={['Road', 'Sea', 'Air'].map((m) => ({ value: m, label: `${m} freight` }))}
+                {...register('mode')}
+              />
+            ) : null}
             <TextField
-              label="Destination"
+              label={category === 'Transport' ? 'Origin' : locationLabel(category)}
               required
-              error={errors.destination?.message}
-              {...register('destination')}
+              error={errors.origin?.message}
+              {...register('origin')}
             />
+            {category === 'Transport' ? (
+              <TextField
+                label="Destination"
+                required
+                error={errors.destination?.message}
+                {...register('destination')}
+              />
+            ) : null}
             <TextField
               label="Valid until"
               type="date"
