@@ -90,6 +90,23 @@ const statusTone: Record<string, Tone> = {
   Dispatch: 'brand',
   Transfer: 'info',
   Adjustment: 'warning',
+  'Sent to warehouse': 'info',
+  Uploaded: 'info',
+  Verified: 'success',
+  'Variance raised': 'danger',
+  Open: 'warning',
+  'Sent to vendor': 'info',
+  Closed: 'success',
+  Match: 'success',
+  Short: 'danger',
+  Excess: 'warning',
+  'Not received': 'danger',
+  'Not expected': 'warning',
+  Damaged: 'danger',
+  Transport: 'neutral',
+  Warehouse: 'neutral',
+  'Direct service': 'neutral',
+  'Sales order': 'info',
 };
 
 export function StatusBadge({ status }: { status: string }) {

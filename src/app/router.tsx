@@ -3,6 +3,7 @@ import { LoginPage } from '@/features/auth/LoginPage';
 import { HomePage } from '@/features/home/HomePage';
 import { enquiriesRoutes } from '@/features/enquiries/routes';
 import { quotationsRoutes } from '@/features/quotations/routes';
+import { salesOrdersRoutes } from '@/features/sales-orders/routes';
 import { contractsRoutes } from '@/features/contracts/routes';
 import { workOrdersRoutes } from '@/features/work-orders/routes';
 import { warehouseRoutes } from '@/features/warehouse/routes';
@@ -38,6 +39,7 @@ const routeTree = rootRoute.addChildren([
     homeRoute,
     ...enquiriesRoutes(p),
     ...quotationsRoutes(p),
+    ...salesOrdersRoutes(p),
     ...contractsRoutes(p),
     ...workOrdersRoutes(p),
     ...warehouseRoutes(p),

@@ -11,6 +11,14 @@ export type IsoDate = string; // YYYY-MM-DD
 export type IsoDateTime = string;
 
 export type TransportMode = 'Road' | 'Sea' | 'Air';
+
+/**
+ * What a request / order / job is for (owner instruction 2026-11-23): not every job is transport.
+ * - Transport: moving goods; `mode` (Road/Sea/Air) applies ONLY here.
+ * - Warehouse: 3PL inbound/storage/outbound handled by the warehouse team (PL → GRN, request → POD).
+ * - Service: a direct service with no transport leg (e.g. customs clearance, labour, packing).
+ */
+export type ServiceCategory = 'Transport' | 'Warehouse' | 'Service';
 export type ServiceMode = TransportMode | 'Warehouse' | 'Customs';
 
 // ---------- Masters ----------
@@ -83,8 +91,11 @@ export interface Enquiry {
   id: Id;
   number: string;
   customerId: Id;
-  mode: TransportMode;
+  serviceCategory: ServiceCategory;
+  /** Transport only. */
+  mode?: TransportMode;
   serviceIds: Id[];
+  /** Transport: origin/destination. Warehouse/Service: service location in `origin`, `destination` may be ''. */
   origin: string;
   destination: string;
   cargo: Cargo;
@@ -113,7 +124,9 @@ export interface Quotation {
   version: number;
   enquiryId?: Id;
   customerId: Id;
-  mode: TransportMode;
+  serviceCategory: ServiceCategory;
+  /** Transport only. */
+  mode?: TransportMode;
   origin: string;
   destination: string;
   agreement: 'One-time' | 'Long-term';
@@ -123,6 +136,32 @@ export interface Quotation {
   terms: string;
   createdAt: IsoDateTime;
   owner: string;
+}
+
+// ---------- Sales order ----------
+export type SalesOrderStatus = 'Draft' | 'Confirmed' | 'In progress' | 'Completed' | 'Cancelled';
+
+/**
+ * Customer's confirmed order (Enquiry → optional Quotation → Sales Order → Work Order(s)).
+ * Can be created from an accepted quotation, a contract, or directly (authorised direct pricing).
+ */
+export interface SalesOrder {
+  id: Id;
+  number: string;
+  customerId: Id;
+  serviceCategory: ServiceCategory;
+  mode?: TransportMode;
+  enquiryId?: Id;
+  quotationId?: Id;
+  contractId?: Id;
+  customerPoRef: string;
+  orderDate: IsoDate;
+  origin: string;
+  destination: string;
+  lines: PriceLine[];
+  status: SalesOrderStatus;
+  owner: string;
+  notes: string;
 }
 
 export type ContractStatus = 'Draft' | 'Active' | 'Expiring' | 'Expired';
@@ -164,8 +203,11 @@ export interface WorkOrder {
   id: Id;
   number: string;
   customerId: Id;
-  source: { type: 'Quotation' | 'Contract' | 'Direct'; refId?: Id };
-  mode: TransportMode;
+  serviceCategory: ServiceCategory;
+  salesOrderId?: Id;
+  source: { type: 'Sales order' | 'Quotation' | 'Contract' | 'Direct'; refId?: Id };
+  /** Transport only. */
+  mode?: TransportMode;
   origin: string;
   destination: string;
   cargo: Cargo;
@@ -176,9 +218,72 @@ export interface WorkOrder {
   lines: PriceLine[];
   hasWarehouse: boolean;
   invoiceId?: Id;
+  /** Warehouse inbound: product list sent to the warehouse team, and the GRN they return. */
+  packingList?: PackingList;
+  grn?: Grn;
+  /** Customer out / delivery requests, each closed by a vendor or warehouse POD. */
+  customerRequests: CustomerRequest[];
+  /** Purchase invoices (vendor bills) drafted when the job is completed. */
+  purchaseInvoiceIds?: Id[];
+  completedAt?: IsoDateTime;
   createdAt: IsoDateTime;
   eta: IsoDate;
   owner: string;
+}
+
+// ---------- Job documents: PL → GRN, customer request → POD ----------
+export interface DocLine {
+  sku: string;
+  description: string;
+  quantity: number;
+  uom: string;
+}
+
+/** Uploaded document metadata (the file itself is stored by the backend; prototype keeps the name only). */
+export interface Attachment {
+  fileName: string;
+  sizeKb: number;
+  uploadedAt: IsoDateTime;
+  uploadedBy: string;
+}
+
+/** Product list (PL) sent to the warehouse team so they know what to expect. */
+export interface PackingList {
+  number: string;
+  status: 'Draft' | 'Sent to warehouse';
+  sentAt?: IsoDateTime;
+  lines: DocLine[];
+}
+
+/** Goods received note returned by the warehouse team and uploaded against the job. */
+export interface Grn {
+  number: string;
+  receivedAt: IsoDateTime;
+  attachment?: Attachment;
+  lines: { sku: string; receivedQty: number; damagedQty: number; remarks?: string }[];
+  status: 'Uploaded' | 'Verified' | 'Variance raised';
+}
+
+/** Proof of delivery returned by the vendor / warehouse for a customer request. */
+export interface Pod {
+  number: string;
+  vendorId?: Id;
+  deliveredAt: IsoDateTime;
+  receivedBy: string;
+  attachment?: Attachment;
+  lines: { sku: string; deliveredQty: number; remarks?: string }[];
+}
+
+/** Customer's out / release / delivery request against a job. */
+export interface CustomerRequest {
+  id: Id;
+  number: string;
+  requestedAt: IsoDateTime;
+  requiredBy: IsoDate;
+  deliverTo: string;
+  lines: DocLine[];
+  status: 'Open' | 'Sent to vendor' | 'Delivered' | 'Closed' | 'Variance raised';
+  pod?: Pod;
 }
 
 // ---------- Warehouse ----------

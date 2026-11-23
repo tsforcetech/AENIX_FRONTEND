@@ -24,7 +24,10 @@ import type {
   WorkOrder,
   WorkOrderStatus,
   Milestone,
+  SalesOrder,
+  ServiceCategory,
 } from '@/domain/types';
+import { milestoneLabels } from '@/domain/workflow';
 import { invoiceTotals } from '@/domain/calc';
 
 /** Fixed "today" so the prototype looks the same for every reviewer. */
@@ -454,34 +457,9 @@ const addDays = (iso: string, days: number) =>
 export const enquiries: Enquiry[] = [];
 export const quotations: Quotation[] = [];
 export const workOrders: WorkOrder[] = [];
+export const salesOrders: SalesOrder[] = [];
+let soSeq = 5100;
 export const invoices: Invoice[] = [];
-
-const milestoneTemplates: Record<TransportMode, string[]> = {
-  Road: [
-    'Booking confirmed',
-    'Vehicle assigned',
-    'Loaded at origin',
-    'In transit',
-    'Border / customs cleared',
-    'Delivered',
-  ],
-  Sea: [
-    'Booking confirmed',
-    'Container loaded',
-    'Vessel departed',
-    'Arrived at port',
-    'Customs cleared',
-    'Delivered to warehouse',
-  ],
-  Air: [
-    'Booking confirmed',
-    'Cargo received at origin',
-    'Flight departed',
-    'Arrived at DXB',
-    'Customs cleared',
-    'Delivered',
-  ],
-};
 
 const progressByStatus: Record<WorkOrderStatus, number> = {
   Draft: 0,
@@ -493,13 +471,20 @@ const progressByStatus: Record<WorkOrderStatus, number> = {
   Cancelled: 0,
 };
 
-function milestones(mode: TransportMode, status: WorkOrderStatus, day: number): Milestone[] {
-  const done = progressByStatus[status];
-  return milestoneTemplates[mode].map((label, i) => ({
-    id: `ms-${mode}-${i}`,
+function milestones(
+  mode: TransportMode | undefined,
+  status: WorkOrderStatus,
+  day: number,
+  category: ServiceCategory = 'Transport',
+  doneOverride?: number,
+): Milestone[] {
+  const labels = milestoneLabels(category, mode);
+  const done = doneOverride ?? Math.round((progressByStatus[status] / 6) * labels.length);
+  return labels.map((label, i) => ({
+    id: `ms-${category}-${mode ?? 'x'}-${i}`,
     label,
     status: i < done ? 'Done' : i === done ? 'Current' : 'Pending',
-    at: i < done ? dt(Math.min(day + i, 23), 8 + i) : undefined,
+    at: i < done ? dt(Math.min(day + i, 23), 8 + (i % 9)) : undefined,
   }));
 }
 
@@ -525,6 +510,7 @@ for (const f of flows) {
     id: enquiryId,
     number: `ENQ-${f.n}`,
     customerId: `cus-${f.customer}`,
+    serviceCategory: 'Transport',
     mode: lane.mode,
     serviceIds: [...new Set(lane.lines().map((l) => l.serviceId))],
     origin: lane.origin,
@@ -545,6 +531,7 @@ for (const f of flows) {
     version: f.quote.status === 'Accepted' && f.n % 2 === 0 ? 2 : 1,
     enquiryId,
     customerId: `cus-${f.customer}`,
+    serviceCategory: 'Transport',
     mode: lane.mode,
     origin: lane.origin,
     destination: lane.destination,
@@ -560,11 +547,33 @@ for (const f of flows) {
   woSeq -= 1;
   const woId = `wo-${woSeq}`;
   const woLines = qLines.map((l) => ({ ...l, id: `${l.id}-wo` }));
+  soSeq += 1;
+  const soId = `so-${soSeq}`;
+  salesOrders.push({
+    id: soId,
+    number: `SO-${soSeq}`,
+    customerId: `cus-${f.customer}`,
+    serviceCategory: 'Transport',
+    mode: lane.mode,
+    enquiryId,
+    quotationId,
+    customerPoRef: `PO-${f.customer}${String(f.n).slice(-3)}`,
+    orderDate: d(f.day + 1),
+    origin: lane.origin,
+    destination: lane.destination,
+    lines: qLines.map((l) => ({ ...l, id: `${l.id}-so` })),
+    status:
+      f.wo.status === 'Completed' ? 'Completed' : f.wo.status === 'Confirmed' ? 'Confirmed' : 'In progress',
+    owner,
+    notes: '',
+  });
   const wo: WorkOrder = {
     id: woId,
     number: `JOB-${woSeq}`,
     customerId: `cus-${f.customer}`,
-    source: { type: 'Quotation', refId: quotationId },
+    serviceCategory: 'Transport',
+    salesOrderId: soId,
+    source: { type: 'Sales order', refId: soId },
     mode: lane.mode,
     origin: lane.origin,
     destination: lane.destination,
@@ -581,6 +590,7 @@ for (const f of flows) {
     })),
     lines: woLines,
     hasWarehouse: !!f.wo.warehouse,
+    customerRequests: [],
     createdAt: dt(f.day + 1),
     eta: ['Completed', 'Delivered'].includes(f.wo.status)
       ? d(Math.min(f.day + 9, 22))
@@ -627,14 +637,314 @@ workOrders.push({
   cargo: cargo('Server racks', 6, 2400, 12, '3-ton truck'),
   status: 'Draft',
   priority: 'High',
+  serviceCategory: 'Transport',
   milestones: milestones('Road', 'Draft', 23),
   vendorAssignments: [],
   lines: [line('svc-1', 'FTL JAFZA → Dubai Silicon Oasis', 1, 'Truck', 1100, 700)],
   hasWarehouse: true,
+  customerRequests: [],
   createdAt: dt(23, 10),
   eta: d(26),
   owner: 'Aisha Khan',
 });
+
+// ---------- Warehouse & direct-service flows (owner flow update 2026-11-23) ----------
+const att = (fileName: string, day: number, hh: number, by: string, sizeKb = 220) => ({
+  fileName,
+  sizeKb,
+  uploadedAt: dt(day, hh),
+  uploadedBy: by,
+});
+
+enquiries.push(
+  {
+    id: 'enq-1085',
+    number: 'ENQ-1085',
+    customerId: 'cus-5',
+    serviceCategory: 'Warehouse',
+    serviceIds: ['svc-7', 'svc-8'],
+    origin: 'JAFZA WH-1',
+    destination: '',
+    cargo: cargo('Ambient packaged food — seasonal stock', 40, 16000, 60, 'Pallets'),
+    requiredBy: d(1, 12),
+    status: 'New',
+    owner: 'Rahul Nair',
+    notes: 'Storage for ~3 months, weekly releases to retail DCs.',
+    createdAt: dt(23, 11),
+  },
+  {
+    id: 'enq-1086',
+    number: 'ENQ-1086',
+    customerId: 'cus-6',
+    serviceCategory: 'Service',
+    serviceIds: ['svc-6'],
+    origin: 'Jebel Ali Port',
+    destination: '',
+    cargo: cargo('Import declaration — industrial valves', 1, 0, 0, '—'),
+    requiredBy: d(26),
+    status: 'Quoting',
+    owner: 'Elena Petrova',
+    notes: 'Customs clearance only; customer arranges own trucking.',
+    createdAt: dt(22, 15),
+  },
+);
+
+// Warehouse job 1 — inbound PL vs GRN has a shortage + damage; first out-request awaiting POD.
+salesOrders.push({
+  id: 'so-5110',
+  number: 'SO-5110',
+  customerId: 'cus-3',
+  serviceCategory: 'Warehouse',
+  customerPoRef: 'HRG-PO-77812',
+  orderDate: d(15),
+  origin: 'JAFZA WH-1',
+  destination: '',
+  lines: [
+    line('svc-8', 'Handling in — palletised cartons', 18, 'Pallet', 18, 12),
+    line('svc-7', 'Ambient storage (est. 30 days)', 540, 'Pallet-day', 3.5, 2.2),
+    line('svc-8', 'Handling out', 18, 'Pallet', 18, 12),
+  ],
+  status: 'In progress',
+  owner: 'Aisha Khan',
+  notes: 'Winter collection — store and release to stores on request.',
+});
+workOrders.push({
+  id: 'wo-2052',
+  number: 'JOB-2052',
+  customerId: 'cus-3',
+  serviceCategory: 'Warehouse',
+  salesOrderId: 'so-5110',
+  source: { type: 'Sales order', refId: 'so-5110' },
+  origin: 'JAFZA WH-1',
+  destination: 'Horizon stores (Dubai)',
+  cargo: cargo('Winter collection apparel', 640, 7400, 52, '18 pallets'),
+  status: 'In progress',
+  priority: 'Normal',
+  milestones: milestones(undefined, 'In progress', 16, 'Warehouse', 4),
+  vendorAssignments: [
+    { id: 'va-2052-0', vendorId: 'ven-7', serviceId: 'svc-8', agreedCost: 432, status: 'Accepted' },
+    { id: 'va-2052-1', vendorId: 'ven-2', serviceId: 'svc-9', agreedCost: 1020, status: 'Requested' },
+  ],
+  lines: [
+    line('svc-8', 'Handling in — palletised cartons', 18, 'Pallet', 18, 12),
+    line('svc-7', 'Ambient storage (est. 30 days)', 540, 'Pallet-day', 3.5, 2.2),
+    line('svc-8', 'Handling out', 18, 'Pallet', 18, 12),
+  ],
+  hasWarehouse: true,
+  packingList: {
+    number: 'PL-2052',
+    status: 'Sent to warehouse',
+    sentAt: dt(16, 10),
+    lines: [
+      { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 160, uom: 'Pcs' },
+      { sku: 'HRG-COAT-L', description: 'Winter coats — L', quantity: 140, uom: 'Pcs' },
+      { sku: 'HRG-SCRF-01', description: 'Wool scarves', quantity: 220, uom: 'Pcs' },
+      { sku: 'HRG-BOOT-42', description: 'Boots size 42', quantity: 120, uom: 'Pairs' },
+    ],
+  },
+  grn: {
+    number: 'GRN-5530',
+    receivedAt: dt(18, 14),
+    attachment: att('GRN-5530_signed.pdf', 18, 15, 'Thomas Reid'),
+    lines: [
+      { sku: 'HRG-COAT-M', receivedQty: 160, damagedQty: 0 },
+      { sku: 'HRG-COAT-L', receivedQty: 132, damagedQty: 0, remarks: '8 pcs missing from carton 14' },
+      { sku: 'HRG-SCRF-01', receivedQty: 220, damagedQty: 6, remarks: 'Water damage on 6 pcs' },
+      { sku: 'HRG-BOOT-42', receivedQty: 120, damagedQty: 0 },
+    ],
+    status: 'Variance raised',
+  },
+  customerRequests: [
+    {
+      id: 'cr-0301',
+      number: 'CR-0301',
+      requestedAt: dt(21, 9),
+      requiredBy: d(24),
+      deliverTo: 'Horizon — Mall of the Emirates store',
+      lines: [
+        { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 60, uom: 'Pcs' },
+        { sku: 'HRG-SCRF-01', description: 'Wool scarves', quantity: 80, uom: 'Pcs' },
+      ],
+      status: 'Sent to vendor',
+    },
+  ],
+  createdAt: dt(15, 10),
+  eta: d(30),
+  owner: 'Aisha Khan',
+});
+
+// Warehouse job 2 — completed; GRN matched, but POD came back short → variance on the request.
+salesOrders.push({
+  id: 'so-5111',
+  number: 'SO-5111',
+  customerId: 'cus-7',
+  serviceCategory: 'Warehouse',
+  customerPoRef: 'SKE-4471',
+  orderDate: d(9),
+  origin: 'JAFZA WH-1',
+  destination: '',
+  lines: [
+    line('svc-8', 'Handling in/out', 12, 'Pallet', 18, 12),
+    line('svc-9', 'Last-mile delivery', 4, 'Drop', 120, 85),
+  ],
+  status: 'Completed',
+  owner: 'Rahul Nair',
+  notes: '',
+});
+workOrders.push({
+  id: 'wo-2053',
+  number: 'JOB-2053',
+  customerId: 'cus-7',
+  serviceCategory: 'Warehouse',
+  salesOrderId: 'so-5111',
+  source: { type: 'Sales order', refId: 'so-5111' },
+  origin: 'JAFZA WH-1',
+  destination: 'Skyline showrooms',
+  cargo: cargo('Monitors and accessories', 300, 3100, 22, '12 pallets'),
+  status: 'Completed',
+  priority: 'Normal',
+  milestones: milestones(undefined, 'Completed', 9, 'Warehouse', 7),
+  vendorAssignments: [
+    { id: 'va-2053-0', vendorId: 'ven-7', serviceId: 'svc-8', agreedCost: 288, status: 'Completed' },
+    { id: 'va-2053-1', vendorId: 'ven-2', serviceId: 'svc-9', agreedCost: 340, status: 'Completed' },
+  ],
+  lines: [
+    line('svc-8', 'Handling in/out', 12, 'Pallet', 18, 12),
+    line('svc-9', 'Last-mile delivery', 4, 'Drop', 120, 85),
+  ],
+  hasWarehouse: true,
+  packingList: {
+    number: 'PL-2053',
+    status: 'Sent to warehouse',
+    sentAt: dt(9, 11),
+    lines: [
+      { sku: 'SKE-MON-24', description: 'Monitors 24"', quantity: 120, uom: 'Unit' },
+      { sku: 'SKE-DOCK-01', description: 'Docking stations', quantity: 180, uom: 'Unit' },
+    ],
+  },
+  grn: {
+    number: 'GRN-5524',
+    receivedAt: dt(10, 12),
+    attachment: att('GRN-5524.pdf', 10, 13, 'Thomas Reid', 180),
+    lines: [
+      { sku: 'SKE-MON-24', receivedQty: 120, damagedQty: 0 },
+      { sku: 'SKE-DOCK-01', receivedQty: 180, damagedQty: 0 },
+    ],
+    status: 'Verified',
+  },
+  customerRequests: [
+    {
+      id: 'cr-0297',
+      number: 'CR-0297',
+      requestedAt: dt(14, 9),
+      requiredBy: d(16),
+      deliverTo: 'Skyline showroom — Dubai Hills',
+      lines: [
+        { sku: 'SKE-MON-24', description: 'Monitors 24"', quantity: 40, uom: 'Unit' },
+        { sku: 'SKE-DOCK-01', description: 'Docking stations', quantity: 60, uom: 'Unit' },
+      ],
+      status: 'Variance raised',
+      pod: {
+        number: 'POD-88123',
+        vendorId: 'ven-2',
+        deliveredAt: dt(16, 16),
+        receivedBy: 'Store manager — J. Fernandes',
+        attachment: att('POD-88123_signed.jpg', 16, 18, 'Imran Shaikh', 640),
+        lines: [
+          { sku: 'SKE-MON-24', deliveredQty: 38, remarks: '2 units refused — screen cracked' },
+          { sku: 'SKE-DOCK-01', deliveredQty: 60 },
+        ],
+      },
+    },
+    {
+      id: 'cr-0298',
+      number: 'CR-0298',
+      requestedAt: dt(15, 10),
+      requiredBy: d(17),
+      deliverTo: 'Skyline showroom — Al Barsha',
+      lines: [{ sku: 'SKE-DOCK-01', description: 'Docking stations', quantity: 40, uom: 'Unit' }],
+      status: 'Closed',
+      pod: {
+        number: 'POD-88124',
+        vendorId: 'ven-2',
+        deliveredAt: dt(17, 12),
+        receivedBy: 'Showroom lead — K. Rao',
+        attachment: att('POD-88124.pdf', 17, 13, 'Imran Shaikh', 150),
+        lines: [{ sku: 'SKE-DOCK-01', deliveredQty: 40 }],
+      },
+    },
+  ],
+  purchaseInvoiceIds: ['bill-2053-0', 'bill-2053-1'],
+  completedAt: dt(17, 17),
+  createdAt: dt(9, 10),
+  eta: d(17),
+  owner: 'Rahul Nair',
+});
+
+// Direct service job — customs clearance only, no transport mode.
+salesOrders.push({
+  id: 'so-5112',
+  number: 'SO-5112',
+  customerId: 'cus-4',
+  serviceCategory: 'Service',
+  customerPoRef: 'CMS-PO-2290',
+  orderDate: d(19),
+  origin: 'DXB Cargo Village',
+  destination: '',
+  lines: [line('svc-6', 'Import customs clearance — medical devices', 1, 'Declaration', 650, 350)],
+  status: 'Completed',
+  owner: 'Elena Petrova',
+  notes: 'Direct service: no quotation (authorised standard rate).',
+});
+workOrders.push({
+  id: 'wo-2054',
+  number: 'JOB-2054',
+  customerId: 'cus-4',
+  serviceCategory: 'Service',
+  salesOrderId: 'so-5112',
+  source: { type: 'Sales order', refId: 'so-5112' },
+  origin: 'DXB Cargo Village',
+  destination: '',
+  cargo: cargo('Import declaration — diagnostic equipment', 1, 0, 0, '—'),
+  status: 'Completed',
+  priority: 'High',
+  milestones: milestones(undefined, 'Completed', 19, 'Service', 4),
+  vendorAssignments: [
+    { id: 'va-2054-0', vendorId: 'ven-6', serviceId: 'svc-6', agreedCost: 350, status: 'Completed' },
+  ],
+  lines: [line('svc-6', 'Import customs clearance — medical devices', 1, 'Declaration', 650, 350)],
+  hasWarehouse: false,
+  customerRequests: [],
+  purchaseInvoiceIds: ['bill-2054-0'],
+  completedAt: dt(21, 12),
+  createdAt: dt(19, 9),
+  eta: d(21),
+  owner: 'Elena Petrova',
+});
+
+// A transport job delivered against a customer request; POD matches.
+{
+  const wo = workOrders.find((w) => w.id === 'wo-2047');
+  if (wo) {
+    wo.customerRequests.push({
+      id: 'cr-0290',
+      number: 'CR-0290',
+      requestedAt: dt(5, 9),
+      requiredBy: d(12),
+      deliverTo: 'Crescent Medical — Abu Dhabi central store',
+      lines: [{ sku: 'CMS-DEV-TC', description: 'Temperature-controlled devices', quantity: 32, uom: 'Pkg' }],
+      status: 'Closed',
+      pod: {
+        number: 'POD-77810',
+        vendorId: 'ven-5',
+        deliveredAt: dt(12, 11),
+        receivedBy: 'Pharmacist on duty — S. Nair',
+        attachment: att('POD-77810.pdf', 12, 12, 'Lucas Martin', 120),
+        lines: [{ sku: 'CMS-DEV-TC', deliveredQty: 32 }],
+      },
+    });
+  }
+}
 
 export const contracts: Contract[] = [
   {
@@ -892,13 +1202,17 @@ invoices.push(
 
 // ---------- Vendor bills ----------
 export const vendorBills: VendorBill[] = workOrders
-  .filter((wo) => wo.status === 'Completed' || wo.status === 'Delivered' || wo.status === 'In transit')
+  .filter(
+    (wo) =>
+      wo.serviceCategory === 'Transport' &&
+      (wo.status === 'Completed' || wo.status === 'Delivered' || wo.status === 'In transit'),
+  )
   .flatMap((wo, i) =>
     wo.vendorAssignments.slice(0, 2).map((va, j) => {
       const paid = wo.status === 'Completed' && j === 0;
       return {
         id: `bill-${i}-${j}`,
-        number: `BILL-${7700 + i * 2 + j}`,
+        number: `PI-${7700 + i * 2 + j}`,
         vendorRef: `${vendors.find((x) => x.id === va.vendorId)!.code.replace('VEN', 'SI')}-${880 + i * 3 + j}`,
         vendorId: va.vendorId,
         workOrderId: wo.id,
@@ -911,6 +1225,49 @@ export const vendorBills: VendorBill[] = workOrders
       };
     }),
   );
+
+// Purchase invoices drafted automatically when warehouse / service jobs were completed.
+vendorBills.push(
+  {
+    id: 'bill-2053-0',
+    number: 'PI-7801',
+    vendorRef: 'HGW-INV-3310',
+    vendorId: 'ven-7',
+    workOrderId: 'wo-2053',
+    billDate: d(17),
+    dueDate: addDays(d(17), 30),
+    amount: 288,
+    vat: 14.4,
+    paid: 0,
+    status: 'Draft',
+  },
+  {
+    id: 'bill-2053-1',
+    number: 'PI-7802',
+    vendorRef: 'DLT-1187',
+    vendorId: 'ven-2',
+    workOrderId: 'wo-2053',
+    billDate: d(17),
+    dueDate: addDays(d(17), 30),
+    amount: 340,
+    vat: 17,
+    paid: 0,
+    status: 'Draft',
+  },
+  {
+    id: 'bill-2054-0',
+    number: 'PI-7803',
+    vendorRef: 'CPC-5521',
+    vendorId: 'ven-6',
+    workOrderId: 'wo-2054',
+    billDate: d(21),
+    dueDate: addDays(d(21), 30),
+    amount: 350,
+    vat: 17.5,
+    paid: 0,
+    status: 'Draft',
+  },
+);
 
 // ---------- Collections ----------
 export const collections: Collection[] = invoices
