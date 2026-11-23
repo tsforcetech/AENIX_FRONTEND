@@ -5,6 +5,11 @@ import { lookupName } from '@/shared/data/lookups';
 import { latency, logActivity, protoDb } from '@/prototype/store';
 import { PROTO_TODAY } from '@/prototype/seed';
 import { buildStatement, openInvoiceStats } from '@/features/customers/statement';
+import { reconcile } from '@/domain/reconcile';
+import type { WorkOrder } from '@/domain/types';
+
+const where = (w: Pick<WorkOrder, 'origin' | 'destination'>) =>
+  w.destination ? `${w.origin} → ${w.destination}` : w.origin;
 
 /**
  * Customer / vendor portal data. The party is ALWAYS taken from the authenticated session
@@ -48,8 +53,9 @@ function customerOverview(partyId: string) {
       .map((w) => ({
         id: w.id,
         number: w.number,
+        serviceCategory: w.serviceCategory,
         mode: w.mode,
-        lane: `${w.origin} → ${w.destination}`,
+        lane: where(w),
         status: w.status,
         eta: w.eta,
         progress: Math.round(
@@ -57,6 +63,33 @@ function customerOverview(partyId: string) {
         ),
         milestone: w.milestones.find((m) => m.status === 'Current')?.label ?? 'Delivered',
       })),
+    /** Read-only: the customer's out / delivery requests and their POD status. */
+    requests: db.workOrders
+      .filter((w) => w.customerId === partyId)
+      .flatMap((w) =>
+        w.customerRequests.map((r) => {
+          const recon = r.pod
+            ? reconcile(
+                r.lines,
+                r.pod.lines.map((l) => ({ sku: l.sku, qty: l.deliveredQty, remarks: l.remarks })),
+              )
+            : undefined;
+          return {
+            id: r.id,
+            number: r.number,
+            jobRef: w.number,
+            deliverTo: r.deliverTo,
+            requiredBy: r.requiredBy,
+            status: r.status,
+            requestedQty: r.lines.reduce((s, l) => s + l.quantity, 0),
+            podNumber: r.pod?.number,
+            deliveredAt: r.pod?.deliveredAt,
+            deliveredQty: recon?.actualTotal,
+            mismatches: recon?.mismatches ?? 0,
+          };
+        }),
+      )
+      .sort((a, b) => b.requiredBy.localeCompare(a.requiredBy)),
   };
 }
 
@@ -69,7 +102,8 @@ function customerApprovals(partyId: string) {
       id: q.id,
       number: q.number,
       version: q.version,
-      lane: `${q.origin} → ${q.destination}`,
+      lane: where(q),
+      serviceCategory: q.serviceCategory,
       mode: q.mode,
       agreement: q.agreement,
       validUntil: q.validUntil,
@@ -196,8 +230,11 @@ function vendorAssignments(partyId: string) {
         id: a.id,
         workOrderId: wo.id,
         jobRef: wo.number,
-        lane: `${wo.origin} → ${wo.destination}`,
+        lane: where(wo),
+        serviceCategory: wo.serviceCategory,
         mode: wo.mode,
+        /** Customer requests on this job still waiting for a POD (read-only for the vendor). */
+        podPending: wo.customerRequests.filter((r) => !r.pod && r.status !== 'Closed').length,
         service: lookupName.service(a.serviceId),
         agreedCost: a.agreedCost,
         status: a.status,
@@ -223,6 +260,7 @@ function vendorOverview(partyId: string) {
   return {
     vendorName: lookupName.vendor(partyId),
     openAssignments: assignments.filter((a) => a.status !== 'Completed').length,
+    podPending: assignments.reduce((s, a) => s + (a.status !== 'Completed' ? a.podPending : 0), 0),
     billsOutstanding: Math.round(bills.reduce((s, b) => s + b.outstanding, 0) * 100) / 100,
     paidThisMonth:
       Math.round(

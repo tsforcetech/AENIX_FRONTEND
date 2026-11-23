@@ -1,6 +1,8 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import type { BillStatus } from '@/domain/types';
-import { StatusBadge } from '@/shared/ui/Badge';
+import { jobKindLabel } from '@/domain/workflow';
+import { Badge, StatusBadge } from '@/shared/ui/Badge';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { Card } from '@/shared/ui/Card';
 import { DataTable, Pagination, type Column } from '@/shared/ui/DataTable';
 import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
@@ -16,7 +18,7 @@ const STATUSES: BillStatus[] = ['Draft', 'Approved', 'Partially paid', 'Paid', '
 const columns: Column<VendorBillRow>[] = [
   {
     key: 'number',
-    header: 'Bill',
+    header: 'Purchase invoice',
     cell: (r) => (
       <div>
         <DocRef>{r.number}</DocRef>
@@ -39,8 +41,21 @@ const columns: Column<VendorBillRow>[] = [
     header: 'Job',
     hideOnMobile: true,
     cell: (r) => (
-      <div className="whitespace-nowrap">
-        <p className="font-mono text-[13px]">{r.workOrderNumber ?? '—'}</p>
+      <div className="space-y-1 whitespace-nowrap">
+        {r.workOrderNumber && r.jobCategory ? (
+          <p className="flex items-center gap-1.5">
+            <JobKindIcon category={r.jobCategory} mode={r.jobMode} className="size-4 text-fg-muted" />
+            <span className="font-mono text-[13px]">{r.workOrderNumber}</span>
+            <span className="sr-only">{jobKindLabel(r.jobCategory, r.jobMode)}</span>
+          </p>
+        ) : (
+          <p className="text-fg-muted">—</p>
+        )}
+        {r.draftedAtCompletion ? (
+          <Badge tone="info" dot={false}>
+            Drafted at job completion
+          </Badge>
+        ) : null}
         {r.variance !== undefined ? <VarianceTag variance={r.variance} /> : null}
       </div>
     ),
@@ -89,8 +104,8 @@ export function VendorBillsListPage() {
   return (
     <div>
       <PageHeader
-        title="Vendor bills"
-        description="Supplier invoices matched to the vendor cost agreed on each work order. Approve, then pay."
+        title="Purchase invoices"
+        description="Vendor invoices for completed jobs, matched to the agreed job cost and delivery evidence (GRN / POD). Approve, then pay."
       />
       <Card>
         <ListToolbar
@@ -101,17 +116,17 @@ export function VendorBillsListPage() {
           }
           search={search.q ?? ''}
           onSearch={(q) => void navigate({ search: (p) => ({ ...p, q: q || undefined, page: undefined }) })}
-          searchPlaceholder="Search bill, vendor ref, vendor, job…"
+          searchPlaceholder="Search invoice, vendor ref, vendor, job…"
         />
         <DataTable
-          caption="Vendor bills"
+          caption="Purchase invoices"
           columns={columns}
           rows={data?.items}
           rowKey={(r) => r.id}
           loading={isLoading || isFetching}
           error={error}
           onRowClick={(r) => void navigate({ to: '/vendor-bills/$id', params: { id: r.id } })}
-          emptyTitle="No vendor bills match"
+          emptyTitle="No purchase invoices match"
           emptyDescription="Try another status or search term."
           footer={
             data ? (

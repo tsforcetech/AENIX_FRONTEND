@@ -8,7 +8,8 @@ import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { Dialog } from '@/shared/ui/Dialog';
 import { TextareaField } from '@/shared/ui/Field';
 import { KpiCard } from '@/shared/ui/KpiCard';
-import { ModeIcon } from '@/shared/ui/ModeIcon';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
+import { jobKindLabel } from '@/domain/workflow';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
@@ -104,16 +105,19 @@ export function CustomerPortalHome() {
       </section>
       <div className="grid gap-6 xl:grid-cols-5">
         <Card className="xl:col-span-3">
-          <CardHeader title="Active shipments" description="Live milestone progress" />
+          <CardHeader
+            title="Active jobs"
+            description="Transport, warehouse and service jobs with live progress"
+          />
           <CardBody className="pt-3">
             {data.shipments.length === 0 ? (
-              <p className="py-6 text-center text-body-s text-fg-muted">No active shipments.</p>
+              <p className="py-6 text-center text-body-s text-fg-muted">No active jobs.</p>
             ) : (
               <ul className="divide-y divide-border-subtle">
                 {data.shipments.map((s) => (
                   <li key={s.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5">
                     <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-canvas text-fg-secondary">
-                      <ModeIcon mode={s.mode} className="size-5" />
+                      <JobKindIcon category={s.serviceCategory} mode={s.mode} className="size-5" />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
@@ -121,6 +125,9 @@ export function CustomerPortalHome() {
                         <StatusBadge status={s.status} />
                       </span>
                       <span className="mt-0.5 block truncate text-body-s font-medium">{s.lane}</span>
+                      <span className="block text-caption text-fg-muted">
+                        {jobKindLabel(s.serviceCategory, s.mode)}
+                      </span>
                     </span>
                     <span className="w-full sm:w-56">
                       <span className="flex justify-between gap-2 whitespace-nowrap text-caption text-fg-muted">
@@ -174,6 +181,56 @@ export function CustomerPortalHome() {
           </CardBody>
         </Card>
       </div>
+      <Card>
+        <CardHeader
+          title="Delivery requests"
+          description="Your out / delivery requests and the proof of delivery (POD) recorded against each"
+        />
+        <CardBody className="pt-3">
+          {data.requests.length === 0 ? (
+            <p className="py-6 text-center text-body-s text-fg-muted">No delivery requests yet.</p>
+          ) : (
+            <ul className="divide-y divide-border-subtle">
+              {data.requests.map((r) => (
+                <li key={r.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3.5">
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <DocRef>{r.number}</DocRef>
+                      <span className="text-caption text-fg-muted">job {r.jobRef}</span>
+                      <StatusBadge status={r.status} />
+                    </span>
+                    <span className="mt-0.5 block truncate text-body-s font-medium">{r.deliverTo}</span>
+                    <span className="block text-caption text-fg-muted">
+                      Required by {formatDate(r.requiredBy)}
+                    </span>
+                  </span>
+                  <span className="text-right text-body-s">
+                    {r.podNumber ? (
+                      <>
+                        <span className="block">
+                          POD <span className="font-mono text-[13px]">{r.podNumber}</span>
+                        </span>
+                        <span className="block text-caption text-fg-muted">
+                          Delivered {r.deliveredQty} of {r.requestedQty}
+                        </span>
+                        {r.mismatches > 0 ? (
+                          <span className="block text-caption font-medium text-danger">
+                            {r.mismatches} line{r.mismatches === 1 ? '' : 's'} differ — AENIX is reviewing
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="block text-caption text-fg-muted">
+                        POD pending · {r.requestedQty} requested
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardBody>
+      </Card>
     </div>
   );
 }
@@ -214,7 +271,7 @@ export function CustomerApprovalsPage() {
                   <StatusBadge status="Sent" />
                 </span>
               }
-              description={`${q.lane} · ${q.mode} · ${q.agreement} · valid until ${formatDate(q.validUntil)}`}
+              description={`${q.lane} · ${jobKindLabel(q.serviceCategory, q.mode)} · ${q.agreement} · valid until ${formatDate(q.validUntil)}`}
               actions={
                 <>
                   <Button

@@ -1,3 +1,4 @@
+import { jobKindLabel } from '@/domain/workflow';
 import { useQuery } from '@tanstack/react-query';
 import { billTotals } from '@/domain/calc';
 import type { Vendor } from '@/domain/types';
@@ -41,7 +42,7 @@ export const vendorsApi = {
           id: a.id,
           workOrderId: wo.id,
           workOrderNumber: wo.number,
-          lane: `${wo.origin} → ${wo.destination}`,
+          lane: `${jobKindLabel(wo.serviceCategory, wo.mode)} · ${wo.destination ? `${wo.origin} → ${wo.destination}` : wo.origin}`,
           service: lookupName.service(a.serviceId),
           agreedCost: a.agreedCost,
           status: a.status,

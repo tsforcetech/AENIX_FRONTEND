@@ -100,7 +100,11 @@ export function CustomerDetailPage() {
               {
                 value: 'activity',
                 label: 'Activity',
-                count: data.enquiries.length + data.quotations.length + data.workOrders.length,
+                count:
+                  data.enquiries.length +
+                  data.quotations.length +
+                  data.salesOrders.length +
+                  data.workOrders.length,
               },
               { value: 'statement', label: 'Statement of account' },
             ]}
@@ -147,7 +151,7 @@ function MiniList({ title, empty, children }: { title: string; empty: boolean; c
 
 function ActivityLists({ data }: { data: CustomerDetail }) {
   return (
-    <CardBody className="grid gap-8 lg:grid-cols-3">
+    <CardBody className="grid gap-8 md:grid-cols-2 xl:grid-cols-4">
       <MiniList title="Enquiries" empty={data.enquiries.length === 0}>
         {data.enquiries.map((e) => (
           <li key={e.id}>
@@ -178,6 +182,25 @@ function ActivityLists({ data }: { data: CustomerDetail }) {
                 <span className="block truncate text-caption text-fg-muted">{q.route}</span>
               </span>
               <StatusBadge status={q.status} />
+            </Link>
+          </li>
+        ))}
+      </MiniList>
+      <MiniList title="Sales orders" empty={data.salesOrders.length === 0}>
+        {data.salesOrders.map((o) => (
+          <li key={o.id}>
+            <Link
+              to="/sales-orders/$id"
+              params={{ id: o.id }}
+              className="-mx-2 flex items-center justify-between gap-3 rounded-lg px-2 py-2.5 hover:bg-canvas"
+            >
+              <span className="min-w-0">
+                <DocRef>{o.number}</DocRef>
+                <span className="block truncate text-caption text-fg-muted">
+                  {o.route} · <Money amount={o.value} />
+                </span>
+              </span>
+              <StatusBadge status={o.status} />
             </Link>
           </li>
         ))}
