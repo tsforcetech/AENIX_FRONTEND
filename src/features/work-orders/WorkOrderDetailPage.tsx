@@ -1,6 +1,16 @@
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { CheckCircle2, ChevronRight, FileText, Plus, Receipt, Warehouse, XCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronRight,
+  FileText,
+  MapPin,
+  Plus,
+  Receipt,
+  Warehouse,
+  XCircle,
+} from 'lucide-react';
 import { useState } from 'react';
 import { Badge, StatusBadge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
@@ -8,14 +18,24 @@ import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { Dialog } from '@/shared/ui/Dialog';
 import { TextareaField } from '@/shared/ui/Field';
-import { ModeIcon } from '@/shared/ui/ModeIcon';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
+import { jobKindLabel } from '@/domain/workflow';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { MilestoneTimeline } from '@/shared/ui/Timeline';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatDateTime, formatNumber } from '@/shared/utils/format';
-import { useCreateJobInvoice, useWorkOrder, useWorkOrderAction, type WorkOrderDetail } from './api';
+import {
+  canComplete,
+  docFlags,
+  useCompleteWorkOrder,
+  useCreateJobInvoice,
+  useWorkOrder,
+  useWorkOrderAction,
+  type WorkOrderDetail,
+} from './api';
+import { CustomerRequestsCard, InboundCard, PurchaseInvoicesCard } from './JobDocuments';
 import { AssignVendorDialog } from './AssignVendorDialog';
 import { SourceBadge } from './SourceBadge';
 
@@ -32,6 +52,8 @@ export function WorkOrderDetailPage() {
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string>();
   const [assignOpen, setAssignOpen] = useState(false);
+  const [completeOpen, setCompleteOpen] = useState(false);
+  const complete = useCompleteWorkOrder();
 
   if (error)
     return (
@@ -104,17 +126,12 @@ export function WorkOrderDetailPage() {
                 Confirm job
               </Button>
             ) : null}
-            {wo.status === 'Delivered' ? (
+            {canComplete(wo) ? (
               <Button
                 variant="secondary"
                 icon={<CheckCircle2 aria-hidden="true" />}
-                busy={action.isPending}
-                onClick={() =>
-                  action.mutate(
-                    { id: wo.id, kind: 'complete' },
-                    { onSuccess: () => toast({ title: `${wo.number} completed` }), onError },
-                  )
-                }
+                busy={complete.isPending}
+                onClick={() => setCompleteOpen(true)}
               >
                 Mark completed
               </Button>
@@ -143,7 +160,7 @@ export function WorkOrderDetailPage() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="min-w-0 space-y-6 lg:col-span-2">
-          <LaneHero wo={wo} />
+          <JobHero wo={wo} />
 
           <Card>
             <CardHeader
@@ -185,6 +202,12 @@ export function WorkOrderDetailPage() {
               )}
             </CardBody>
           </Card>
+
+          {wo.serviceCategory === 'Warehouse' || wo.hasWarehouse || wo.packingList ? (
+            <InboundCard wo={wo} />
+          ) : null}
+
+          <CustomerRequestsCard wo={wo} />
 
           <Card>
             <CardHeader title="Price lines" description="Customer charges for this job (AED, excl. VAT)" />
@@ -229,21 +252,43 @@ export function WorkOrderDetailPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Cargo" />
+            <CardHeader
+              title={
+                wo.serviceCategory === 'Transport'
+                  ? 'Cargo'
+                  : wo.serviceCategory === 'Warehouse'
+                    ? 'Goods'
+                    : 'Scope'
+              }
+            />
             <CardBody>
               <DescriptionList
                 columns={3}
-                items={[
-                  { label: 'Description', value: wo.cargo.description },
-                  { label: 'Packages', value: formatNumber(wo.cargo.packages) },
-                  { label: 'Equipment', value: wo.cargo.equipment },
-                  { label: 'Weight', value: `${formatNumber(wo.cargo.weightKg)} kg` },
-                  { label: 'Volume', value: `${wo.cargo.volumeCbm} cbm` },
-                  {
-                    label: 'Warehouse handling',
-                    value: wo.hasWarehouse ? 'Yes — JAFZA WH-1' : 'No warehouse activity',
-                  },
-                ]}
+                items={
+                  wo.serviceCategory === 'Service'
+                    ? [
+                        { label: 'Scope of service', value: wo.cargo.description },
+                        { label: 'Location', value: wo.origin },
+                        { label: 'Type', value: 'Direct service — no transport leg' },
+                      ]
+                    : [
+                        { label: 'Description', value: wo.cargo.description },
+                        {
+                          label: 'Packages',
+                          value: wo.cargo.packages ? formatNumber(wo.cargo.packages) : '—',
+                        },
+                        { label: 'Equipment', value: wo.cargo.equipment },
+                        {
+                          label: 'Weight',
+                          value: wo.cargo.weightKg ? `${formatNumber(wo.cargo.weightKg)} kg` : '—',
+                        },
+                        { label: 'Volume', value: wo.cargo.volumeCbm ? `${wo.cargo.volumeCbm} cbm` : '—' },
+                        {
+                          label: 'Warehouse handling',
+                          value: wo.hasWarehouse ? 'Yes — JAFZA WH-1' : 'No warehouse activity',
+                        },
+                      ]
+                }
               />
             </CardBody>
           </Card>
@@ -297,6 +342,8 @@ export function WorkOrderDetailPage() {
 
           <FinancialsCard wo={wo} />
 
+          <PurchaseInvoicesCard wo={wo} />
+
           <Card>
             <CardHeader title="Billing" />
             <CardBody>
@@ -316,14 +363,14 @@ export function WorkOrderDetailPage() {
                 <p className="text-body-s text-fg-muted">
                   {canInvoice
                     ? 'Ready to invoice.'
-                    : 'The customer invoice is created once the job is delivered.'}
+                    : 'The customer invoice is created once the job is delivered or completed.'}
                 </p>
               )}
               <Link
                 to="/vendor-bills"
                 className="mt-3 inline-block text-caption font-medium text-brand hover:underline"
               >
-                View vendor bills
+                View all purchase invoices
               </Link>
             </CardBody>
           </Card>
@@ -363,41 +410,155 @@ export function WorkOrderDetailPage() {
       ) : null}
 
       {assignOpen ? <AssignVendorDialog open onClose={() => setAssignOpen(false)} wo={wo} /> : null}
+
+      {completeOpen ? (
+        <CompleteDialog
+          wo={wo}
+          busy={complete.isPending}
+          onClose={() => setCompleteOpen(false)}
+          onConfirm={() =>
+            complete.mutate(wo.id, {
+              onSuccess: ({ drafted }) => {
+                setCompleteOpen(false);
+                toast({
+                  title: `${wo.number} completed`,
+                  body: drafted.length
+                    ? `${drafted.length} purchase invoice${drafted.length === 1 ? '' : 's'} drafted: ${drafted.map((d) => d.number).join(', ')}`
+                    : 'No new purchase invoice was needed.',
+                });
+              },
+              onError,
+            })
+          }
+        />
+      ) : null}
     </div>
   );
 }
 
-function LaneHero({ wo }: { wo: WorkOrderDetail }) {
+function CompleteDialog({
+  wo,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  wo: WorkOrderDetail;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const flags = docFlags(wo);
+  const billed = new Set(wo.purchaseInvoices.map((b) => b.vendorName));
+  const toBill = [...new Set(wo.assignments.map((a) => a.vendorName))].filter((v) => !billed.has(v));
+  const warnings = [
+    flags.grnVariance ? 'The GRN does not match the product list (variance unresolved).' : null,
+    flags.awaitingGrn ? 'The PL was sent but no GRN has been uploaded.' : null,
+    flags.awaitingPod ? `${flags.awaitingPod} customer request(s) have no POD yet.` : null,
+    flags.podVariance ? `${flags.podVariance} POD(s) do not match the request.` : null,
+  ].filter((w): w is string => !!w);
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Complete ${wo.number}?`}
+      description="Completing the job drafts a purchase invoice for each vendor that has not been billed yet."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Not yet
+          </Button>
+          <Button busy={busy} icon={<CheckCircle2 aria-hidden="true" />} onClick={onConfirm}>
+            {warnings.length ? 'Complete anyway' : 'Complete job'}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 text-body-s">
+        {warnings.length ? (
+          <div role="alert" className="rounded-lg bg-warning-subtle p-3 text-warning">
+            <p className="flex items-center gap-2 font-semibold">
+              <AlertTriangle aria-hidden="true" className="size-4" /> Open document issues
+            </p>
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-6">
+              {warnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="flex items-center gap-2 rounded-lg bg-success-subtle p-3 text-success">
+            <CheckCircle2 aria-hidden="true" className="size-4" /> All documents are reconciled.
+          </p>
+        )}
+        <div>
+          <p className="font-medium">Purchase invoices to draft</p>
+          {toBill.length ? (
+            <ul className="mt-1 list-disc pl-6 text-fg-secondary">
+              {toBill.map((v) => (
+                <li key={v}>{v}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-fg-muted">
+              None — every assigned vendor is already billed or none is assigned.
+            </p>
+          )}
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+function JobHero({ wo }: { wo: WorkOrderDetail }) {
+  const isTransport = wo.serviceCategory === 'Transport';
   return (
     <Card className="overflow-hidden">
       <div className="bg-surface-inverse p-5 text-fg-inverse">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-caption text-white/70">
-            <ModeIcon mode={wo.mode} className="size-4" />
-            {wo.mode} freight
+          <div className="flex flex-wrap items-center gap-2 text-caption text-white/70">
+            <JobKindIcon category={wo.serviceCategory} mode={wo.mode} className="size-4" />
+            {jobKindLabel(wo.serviceCategory, wo.mode)}
             <span aria-hidden="true">·</span>
-            <SourceBadge type={wo.source.type} />
+            <SourceBadge type={wo.source.type} refLabel={wo.sourceRef} />
           </div>
           <p className="text-caption text-white/70">
-            ETA <span className="font-semibold text-white">{formatDate(wo.eta)}</span>
+            {isTransport ? 'ETA' : 'Target'}{' '}
+            <span className="font-semibold text-white">{formatDate(wo.eta)}</span>
           </p>
         </div>
-        <div className="mt-5 flex items-center gap-4">
-          <div className="min-w-0">
-            <p className="text-caption text-white/60">From</p>
-            <p className="truncate text-[22px] font-semibold tracking-tight">{wo.origin}</p>
+        {isTransport ? (
+          <div className="mt-5 flex items-center gap-4">
+            <div className="min-w-0">
+              <p className="text-caption text-white/60">From</p>
+              <p className="truncate text-[22px] font-semibold tracking-tight">{wo.origin}</p>
+            </div>
+            <div aria-hidden="true" className="relative h-px flex-1 border-t-2 border-dashed border-white/25">
+              <span
+                className="absolute -top-[5px] h-2 rounded-full bg-[#ef5a4f]"
+                style={{ width: 8, left: `calc(${Math.min(wo.progress, 97)}% - 4px)` }}
+              />
+            </div>
+            <div className="min-w-0 text-right">
+              <p className="text-caption text-white/60">To</p>
+              <p className="truncate text-[22px] font-semibold tracking-tight">{wo.destination}</p>
+            </div>
           </div>
-          <div aria-hidden="true" className="relative h-px flex-1 border-t-2 border-dashed border-white/25">
-            <span
-              className="absolute -top-[5px] h-2 rounded-full bg-[#ef5a4f]"
-              style={{ width: 8, left: `calc(${Math.min(wo.progress, 97)}% - 4px)` }}
-            />
+        ) : (
+          <div className="mt-5 flex items-center gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-white/10">
+              <MapPin aria-hidden="true" className="size-5 text-[#ef5a4f]" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-caption text-white/60">
+                {wo.serviceCategory === 'Warehouse' ? 'Warehouse / site' : 'Service location'}
+              </p>
+              <p className="truncate text-[22px] font-semibold tracking-tight">{wo.origin}</p>
+              {wo.destination ? (
+                <p className="truncate text-caption text-white/70">Deliveries to {wo.destination}</p>
+              ) : null}
+            </div>
           </div>
-          <div className="min-w-0 text-right">
-            <p className="text-caption text-white/60">To</p>
-            <p className="truncate text-[22px] font-semibold tracking-tight">{wo.destination}</p>
-          </div>
-        </div>
+        )}
         <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/10">
           <div className="h-full rounded-full bg-[#ef5a4f]" style={{ width: `${wo.progress}%` }} />
         </div>
@@ -424,7 +585,15 @@ function LaneHero({ wo }: { wo: WorkOrderDetail }) {
             {
               label: 'Source',
               value:
-                wo.source.type === 'Quotation' && wo.source.refId ? (
+                wo.source.type === 'Sales order' && wo.source.refId ? (
+                  <Link
+                    to="/sales-orders/$id"
+                    params={{ id: wo.source.refId }}
+                    className="font-mono font-medium text-brand hover:underline"
+                  >
+                    {wo.sourceRef ?? 'Sales order'}
+                  </Link>
+                ) : wo.source.type === 'Quotation' && wo.source.refId ? (
                   <Link
                     to="/quotations/$id"
                     params={{ id: wo.source.refId }}

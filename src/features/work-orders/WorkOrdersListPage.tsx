@@ -7,7 +7,10 @@ import { Card } from '@/shared/ui/Card';
 import { DataTable, Pagination, type Column } from '@/shared/ui/DataTable';
 import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
 import { DocRef, Money } from '@/shared/ui/Money';
-import { modeIcons } from '@/shared/ui/ModeIcon';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
+import { jobKindLabel, SERVICE_CATEGORIES, serviceCategoryLabel } from '@/domain/workflow';
+import { inputClasses } from '@/shared/ui/Field';
+import { DocFlagChips } from './DocFlagChips';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { formatDate } from '@/shared/utils/format';
 import { useWorkOrders, type WorkOrderRow } from './api';
@@ -31,26 +34,35 @@ const columns: Column<WorkOrderRow>[] = [
       <div>
         <DocRef>{r.number}</DocRef>
         <div className="mt-1">
-          <SourceBadge type={r.source.type} />
+          <SourceBadge type={r.source.type} refLabel={r.sourceRef} />
         </div>
       </div>
     ),
   },
   {
     key: 'customer',
-    header: 'Customer / lane',
-    cell: (r) => {
-      const Icon = modeIcons[r.mode];
-      return (
-        <div className="min-w-48">
-          <p className="font-medium">{r.customerName}</p>
-          <p className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-caption text-fg-muted">
-            <Icon aria-label={`${r.mode} freight`} className="size-3.5 shrink-0" />
-            {r.origin} → {r.destination}
-          </p>
-        </div>
-      );
-    },
+    header: 'Customer / scope',
+    cell: (r) => (
+      <div className="min-w-48">
+        <p className="font-medium">{r.customerName}</p>
+        <p className="mt-0.5 whitespace-nowrap text-caption text-fg-muted">
+          {r.serviceCategory === 'Transport' ? `${r.origin} → ${r.destination}` : r.origin}
+        </p>
+      </div>
+    ),
+  },
+  {
+    key: 'type',
+    header: 'Type',
+    cell: (r) => (
+      <div className="flex flex-col items-start gap-1.5">
+        <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-body-s">
+          <JobKindIcon category={r.serviceCategory} mode={r.mode} className="size-4 shrink-0 text-fg-muted" />
+          {jobKindLabel(r.serviceCategory, r.mode)}
+        </span>
+        <DocFlagChips flags={r.docFlags} />
+      </div>
+    ),
   },
   {
     key: 'progress',
@@ -112,13 +124,14 @@ export function WorkOrdersListPage() {
     page: search.page,
     status: search.status,
     search: search.q,
+    type: search.type,
   });
 
   return (
     <div>
       <PageHeader
         title="Work orders"
-        description="Every job from booking to proof of delivery. A work order is the job — created from a quotation, a contract, or directly."
+        description="Every job — transport, warehouse or direct service — from sales order to completion. A work order is the job."
         actions={
           <ButtonLink to="/work-orders/new" icon={<Plus aria-hidden="true" />}>
             New work order
@@ -134,7 +147,31 @@ export function WorkOrdersListPage() {
           }
           search={search.q ?? ''}
           onSearch={(q) => void navigate({ search: (p) => ({ ...p, q: q || undefined, page: undefined }) })}
-          searchPlaceholder="Search job, customer, lane, quotation…"
+          searchPlaceholder="Search job, customer, location, order…"
+          extra={
+            <div className="flex items-center gap-2">
+              <label htmlFor="wo-type" className="text-body-s text-fg-muted">
+                Type
+              </label>
+              <select
+                id="wo-type"
+                value={search.type ?? ''}
+                onChange={(e) =>
+                  void navigate({
+                    search: (p) => ({ ...p, type: e.target.value || undefined, page: undefined }),
+                  })
+                }
+                className={`${inputClasses} h-10 w-44`}
+              >
+                <option value="">All types</option>
+                {SERVICE_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {serviceCategoryLabel[c]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          }
         />
         <DataTable
           caption="Work orders"
