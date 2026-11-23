@@ -26,8 +26,10 @@ pnpm build:prototype && pnpm preview:prototype   # static prototype build (dist-
 ```
 
 ```bash
-pnpm build:artifact   # single self-contained HTML preview (dist-artifact/aenix-prototype.html) for sharing
+pnpm build:artifact   # single self-contained preview: dist-artifact/site/index.html (+ claude.ai copy)
 ```
+
+The `prototype-preview` GitHub Actions workflow builds the same page on every push and PR. Download it as the `aenix-prototype` artifact from the run, or open the GitHub Pages site deployed from `main` (Pages source must be set to GitHub Actions once in repository settings).
 
 ```bash
 pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build
