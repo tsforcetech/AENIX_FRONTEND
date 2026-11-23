@@ -11,7 +11,10 @@ export function workOrdersRoutes(parent: AppParentRoute) {
     createRoute({
       getParentRoute: () => parent,
       path: 'work-orders',
-      validateSearch: validateListSearch,
+      validateSearch: (s: Record<string, unknown>) => ({
+        ...validateListSearch(s),
+        type: s.type === 'Transport' || s.type === 'Warehouse' || s.type === 'Service' ? s.type : undefined,
+      }),
       component: WorkOrdersListPage,
     }),
     createRoute({

@@ -28,6 +28,8 @@ import {
   type MovementRow,
   type StockRow,
 } from './api';
+import { InboundView, OutboundView } from './DocViews';
+import { useInbound, useOutbound } from './docs';
 import { MovementDialog, type MovementKind } from './MovementDialog';
 
 const route = getRouteApi('/_app/warehouse');
@@ -79,6 +81,10 @@ export function WarehousePage() {
   const search = route.useSearch();
   const navigate = useNavigate({ from: '/warehouse' });
   const view = search.view ?? 'stock';
+  const inbound = useInbound();
+  const outbound = useOutbound();
+  const inboundOpen = inbound.data?.filter((r) => r.stage !== 'Verified').length ?? 0;
+  const outboundOpen = outbound.data?.filter((r) => r.request.status !== 'Closed').length ?? 0;
   const kpis = useWarehouseKpis();
   const [dialog, setDialog] = useState<MovementKind | null>(null);
   const k = kpis.data;
@@ -157,14 +163,32 @@ export function WarehousePage() {
           <Tabs
             label="Warehouse view"
             value={view}
-            onChange={(v) => void navigate({ search: { view: v === 'movements' ? 'movements' : undefined } })}
+            onChange={(v) =>
+              void navigate({
+                search: { view: v === 'movements' || v === 'inbound' || v === 'outbound' ? v : undefined },
+              })
+            }
             items={[
               { value: 'stock', label: 'Stock on hand' },
               { value: 'movements', label: 'Movements', count: k?.draftMovements || undefined },
+              { value: 'inbound', label: 'Inbound (PL → GRN)', count: inboundOpen || undefined },
+              { value: 'outbound', label: 'Outbound (request → POD)', count: outboundOpen || undefined },
             ]}
           />
         </div>
-        {view === 'movements' ? <MovementsView /> : <StockView />}
+        {view === 'movements' ? (
+          <MovementsView />
+        ) : view === 'inbound' ? (
+          <div className="pt-2">
+            <InboundView />
+          </div>
+        ) : view === 'outbound' ? (
+          <div className="pt-2">
+            <OutboundView />
+          </div>
+        ) : (
+          <StockView />
+        )}
       </Card>
 
       <MovementDialog kind={dialog} onClose={() => setDialog(null)} />

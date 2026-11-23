@@ -3,11 +3,14 @@ import { validateListSearch, type AppParentRoute, type ListSearch } from '@/app/
 import { WarehousePage } from './WarehousePage';
 
 export interface WarehouseSearch extends ListSearch {
-  view?: 'movements';
+  view?: 'movements' | 'inbound' | 'outbound';
 }
 
 function validateWarehouseSearch(s: Record<string, unknown>): WarehouseSearch {
-  return { ...validateListSearch(s), view: s.view === 'movements' ? 'movements' : undefined };
+  return {
+    ...validateListSearch(s),
+    view: s.view === 'movements' || s.view === 'inbound' || s.view === 'outbound' ? s.view : undefined,
+  };
 }
 
 export function warehouseRoutes(parent: AppParentRoute) {
