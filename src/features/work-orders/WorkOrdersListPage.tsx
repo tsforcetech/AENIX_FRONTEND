@@ -1,3 +1,4 @@
+import type { ServiceCategory } from '@/domain/types';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { Plus } from 'lucide-react';
 import type { WorkOrderStatus } from '@/domain/types';
@@ -158,7 +159,11 @@ export function WorkOrdersListPage() {
                 value={search.type ?? ''}
                 onChange={(e) =>
                   void navigate({
-                    search: (p) => ({ ...p, type: e.target.value || undefined, page: undefined }),
+                    search: (p) => ({
+                      ...p,
+                      type: (e.target.value || undefined) as ServiceCategory | undefined,
+                      page: undefined,
+                    }),
                   })
                 }
                 className={`${inputClasses} h-10 w-44`}
