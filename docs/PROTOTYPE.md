@@ -41,7 +41,16 @@ Sign in with any credentials. Choose the **Staff**, **Customer** or **Vendor** p
 
 ## Workflow covered
 
-Masters (customers, vendors, services & vendor rates) → **Enquiry** → **Quotation** (versions, approval, send, accept) → optional **Contract** → **Work Order = Job** (from quotation, contract or authorised direct) → vendor assignment, milestones, costs → **Warehouse** (receipts, dispatches, stock; can run without a job) → **Storage billing** (independent of jobs) → **Invoice** → **Collection** (incl. PDC) → **Accounting** (journals, trial balance, AR ageing) → **Reports**, plus the **Customer** and **Vendor portals** and **Settings** (illustrative).
+See [`BUSINESS-FLOW.md`](BUSINESS-FLOW.md) (FLOW-001). In summary:
+
+- **Masters:** customers, vendors, services and vendor rates.
+- **Order to job:** **Enquiry** (type: Transport with mode / Warehouse / Direct service) → optional **Quotation** → **Sales order** (from quotation, contract or direct) → **Work order = Job**.
+- **On the job:**
+  - **PL → GRN** compared, for warehouse jobs;
+  - **customer out-request → POD** compared;
+  - vendor assignments and milestones by type.
+- **Completion and billing:** job completion drafts **purchase invoices** to vendors; then customer **invoice** → **collection** → **accounting**.
+- **Also:** **warehouse** (stock, movements, inbound and outbound reconciliation), **storage billing**, **reports**, the **customer and vendor portals**, and illustrative **settings**.
 
 ## Switching a module to the real API (repeat per module)
 

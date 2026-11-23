@@ -14,3 +14,9 @@ Append-only. Each entry: date, work package, branch/PR/SHAs, what changed, tests
 - **Changes on move:** paths rewritten for the repository root; CI workflow moved to `.github/workflows/ci.yml`; `CLAUDE.md`/`AGENTS.md` added; API-DEP-03 marked partially confirmed by the P0-001 contract.
 - **Open:** close or supersede AENIX PR #4 and remove `frontend/` from AENIX (owner decision; needs an AENIX PR); DOBIS acceptance of the prototype; ADR-FE-001 sign-off; danger/info colours and dark theme.
 - **Next gate:** owner review of the prototype in this repository.
+
+### 2026-11-23 — FLOW-001 service types, sales orders, PL→GRN and request→POD (in progress)
+
+- **Instruction:** the Project Owner said work orders are not only transport (Warehouse and Direct service too; mode only for transport). The flow is Enquiry → Sales Order → Work Order → job completion drafts purchase invoices. Warehouse: PL → GRN, compared. Customer out-request → vendor POD, compared.
+- **Branch:** `feature/fe-flow-001-service-types-so-grn-pod`. The domain foundation is `7e6e67b`/`43d3d58`; feature modules follow. See [`docs/BUSINESS-FLOW.md`](../BUSINESS-FLOW.md).
+- **Governance:** the Sales Order entity and the GRN/POD controls extend the signed baseline and need a DOBIS change request before backend contracts (API-DEP-16…19).
