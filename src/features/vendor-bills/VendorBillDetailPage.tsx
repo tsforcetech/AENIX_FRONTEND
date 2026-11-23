@@ -2,7 +2,9 @@ import { getRouteApi, Link } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { BadgeCheck, Banknote, Lock } from 'lucide-react';
 import { useState } from 'react';
-import { StatusBadge } from '@/shared/ui/Badge';
+import { jobKindLabel } from '@/domain/workflow';
+import { Badge, StatusBadge } from '@/shared/ui/Badge';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { Button } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
@@ -13,7 +15,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatMoney } from '@/shared/utils/format';
-import { useApproveBill, useRecordBillPayment, useVendorBill } from './api';
+import { useApproveBill, useRecordBillPayment, useVendorBill, type VendorBillRow } from './api';
 import { VarianceTag } from './VarianceTag';
 
 const route = getRouteApi('/_app/vendor-bills/$id');
@@ -32,11 +34,11 @@ export function VendorBillDetailPage() {
     return (
       <StatusMessage
         kind="error"
-        title="Vendor bill not found"
+        title="Purchase invoice not found"
         description="It may have been removed or you may not have access."
       />
     );
-  if (isLoading || !b) return <StatusMessage kind="loading" title="Loading vendor bill…" />;
+  if (isLoading || !b) return <StatusMessage kind="loading" title="Loading purchase invoice…" />;
 
   const payable = b.status === 'Approved' || b.status === 'Partially paid' || b.status === 'Overdue';
 
@@ -59,9 +61,18 @@ export function VendorBillDetailPage() {
   return (
     <div>
       <PageHeader
-        crumbs={[{ label: 'Vendor bills', to: '/vendor-bills' }, { label: b.number }]}
+        crumbs={[{ label: 'Purchase invoices', to: '/vendor-bills' }, { label: b.number }]}
         title={b.number}
-        meta={<StatusBadge status={b.status} />}
+        meta={
+          <>
+            <StatusBadge status={b.status} />
+            {b.draftedAtCompletion ? (
+              <Badge tone="info" dot={false}>
+                Drafted at job completion
+              </Badge>
+            ) : null}
+          </>
+        }
         description={`${b.vendorName} · vendor invoice ${b.vendorRef}`}
         actions={
           <>
@@ -76,7 +87,7 @@ export function VendorBillDetailPage() {
                   })
                 }
               >
-                Approve bill
+                Approve invoice
               </Button>
             ) : null}
             {payable ? (
@@ -97,7 +108,7 @@ export function VendorBillDetailPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card>
-            <CardHeader title="Bill details" />
+            <CardHeader title="Purchase invoice details" />
             <CardBody>
               <DescriptionList
                 columns={3}
@@ -112,7 +123,7 @@ export function VendorBillDetailPage() {
                   },
                   { label: 'Category', value: b.vendorCategory },
                   { label: 'Vendor invoice', value: <span className="font-mono">{b.vendorRef}</span> },
-                  { label: 'Bill date', value: formatDate(b.billDate) },
+                  { label: 'Invoice date', value: formatDate(b.billDate) },
                   {
                     label: 'Due date',
                     value: (
@@ -123,7 +134,7 @@ export function VendorBillDetailPage() {
                     ),
                   },
                   {
-                    label: 'Work order',
+                    label: 'Source job',
                     value: b.workOrderId ? (
                       <Link
                         to="/work-orders/$id"
@@ -136,6 +147,22 @@ export function VendorBillDetailPage() {
                       '—'
                     ),
                   },
+                  {
+                    label: 'Job type',
+                    value: b.jobCategory ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <JobKindIcon
+                          category={b.jobCategory}
+                          mode={b.jobMode}
+                          className="size-4 text-fg-muted"
+                        />
+                        {jobKindLabel(b.jobCategory, b.jobMode)}
+                      </span>
+                    ) : (
+                      '—'
+                    ),
+                  },
+                  { label: 'Job status', value: b.jobStatus ? <StatusBadge status={b.jobStatus} /> : '—' },
                 ]}
               />
             </CardBody>
@@ -144,11 +171,13 @@ export function VendorBillDetailPage() {
           <Card>
             <CardHeader
               title="Job cost match"
-              description="Bill amount (before VAT) against the vendor cost agreed on the work order"
+              description="Invoice amount (before VAT) against the vendor cost agreed on the work order"
             />
             <CardBody>
               {b.agreedCost === undefined ? (
-                <p className="text-body-s text-fg-muted">This bill is not linked to a work order.</p>
+                <p className="text-body-s text-fg-muted">
+                  This purchase invoice is not linked to a work order.
+                </p>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-3">
                   <div className="rounded-xl bg-canvas p-4">
@@ -156,7 +185,7 @@ export function VendorBillDetailPage() {
                     <Money amount={b.agreedCost} className="mt-1 block text-[20px] font-semibold" />
                   </div>
                   <div className="rounded-xl bg-canvas p-4">
-                    <p className="text-caption text-fg-muted">Billed (net)</p>
+                    <p className="text-caption text-fg-muted">Invoiced (net)</p>
                     <Money amount={b.amount} className="mt-1 block text-[20px] font-semibold" />
                   </div>
                   <div
@@ -177,6 +206,8 @@ export function VendorBillDetailPage() {
               )}
             </CardBody>
           </Card>
+
+          {b.evidence && b.jobCategory !== 'Service' ? <EvidenceCard b={b} /> : null}
         </div>
 
         <div className="space-y-6">
@@ -218,7 +249,7 @@ export function VendorBillDetailPage() {
               {b.status !== 'Draft' ? (
                 <p className="mt-4 flex items-start gap-2 text-caption text-fg-muted">
                   <Lock aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-                  Approved bills are read-only. Disputes are settled with a vendor debit note.
+                  Approved purchase invoices are read-only. Disputes are settled with a vendor debit note.
                 </p>
               ) : null}
             </CardBody>
@@ -258,5 +289,72 @@ export function VendorBillDetailPage() {
         />
       </Dialog>
     </div>
+  );
+}
+
+/** GRN / POD status on the source job so AP can check delivery evidence before approving. */
+function EvidenceCard({ b }: { b: VendorBillRow }) {
+  const ev = b.evidence!;
+  const hasAny = !!ev.packingList || !!ev.grn || ev.requests.length > 0;
+  return (
+    <Card>
+      <CardHeader
+        title="Delivery evidence"
+        description="Check the job's GRN and PODs before approving"
+        actions={
+          b.workOrderId ? (
+            <Link
+              to="/work-orders/$id"
+              params={{ id: b.workOrderId }}
+              className="text-body-s font-medium text-brand hover:underline"
+            >
+              Open {b.workOrderNumber}
+            </Link>
+          ) : null
+        }
+      />
+      <CardBody>
+        {!hasAny ? (
+          <p className="text-body-s text-fg-muted">No GRN or customer requests recorded on this job.</p>
+        ) : (
+          <ul className="divide-y divide-border-subtle text-body-s">
+            {ev.packingList ? (
+              <li className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+                <span>
+                  Product list <span className="font-mono text-[13px]">{ev.packingList.number}</span>
+                </span>
+                <StatusBadge status={ev.packingList.status} />
+              </li>
+            ) : null}
+            {ev.packingList || ev.grn ? (
+              <li className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+                <span>
+                  GRN{' '}
+                  {ev.grn ? (
+                    <span className="font-mono text-[13px]">{ev.grn.number}</span>
+                  ) : (
+                    <span className="text-fg-muted">not received</span>
+                  )}
+                </span>
+                {ev.grn ? <StatusBadge status={ev.grn.status} /> : <Badge tone="warning">Pending</Badge>}
+              </li>
+            ) : null}
+            {ev.requests.map((r) => (
+              <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+                <span>
+                  Request <span className="font-mono text-[13px]">{r.number}</span> · POD{' '}
+                  {r.podNumber ? (
+                    <span className="font-mono text-[13px]">{r.podNumber}</span>
+                  ) : (
+                    <span className="text-fg-muted">pending</span>
+                  )}
+                </span>
+                <StatusBadge status={r.status} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

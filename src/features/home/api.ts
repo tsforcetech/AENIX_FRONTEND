@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { invoiceTotals, workOrderFinancials } from '@/domain/calc';
-import type { ActivityEvent, TransportMode, WorkOrder } from '@/domain/types';
+import type { ActivityEvent, ServiceCategory, TransportMode, WorkOrder } from '@/domain/types';
 import { monthlyRevenue, PROTO_TODAY } from '@/prototype/seed';
 import { latency, protoDb } from '@/prototype/store';
 
@@ -8,6 +8,13 @@ import { latency, protoDb } from '@/prototype/store';
  * Home overview view-model. REQUESTED contract (to be added to API-DEPENDENCIES as a
  * dashboard summary endpoint). Today served by the prototype adapter below.
  */
+export type JobKind = TransportMode | Exclude<ServiceCategory, 'Transport'>;
+export const JOB_KINDS: JobKind[] = ['Road', 'Sea', 'Air', 'Warehouse', 'Service'];
+
+export function jobKindOf(w: Pick<WorkOrder, 'serviceCategory' | 'mode'>): JobKind {
+  return w.serviceCategory === 'Transport' ? (w.mode ?? 'Road') : w.serviceCategory;
+}
+
 export interface HomeOverview {
   today: string;
   kpis: {
@@ -25,13 +32,14 @@ export interface HomeOverview {
   attention: { id: string; title: string; detail: string; tone: 'danger' | 'warning' | 'info'; to: string }[];
   activeShipments: (Pick<
     WorkOrder,
-    'id' | 'number' | 'mode' | 'origin' | 'destination' | 'status' | 'eta'
+    'id' | 'number' | 'serviceCategory' | 'mode' | 'origin' | 'destination' | 'status' | 'eta'
   > & {
     customer: string;
     progress: number;
     currentMilestone: string;
   })[];
-  modeMix: Record<TransportMode, number>;
+  /** Job count per type: transport split by mode, then warehouse and direct service. */
+  kindMix: Record<JobKind, number>;
   warehouse: { palletsUsed: number; palletsCapacity: number; skus: number; movementsThisWeek: number };
   revenueByMonth: typeof monthlyRevenue;
   activity: ActivityEvent[];
@@ -54,6 +62,9 @@ function buildOverview(): HomeOverview {
   const openEnq = db.enquiries.filter((e) => e.status === 'New' || e.status === 'Quoting');
   const openQt = db.quotations.filter((q) => ['Draft', 'Pending approval', 'Sent'].includes(q.status));
   const accepted = db.quotations.filter((q) => q.status === 'Accepted');
+  const openSo = db.salesOrders.filter((o) => ['Draft', 'Confirmed', 'In progress'].includes(o.status));
+  const today = PROTO_TODAY;
+  const where = (w: WorkOrder) => (w.destination ? `${w.origin} → ${w.destination}` : w.origin);
   const invoiced = openInv;
   const paid = db.invoices.filter((i) => i.status === 'Paid');
   const qtValue = (qs: typeof db.quotations) =>
@@ -81,9 +92,58 @@ function buildOverview(): HomeOverview {
       .map((w) => ({
         id: w.id,
         title: `${w.number} has no vendor assigned`,
-        detail: `${w.origin} → ${w.destination}`,
+        detail: where(w),
         tone: 'warning' as const,
         to: `/work-orders/${w.id}`,
+      })),
+    ...db.workOrders
+      .filter((w) => w.grn?.status === 'Variance raised')
+      .map((w) => ({
+        id: `${w.id}-grn`,
+        title: `${w.grn!.number} does not match ${w.packingList?.number ?? 'the PL'}`,
+        detail: `${w.number} · ${customerName(w.customerId)}`,
+        tone: 'danger' as const,
+        to: `/work-orders/${w.id}`,
+      })),
+    ...db.workOrders.flatMap((w) =>
+      w.customerRequests
+        .filter((r) => r.status === 'Variance raised')
+        .map((r) => ({
+          id: `${w.id}-${r.id}`,
+          title: `${r.pod?.number ?? 'POD'} does not match ${r.number}`,
+          detail: `${w.number} · ${customerName(w.customerId)}`,
+          tone: 'danger' as const,
+          to: `/work-orders/${w.id}`,
+        })),
+    ),
+    ...db.workOrders
+      .filter((w) => w.packingList?.status === 'Sent to warehouse' && !w.grn)
+      .map((w) => ({
+        id: `${w.id}-nogrn`,
+        title: `${w.number} is waiting for the GRN`,
+        detail: `${w.packingList!.number} sent to warehouse · ${customerName(w.customerId)}`,
+        tone: 'warning' as const,
+        to: `/work-orders/${w.id}`,
+      })),
+    ...db.workOrders.flatMap((w) =>
+      w.customerRequests
+        .filter((r) => r.status === 'Sent to vendor' && !r.pod && r.requiredBy < today)
+        .map((r) => ({
+          id: `${w.id}-${r.id}-late`,
+          title: `${r.number} has no POD (due ${r.requiredBy})`,
+          detail: `${w.number} · ${r.deliverTo}`,
+          tone: 'warning' as const,
+          to: `/work-orders/${w.id}`,
+        })),
+    ),
+    ...db.vendorBills
+      .filter((b) => b.status === 'Draft')
+      .map((b) => ({
+        id: b.id,
+        title: `${b.number} awaiting approval`,
+        detail: `Purchase invoice · ${db.vendors.find((v) => v.id === b.vendorId)?.name ?? '—'}`,
+        tone: 'info' as const,
+        to: `/vendor-bills/${b.id}`,
       })),
     ...db.collections
       .filter((c) => c.status === 'Unallocated' || c.status === 'PDC pending')
@@ -113,6 +173,7 @@ function buildOverview(): HomeOverview {
       return {
         id: w.id,
         number: w.number,
+        serviceCategory: w.serviceCategory,
         mode: w.mode,
         origin: w.origin,
         destination: w.destination,
@@ -124,8 +185,8 @@ function buildOverview(): HomeOverview {
       };
     });
 
-  const modeMix = { Road: 0, Sea: 0, Air: 0 } as Record<TransportMode, number>;
-  db.workOrders.filter((w) => w.status !== 'Cancelled').forEach((w) => (modeMix[w.mode] += 1));
+  const kindMix: Record<JobKind, number> = { Road: 0, Sea: 0, Air: 0, Warehouse: 0, Service: 0 };
+  db.workOrders.filter((w) => w.status !== 'Cancelled').forEach((w) => (kindMix[jobKindOf(w)] += 1));
 
   const pallets = sum(db.stockItems.map((s) => s.pallets));
   const nov = monthlyRevenue[monthlyRevenue.length - 1]!;
@@ -149,6 +210,13 @@ function buildOverview(): HomeOverview {
       { key: 'qt', label: 'Quotations out', count: openQt.length, value: qtValue(openQt), to: '/quotations' },
       { key: 'acc', label: 'Confirmed', count: accepted.length, value: qtValue(accepted), to: '/quotations' },
       {
+        key: 'so',
+        label: 'Sales orders',
+        count: openSo.length,
+        value: sum(openSo.map((o) => sum(o.lines.map((l) => l.quantity * l.unitPrice)))),
+        to: '/sales-orders',
+      },
+      {
         key: 'wo',
         label: 'Jobs running',
         count: active.length,
@@ -160,7 +228,7 @@ function buildOverview(): HomeOverview {
     ],
     attention,
     activeShipments: shipments,
-    modeMix,
+    kindMix,
     warehouse: {
       palletsUsed: pallets,
       palletsCapacity: 180,

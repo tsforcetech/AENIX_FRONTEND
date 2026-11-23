@@ -28,7 +28,7 @@ export function ReportsPage() {
           items={[
             { value: 'revenue', label: 'Revenue & margin' },
             { value: 'customers', label: 'Top customers' },
-            { value: 'lanes', label: 'Lanes' },
+            { value: 'lanes', label: 'Jobs by type & lanes' },
             { value: 'ageing', label: 'Receivables ageing' },
           ]}
         />
@@ -44,8 +44,8 @@ export function ReportsPage() {
 }
 
 const laneColumns: Column<ReportsData['lanes'][number]>[] = [
-  { key: 'lane', header: 'Lane', cell: (l) => <span className="font-medium">{l.lane}</span> },
-  { key: 'mode', header: 'Mode', cell: (l) => l.mode },
+  { key: 'lane', header: 'Lane / site', cell: (l) => <span className="font-medium">{l.lane}</span> },
+  { key: 'kind', header: 'Type', cell: (l) => l.kind },
   { key: 'jobs', header: 'Jobs', align: 'right', cell: (l) => l.jobs },
   { key: 'revenue', header: 'Revenue', align: 'right', cell: (l) => <Money amount={l.revenue} /> },
   {
@@ -112,21 +112,58 @@ function TabContent({ tab, data }: { tab: Tab; data: ReportsData }) {
     );
   }
   if (tab === 'lanes') {
+    const groups = [
+      {
+        group: 'Transport' as const,
+        title: 'Transport lanes',
+        description: 'Road, sea and air jobs per lane',
+      },
+      { group: 'Warehouse' as const, title: 'Warehouse sites', description: 'Warehouse jobs per site' },
+      {
+        group: 'Service' as const,
+        title: 'Direct service locations',
+        description: 'Service-only jobs (e.g. customs) per location',
+      },
+    ];
     return (
-      <Card>
-        <CardHeader
-          title="Lane performance"
-          description="Jobs, revenue and average margin per lane · sample data"
-        />
-        <div className="mt-3">
-          <DataTable
-            caption="Lane performance"
-            columns={laneColumns}
-            rows={data.lanes}
-            rowKey={(l) => l.lane}
+      <div className="space-y-6">
+        <Card>
+          <CardHeader
+            title="Revenue by job type"
+            description="Transport by mode, warehouse and direct service · sample data"
           />
-        </div>
-      </Card>
+          <CardBody>
+            <HorizontalBars
+              items={data.jobsByType.map((t) => ({
+                label: t.kind,
+                value: t.revenue,
+                sub: `${t.jobs} job${t.jobs === 1 ? '' : 's'} · margin ${t.marginPct}%`,
+              }))}
+            />
+            <ChartTable
+              headers={['Type', 'Jobs', 'Revenue', 'Avg margin']}
+              rows={data.jobsByType.map((t) => [t.kind, t.jobs, formatMoney(t.revenue), `${t.marginPct}%`])}
+            />
+          </CardBody>
+        </Card>
+        {groups.map((g) => {
+          const rows = data.lanes.filter((l) => l.group === g.group);
+          if (rows.length === 0) return null;
+          return (
+            <Card key={g.group}>
+              <CardHeader title={g.title} description={`${g.description} · sample data`} />
+              <div className="mt-3">
+                <DataTable
+                  caption={g.title}
+                  columns={laneColumns}
+                  rows={rows}
+                  rowKey={(l) => `${l.kind}|${l.lane}`}
+                />
+              </div>
+            </Card>
+          );
+        })}
+      </div>
     );
   }
   const total = data.ageing.reduce((s, b) => s + b.amount, 0);

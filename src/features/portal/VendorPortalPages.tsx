@@ -1,11 +1,13 @@
 import { Link } from '@tanstack/react-router';
-import { CheckCircle2, ClipboardList, Truck, Wallet } from 'lucide-react';
+import { CheckCircle2, ClipboardList, FileCheck2, Truck, Wallet } from 'lucide-react';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { KpiCard } from '@/shared/ui/KpiCard';
-import { ModeIcon } from '@/shared/ui/ModeIcon';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
+import { jobKindLabel } from '@/domain/workflow';
+import { Badge } from '@/shared/ui/Badge';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
@@ -33,8 +35,9 @@ export function VendorPortalHome() {
         title={`Welcome, ${data.vendorName}`}
         description="Your assignments from AENIX and the status of your bills."
       />
-      <section aria-label="Account summary" className="grid gap-4 sm:grid-cols-3">
+      <section aria-label="Account summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Open assignments" value={String(data.openAssignments)} icon={<Truck />} />
+        <KpiCard label="PODs pending" value={String(data.podPending)} icon={<FileCheck2 />} />
         <KpiCard
           label="Bills outstanding"
           value={formatMoneyCompact(data.billsOutstanding)}
@@ -62,12 +65,21 @@ export function VendorPortalHome() {
               {data.recentAssignments.map((a) => (
                 <li key={a.id} className="flex flex-wrap items-center gap-4 py-3.5">
                   <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-canvas text-fg-secondary">
-                    <ModeIcon mode={a.mode} className="size-5" />
+                    <JobKindIcon category={a.serviceCategory} mode={a.mode} className="size-5" />
                   </span>
                   <span className="min-w-0 flex-1">
                     <DocRef>{a.jobRef}</DocRef>
                     <span className="block truncate text-body-s font-medium">{a.lane}</span>
-                    <span className="block text-caption text-fg-muted">{a.service}</span>
+                    <span className="block text-caption text-fg-muted">
+                      {jobKindLabel(a.serviceCategory, a.mode)} · {a.service}
+                    </span>
+                    {a.podPending > 0 ? (
+                      <span className="mt-1 inline-block">
+                        <Badge tone="warning">
+                          {a.podPending} POD{a.podPending === 1 ? '' : 's'} pending
+                        </Badge>
+                      </span>
+                    ) : null}
                   </span>
                   <span className="text-right">
                     <Money amount={a.agreedCost} className="block text-body-s font-medium" />
@@ -94,13 +106,34 @@ export function VendorAssignmentsPage() {
     { key: 'job', header: 'Job', cell: (a) => <DocRef>{a.jobRef}</DocRef> },
     {
       key: 'lane',
-      header: 'Lane',
+      header: 'Job type / location',
       cell: (a) => (
-        <span className="flex items-center gap-2 whitespace-nowrap">
-          <ModeIcon mode={a.mode} className="size-4 text-fg-muted" />
-          {a.lane}
+        <span className="flex items-start gap-2">
+          <JobKindIcon
+            category={a.serviceCategory}
+            mode={a.mode}
+            className="mt-0.5 size-4 shrink-0 text-fg-muted"
+          />
+          <span>
+            <span className="block whitespace-nowrap">{a.lane}</span>
+            <span className="block text-caption text-fg-muted">
+              {jobKindLabel(a.serviceCategory, a.mode)}
+            </span>
+          </span>
         </span>
       ),
+    },
+    {
+      key: 'pod',
+      header: 'PODs pending',
+      align: 'right',
+      hideOnMobile: true,
+      cell: (a) =>
+        a.podPending > 0 ? (
+          <Badge tone="warning">{a.podPending}</Badge>
+        ) : (
+          <span className="text-fg-muted">—</span>
+        ),
     },
     { key: 'service', header: 'Service', hideOnMobile: true, cell: (a) => a.service },
     {

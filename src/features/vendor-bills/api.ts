@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { billTotals, daysBetween } from '@/domain/calc';
-import type { VendorBill } from '@/domain/types';
+import type { ServiceCategory, TransportMode, VendorBill, WorkOrderStatus } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { PROTO_TODAY } from '@/prototype/seed';
@@ -9,13 +9,24 @@ import { ACCOUNTS, postJournal } from '@/features/accounting/ledger';
 import { invalidateFinance } from '@/features/invoices/api';
 
 /**
- * Vendor bills (AP) data source. PROTOTYPE ADAPTER — replace `vendorBillsApi` bodies with the
+ * Purchase invoices (vendor bills, AP) data source. PROTOTYPE ADAPTER — replace `vendorBillsApi` bodies with the
  * generated OpenAPI client once the Billing (Phase 7) contract is published.
  */
 export interface VendorBillRow extends VendorBill {
   vendorName: string;
   vendorCategory: string;
   workOrderNumber?: string;
+  jobCategory?: ServiceCategory;
+  jobMode?: TransportMode;
+  jobStatus?: WorkOrderStatus;
+  /** Draft created automatically when the linked job was completed. */
+  draftedAtCompletion: boolean;
+  /** Delivery evidence on the linked job, so AP can check before approving. */
+  evidence?: {
+    packingList?: { number: string; status: string };
+    grn?: { number: string; status: string };
+    requests: { id: string; number: string; status: string; podNumber?: string }[];
+  };
   total: number;
   outstanding: number;
   daysOverdue: number;
@@ -46,6 +57,28 @@ function toRow(b: VendorBill): VendorBillRow {
     vendorName: vendor?.name ?? lookupName.vendor(b.vendorId),
     vendorCategory: vendor?.category ?? '',
     workOrderNumber: wo?.number,
+    jobCategory: wo?.serviceCategory,
+    jobMode: wo?.mode,
+    jobStatus: wo?.status,
+    draftedAtCompletion:
+      b.status === 'Draft' &&
+      !!wo &&
+      wo.status === 'Completed' &&
+      (wo.purchaseInvoiceIds?.includes(b.id) ?? true),
+    evidence: wo
+      ? {
+          packingList: wo.packingList
+            ? { number: wo.packingList.number, status: wo.packingList.status }
+            : undefined,
+          grn: wo.grn ? { number: wo.grn.number, status: wo.grn.status } : undefined,
+          requests: wo.customerRequests.map((r) => ({
+            id: r.id,
+            number: r.number,
+            status: r.status,
+            podNumber: r.pod?.number,
+          })),
+        }
+      : undefined,
     ...billTotals(b),
     daysOverdue: status === 'Overdue' ? daysBetween(b.dueDate, PROTO_TODAY) : 0,
     agreedCost: agreed,
@@ -80,7 +113,7 @@ export const vendorBillsApi = {
       date: PROTO_TODAY,
       source: 'Vendor bill',
       reference: b.number,
-      memo: `Vendor bill ${b.vendorRef} — ${lookupName.vendor(b.vendorId)}`,
+      memo: `Purchase invoice ${b.vendorRef} — ${lookupName.vendor(b.vendorId)}`,
       lines: [
         { account: ACCOUNTS.costOfSales, debit: b.amount, credit: 0 },
         { account: ACCOUNTS.vatIn, debit: b.vat, credit: 0 },
@@ -91,7 +124,7 @@ export const vendorBillsApi = {
       entity: 'Vendor bill',
       entityId: id,
       entityRef: b.number,
-      action: 'approved the vendor bill',
+      action: 'approved the purchase invoice',
     });
     return latency(undefined, 250);
   },
