@@ -1,6 +1,6 @@
 // Builds one self-contained HTML body for the shareable claude.ai preview: inlines the CSS and JS
 // emitted by `vite build --mode artifact` (fonts and images are already data: URIs).
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const dir = 'dist-artifact';
@@ -22,3 +22,19 @@ body{margin:0;background:var(--color-canvas);color:var(--color-fg);font-family:v
 `;
 writeFileSync(out, page);
 console.log(`${out}: ${(page.length / 1024 / 1024).toFixed(2)} MB`);
+
+// Standalone copy with its own document shell, for static hosting (GitHub Pages / CI download).
+const standalone = `<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${page}</head>
+</html>
+`
+  .replace('<div id="root"></div>', '</head><body><div id="root"></div>')
+  .replace(/<\/head>\n<\/html>\n$/, '</body>\n</html>\n');
+const standaloneOut = join(dir, 'site', 'index.html');
+mkdirSync(join(dir, 'site'), { recursive: true });
+writeFileSync(standaloneOut, standalone);
+console.log(`${standaloneOut}: standalone page`);
