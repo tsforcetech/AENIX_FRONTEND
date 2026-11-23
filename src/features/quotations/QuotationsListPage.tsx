@@ -7,10 +7,10 @@ import { ButtonLink } from '@/shared/ui/Button';
 import { Card } from '@/shared/ui/Card';
 import { DataTable, Pagination, type Column } from '@/shared/ui/DataTable';
 import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
-import { modeIcons } from '@/shared/ui/ModeIcon';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { formatDate } from '@/shared/utils/format';
+import { ServiceTypeCell, ServiceTypeFilter } from '@/features/sales-orders/commercial-ui';
 import { useQuotations, type QuotationRow } from './api';
 
 const route = getRouteApi('/_app/quotations');
@@ -42,23 +42,18 @@ const columns: Column<QuotationRow>[] = [
   },
   {
     key: 'lane',
-    header: 'Lane',
-    cell: (r) => {
-      const Icon = modeIcons[r.mode];
-      return (
-        <div className="flex items-start gap-2">
-          <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-fg-muted" />
-          <div>
-            <p className="whitespace-nowrap">
-              {r.origin} → {r.destination}
-            </p>
-            <p className="text-caption text-fg-muted">
-              {r.mode} freight · {r.agreement}
-            </p>
-          </div>
-        </div>
-      );
-    },
+    header: 'Service',
+    cell: (r) => (
+      <div>
+        <ServiceTypeCell
+          category={r.serviceCategory}
+          mode={r.mode}
+          origin={r.origin}
+          destination={r.destination}
+        />
+        <p className="ml-6 text-caption text-fg-muted">{r.agreement}</p>
+      </div>
+    ),
   },
   {
     key: 'value',
@@ -93,13 +88,14 @@ export function QuotationsListPage() {
     page: search.page,
     status: search.status,
     search: search.q,
+    type: search.type,
   });
 
   return (
     <div>
       <PageHeader
         title="Quotations"
-        description="Priced offers to customers. Accepted quotations become work orders, or a contract for long-term rates."
+        description="Priced offers to customers. An accepted quotation becomes a sales order, or a contract for long-term rates."
         actions={
           <ButtonLink to="/quotations/new" icon={<Plus aria-hidden="true" />}>
             New quotation
@@ -115,7 +111,13 @@ export function QuotationsListPage() {
           }
           search={search.q ?? ''}
           onSearch={(q) => void navigate({ search: (p) => ({ ...p, q: q || undefined, page: undefined }) })}
-          searchPlaceholder="Search number, customer, lane…"
+          searchPlaceholder="Search number, customer, location…"
+          extra={
+            <ServiceTypeFilter
+              value={search.type}
+              onChange={(type) => void navigate({ search: (p) => ({ ...p, type, page: undefined }) })}
+            />
+          }
         />
         <DataTable
           caption="Quotations"

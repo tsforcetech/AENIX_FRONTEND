@@ -1,11 +1,13 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { FileText, Truck, XCircle } from 'lucide-react';
+import { FileText, ShoppingCart, XCircle } from 'lucide-react';
+import { jobKindLabel } from '@/domain/workflow';
+import { locationLabel } from '@/features/sales-orders/commercial-ui';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { DocRef } from '@/shared/ui/Money';
-import { ModeIcon } from '@/shared/ui/ModeIcon';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
@@ -57,12 +59,12 @@ export function EnquiryDetailPage() {
                 Mark lost
               </Button>
               <ButtonLink
-                to="/work-orders/new"
-                search={{ customerId: e.customerId }}
+                to="/sales-orders/new"
+                search={{ enquiryId: e.id }}
                 variant="secondary"
-                icon={<Truck aria-hidden="true" />}
+                icon={<ShoppingCart aria-hidden="true" />}
               >
-                Direct work order
+                Create sales order (direct)
               </ButtonLink>
               <ButtonLink
                 to="/quotations/new"
@@ -78,38 +80,54 @@ export function EnquiryDetailPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card>
-            <CardHeader title="Shipment request" />
+            <CardHeader title={`${jobKindLabel(e.serviceCategory, e.mode)} request`} />
             <CardBody>
               <div className="mb-6 flex items-center gap-4 rounded-xl bg-canvas p-4">
                 <span className="grid size-11 place-items-center rounded-xl bg-surface text-fg-secondary shadow-card">
-                  <ModeIcon mode={e.mode} className="size-5" />
+                  <JobKindIcon category={e.serviceCategory} mode={e.mode} className="size-5" />
                 </span>
-                <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-1">
-                  <div>
-                    <p className="text-caption text-fg-muted">From</p>
+                {e.serviceCategory === 'Transport' ? (
+                  <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-1">
+                    <div>
+                      <p className="text-caption text-fg-muted">From</p>
+                      <p className="font-semibold">{e.origin}</p>
+                    </div>
+                    <span
+                      aria-hidden="true"
+                      className="hidden h-px flex-1 border-t-2 border-dashed border-border sm:block"
+                    />
+                    <div>
+                      <p className="text-caption text-fg-muted">To</p>
+                      <p className="font-semibold">{e.destination}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex-1">
+                    <p className="text-caption text-fg-muted">{locationLabel(e.serviceCategory)}</p>
                     <p className="font-semibold">{e.origin}</p>
                   </div>
-                  <span
-                    aria-hidden="true"
-                    className="hidden h-px flex-1 border-t-2 border-dashed border-border sm:block"
-                  />
-                  <div>
-                    <p className="text-caption text-fg-muted">To</p>
-                    <p className="font-semibold">{e.destination}</p>
-                  </div>
-                </div>
+                )}
               </div>
               <DescriptionList
                 columns={3}
                 items={[
-                  { label: 'Mode', value: `${e.mode} freight` },
+                  { label: 'Service type', value: jobKindLabel(e.serviceCategory, e.mode) },
                   { label: 'Required by', value: formatDate(e.requiredBy) },
-                  { label: 'Equipment', value: e.cargo.equipment },
-                  { label: 'Cargo', value: e.cargo.description },
+                  {
+                    label: e.serviceCategory === 'Warehouse' ? 'Handling unit' : 'Equipment',
+                    value: e.cargo.equipment,
+                  },
+                  {
+                    label: e.serviceCategory === 'Service' ? 'Service' : 'Goods',
+                    value: e.cargo.description,
+                  },
                   { label: 'Packages', value: formatNumber(e.cargo.packages) },
                   {
                     label: 'Weight / volume',
-                    value: `${formatNumber(e.cargo.weightKg)} kg · ${e.cargo.volumeCbm} cbm`,
+                    value:
+                      e.cargo.weightKg || e.cargo.volumeCbm
+                        ? `${formatNumber(e.cargo.weightKg)} kg · ${e.cargo.volumeCbm} cbm`
+                        : '—',
                   },
                 ]}
               />
@@ -138,8 +156,8 @@ export function EnquiryDetailPage() {
             <CardBody>
               {e.quotations.length === 0 ? (
                 <p className="text-body-s text-fg-muted">
-                  No quotation yet. Create one, or open a direct work order if an authorised rate already
-                  applies.
+                  No quotation yet. Create one, or confirm a sales order directly if an authorised rate
+                  already applies.
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -155,6 +173,29 @@ export function EnquiryDetailPage() {
                           <span className="text-caption text-fg-muted">v{q.version}</span>
                         </span>
                         <StatusBadge status={q.status} />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader title="Sales orders" description="Confirmed orders raised from this enquiry" />
+            <CardBody>
+              {e.salesOrders.length === 0 ? (
+                <p className="text-body-s text-fg-muted">No sales order yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {e.salesOrders.map((so) => (
+                    <li key={so.id}>
+                      <Link
+                        to="/sales-orders/$id"
+                        params={{ id: so.id }}
+                        className="flex items-center justify-between rounded-lg border border-border-subtle px-3 py-2.5 hover:bg-canvas"
+                      >
+                        <DocRef>{so.number}</DocRef>
+                        <StatusBadge status={so.status} />
                       </Link>
                     </li>
                   ))}
