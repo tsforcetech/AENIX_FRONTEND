@@ -1,6 +1,6 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { Truck } from 'lucide-react';
+import { ShoppingCart } from 'lucide-react';
 import { lookupName } from '@/shared/data/lookups';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { ButtonLink } from '@/shared/ui/Button';
@@ -10,6 +10,7 @@ import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { formatDate } from '@/shared/utils/format';
+import { locationText } from '@/features/sales-orders/commercial-ui';
 import { useContract } from './api';
 import { remainingLabel } from './ContractsListPage';
 
@@ -45,11 +46,11 @@ export function ContractDetailPage() {
         actions={
           usable ? (
             <ButtonLink
-              to="/work-orders/new"
+              to="/sales-orders/new"
               search={{ contractId: c.id, customerId: c.customerId }}
-              icon={<Truck aria-hidden="true" />}
+              icon={<ShoppingCart aria-hidden="true" />}
             >
-              New work order under contract
+              New sales order under contract
             </ButtonLink>
           ) : null
         }
@@ -149,7 +150,7 @@ export function ContractDetailPage() {
               {c.workOrders.length === 0 ? (
                 <p className="text-body-s text-fg-muted">
                   No jobs have been run under this contract yet.
-                  {usable ? ' Use “New work order under contract” to start one at the agreed rates.' : ''}
+                  {usable ? ' Use “New sales order under contract” to order at the agreed rates.' : ''}
                 </p>
               ) : (
                 <ul className="divide-y divide-border-subtle">
@@ -162,7 +163,7 @@ export function ContractDetailPage() {
                       >
                         <DocRef>{w.number}</DocRef>
                         <span className="flex-1 truncate text-body-s">
-                          {w.origin} → {w.destination}
+                          {locationText(w.serviceCategory, w.origin, w.destination)}
                         </span>
                         <Money amount={w.revenue} className="text-body-s" />
                         <StatusBadge status={w.status} />

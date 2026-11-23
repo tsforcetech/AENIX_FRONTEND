@@ -1,5 +1,6 @@
 import { createRoute } from '@tanstack/react-router';
-import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
+import { validateListSearch, type AppParentRoute, type ListSearch } from '@/app/routes-base';
+import type { ServiceCategory } from '@/domain/types';
 import { NewWorkOrderPage } from './NewWorkOrderPage';
 import { WorkOrderDetailPage } from './WorkOrderDetailPage';
 import { WorkOrdersListPage } from './WorkOrdersListPage';
@@ -11,7 +12,10 @@ export function workOrdersRoutes(parent: AppParentRoute) {
     createRoute({
       getParentRoute: () => parent,
       path: 'work-orders',
-      validateSearch: validateListSearch,
+      validateSearch: (s: Record<string, unknown>): ListSearch & { type?: ServiceCategory } => ({
+        ...validateListSearch(s),
+        type: s.type === 'Transport' || s.type === 'Warehouse' || s.type === 'Service' ? s.type : undefined,
+      }),
       component: WorkOrdersListPage,
     }),
     createRoute({
@@ -21,6 +25,7 @@ export function workOrdersRoutes(parent: AppParentRoute) {
         customerId: str(s.customerId),
         quotationId: str(s.quotationId),
         contractId: str(s.contractId),
+        salesOrderId: str(s.salesOrderId),
       }),
       component: NewWorkOrderPage,
     }),

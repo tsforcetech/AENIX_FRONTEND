@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { daysBetween, invoiceTotals, workOrderFinancials } from '@/domain/calc';
 import { monthlyRevenue, PROTO_TODAY } from '@/prototype/seed';
 import { latency, protoDb } from '@/prototype/store';
+import type { ServiceCategory } from '@/domain/types';
+import { jobKindLabel, SERVICE_CATEGORIES } from '@/domain/workflow';
 
 /**
  * Reporting view-models. REQUESTED contract (Phase 10 report specs). Prototype adapter computes
@@ -10,7 +12,16 @@ import { latency, protoDb } from '@/prototype/store';
 export interface ReportsData {
   revenueByMonth: { month: string; revenue: number; cost: number; marginPct: number }[];
   topCustomers: { id: string; name: string; revenue: number; jobs: number }[];
-  lanes: { lane: string; mode: string; jobs: number; revenue: number; marginPct: number }[];
+  /** Transport lanes, plus warehouse sites and service locations grouped separately. */
+  lanes: {
+    lane: string;
+    group: ServiceCategory;
+    kind: string;
+    jobs: number;
+    revenue: number;
+    marginPct: number;
+  }[];
+  jobsByType: { group: ServiceCategory; kind: string; jobs: number; revenue: number; marginPct: number }[];
   ageing: { bucket: string; amount: number; count: number }[];
 }
 
@@ -30,25 +41,59 @@ function build(): ReportsData {
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 6);
 
-  const byLane = new Map<string, { mode: string; jobs: number; revenue: number; cost: number }>();
+  const byLane = new Map<
+    string,
+    { lane: string; group: ServiceCategory; kind: string; jobs: number; revenue: number; cost: number }
+  >();
   for (const w of wos) {
-    const key = `${w.origin} → ${w.destination}`;
+    const lane =
+      w.serviceCategory === 'Transport'
+        ? `${w.origin} → ${w.destination}`
+        : w.origin || 'Unspecified location';
+    const kind = jobKindLabel(w.serviceCategory, w.mode);
+    const key = `${w.serviceCategory}|${kind}|${lane}`;
     const f = workOrderFinancials(w);
-    const cur = byLane.get(key) ?? { mode: w.mode, jobs: 0, revenue: 0, cost: 0 };
+    const cur = byLane.get(key) ?? { lane, group: w.serviceCategory, kind, jobs: 0, revenue: 0, cost: 0 };
     cur.jobs += 1;
     cur.revenue += f.revenue;
     cur.cost += f.cost;
     byLane.set(key, cur);
   }
-  const lanes = [...byLane.entries()]
-    .map(([lane, v]) => ({
-      lane,
-      mode: v.mode,
+  const pct = (rev: number, cost: number) => (rev ? Math.round(((rev - cost) / rev) * 1000) / 10 : 0);
+  const order = (g: ServiceCategory) => SERVICE_CATEGORIES.indexOf(g);
+  const lanes = [...byLane.values()]
+    .map((v) => ({
+      lane: v.lane,
+      group: v.group,
+      kind: v.kind,
       jobs: v.jobs,
       revenue: Math.round(v.revenue),
-      marginPct: v.revenue ? Math.round(((v.revenue - v.cost) / v.revenue) * 1000) / 10 : 0,
+      marginPct: pct(v.revenue, v.cost),
     }))
-    .sort((a, b) => b.revenue - a.revenue);
+    .sort((a, b) => order(a.group) - order(b.group) || b.revenue - a.revenue);
+
+  const byType = new Map<
+    string,
+    { group: ServiceCategory; kind: string; jobs: number; revenue: number; cost: number }
+  >();
+  for (const w of wos) {
+    const kind = jobKindLabel(w.serviceCategory, w.mode);
+    const f = workOrderFinancials(w);
+    const cur = byType.get(kind) ?? { group: w.serviceCategory, kind, jobs: 0, revenue: 0, cost: 0 };
+    cur.jobs += 1;
+    cur.revenue += f.revenue;
+    cur.cost += f.cost;
+    byType.set(kind, cur);
+  }
+  const jobsByType = [...byType.values()]
+    .map((v) => ({
+      group: v.group,
+      kind: v.kind,
+      jobs: v.jobs,
+      revenue: Math.round(v.revenue),
+      marginPct: pct(v.revenue, v.cost),
+    }))
+    .sort((a, b) => order(a.group) - order(b.group) || b.jobs - a.jobs);
 
   const buckets = [
     { bucket: 'Current', amount: 0, count: 0 },
@@ -70,6 +115,7 @@ function build(): ReportsData {
     })),
     topCustomers,
     lanes,
+    jobsByType,
     ageing: buckets.map((b) => ({ ...b, amount: Math.round(b.amount * 100) / 100 })),
   };
 }

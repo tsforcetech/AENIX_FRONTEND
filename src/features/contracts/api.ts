@@ -18,7 +18,10 @@ export interface ContractRow extends Contract {
 
 export interface ContractDetail extends ContractRow {
   quotationNumber?: string;
-  workOrders: (Pick<WorkOrder, 'id' | 'number' | 'status' | 'origin' | 'destination' | 'createdAt'> & {
+  workOrders: (Pick<
+    WorkOrder,
+    'id' | 'number' | 'status' | 'origin' | 'destination' | 'createdAt' | 'serviceCategory'
+  > & {
     revenue: number;
   })[];
 }
@@ -52,13 +55,17 @@ export const contractsApi = {
       ...toRow(c),
       quotationNumber: db.quotations.find((q) => q.id === c.quotationId)?.number,
       workOrders: db.workOrders
-        .filter((w) => w.source.type === 'Contract' && w.source.refId === id)
+        .filter((w) => {
+          const so = w.salesOrderId ? db.salesOrders.find((x) => x.id === w.salesOrderId) : undefined;
+          return so?.contractId === id || (w.source.type === 'Contract' && w.source.refId === id);
+        })
         .map((w) => ({
           id: w.id,
           number: w.number,
           status: w.status,
           origin: w.origin,
           destination: w.destination,
+          serviceCategory: w.serviceCategory,
           createdAt: w.createdAt,
           revenue: workOrderFinancials(w).revenue,
         })),

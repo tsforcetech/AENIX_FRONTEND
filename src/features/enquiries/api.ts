@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Cargo, Enquiry, EnquiryStatus, Quotation, TransportMode } from '@/domain/types';
+import type {
+  Cargo,
+  Enquiry,
+  EnquiryStatus,
+  Quotation,
+  SalesOrder,
+  ServiceCategory,
+  TransportMode,
+} from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
@@ -15,7 +23,8 @@ export interface EnquiryRow extends Enquiry {
 
 export interface EnquiryInput {
   customerId: string;
-  mode: TransportMode;
+  serviceCategory: ServiceCategory;
+  mode?: TransportMode;
   origin: string;
   destination: string;
   serviceIds: string[];
@@ -29,6 +38,7 @@ const toRow = (e: Enquiry): EnquiryRow => ({ ...e, customerName: lookupName.cust
 export const enquiriesApi = {
   list(params: ListParams): Promise<Page<EnquiryRow>> {
     const rows = [...protoDb.get().enquiries]
+      .filter((e) => !params.type || e.serviceCategory === params.type)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(toRow);
     return latency(
@@ -39,16 +49,23 @@ export const enquiriesApi = {
       }),
     );
   },
-  get(
-    id: string,
-  ): Promise<EnquiryRow & { quotations: Pick<Quotation, 'id' | 'number' | 'version' | 'status'>[] }> {
+  get(id: string): Promise<
+    EnquiryRow & {
+      quotations: Pick<Quotation, 'id' | 'number' | 'version' | 'status'>[];
+      salesOrders: Pick<SalesOrder, 'id' | 'number' | 'status'>[];
+    }
+  > {
     const e = protoDb.get().enquiries.find((x) => x.id === id);
     if (!e) return Promise.reject(new Error('Not found'));
     const quotations = protoDb
       .get()
       .quotations.filter((q) => q.enquiryId === id)
       .map((q) => ({ id: q.id, number: q.number, version: q.version, status: q.status }));
-    return latency({ ...toRow(e), quotations });
+    const salesOrders = protoDb
+      .get()
+      .salesOrders.filter((so) => so.enquiryId === id)
+      .map((so) => ({ id: so.id, number: so.number, status: so.status }));
+    return latency({ ...toRow(e), quotations, salesOrders });
   },
   create(input: EnquiryInput): Promise<Enquiry> {
     const db = protoDb.get();

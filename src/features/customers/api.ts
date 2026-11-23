@@ -1,3 +1,4 @@
+import { jobKindLabel } from '@/domain/workflow';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoiceTotals, workOrderFinancials } from '@/domain/calc';
 import type { Customer } from '@/domain/types';
@@ -74,7 +75,7 @@ export const customersApi = {
         .map((e) => ({
           id: e.id,
           number: e.number,
-          route: `${e.origin} → ${e.destination}`,
+          route: `${jobKindLabel(e.serviceCategory, e.mode)} · ${e.destination ? `${e.origin} → ${e.destination}` : e.origin}`,
           date: e.createdAt,
           status: e.status,
         })),
@@ -84,14 +85,24 @@ export const customersApi = {
           id: q.id,
           number: q.number,
           version: q.version,
-          route: `${q.origin} → ${q.destination}`,
+          route: `${jobKindLabel(q.serviceCategory, q.mode)} · ${q.destination ? `${q.origin} → ${q.destination}` : q.origin}`,
           date: q.createdAt,
           status: q.status,
+        })),
+      salesOrders: db.salesOrders
+        .filter((o) => o.customerId === id)
+        .map((o) => ({
+          id: o.id,
+          number: o.number,
+          route: `${jobKindLabel(o.serviceCategory, o.mode)} · PO ${o.customerPoRef}`,
+          date: o.orderDate,
+          status: o.status,
+          value: o.lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0),
         })),
       workOrders: workOrders.map((w) => ({
         id: w.id,
         number: w.number,
-        route: `${w.origin} → ${w.destination}`,
+        route: `${jobKindLabel(w.serviceCategory, w.mode)} · ${w.destination ? `${w.origin} → ${w.destination}` : w.origin}`,
         date: w.createdAt,
         status: w.status,
         revenue: workOrderFinancials(w).revenue,

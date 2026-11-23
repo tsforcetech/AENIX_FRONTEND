@@ -1,13 +1,24 @@
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { Check, CopyPlus, FileSignature, RotateCcw, Send, ThumbsDown, ThumbsUp, Truck } from 'lucide-react';
+import {
+  Check,
+  CopyPlus,
+  FileSignature,
+  RotateCcw,
+  Send,
+  ShoppingCart,
+  ThumbsDown,
+  ThumbsUp,
+} from 'lucide-react';
 import { lookupName } from '@/shared/data/lookups';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { Logo } from '@/shared/ui/Logo';
-import { ModeIcon } from '@/shared/ui/ModeIcon';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
+import { jobKindLabel } from '@/domain/workflow';
+import { locationText } from '@/features/sales-orders/commercial-ui';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
@@ -146,11 +157,11 @@ export function QuotationDetailPage() {
               </Button>
             ) : null}
             <ButtonLink
-              to="/work-orders/new"
-              search={{ quotationId: q.id, customerId: q.customerId }}
-              icon={<Truck aria-hidden="true" />}
+              to="/sales-orders/new"
+              search={{ quotationId: q.id }}
+              icon={<ShoppingCart aria-hidden="true" />}
             >
-              Create work order
+              Create sales order
             </ButtonLink>
           </>
         );
@@ -196,11 +207,16 @@ export function QuotationDetailPage() {
                     ),
                   },
                   {
-                    label: 'Lane',
+                    label: 'Service',
                     value: (
                       <span className="inline-flex items-center gap-1.5">
-                        <ModeIcon mode={q.mode} className="size-4 text-fg-muted" />
-                        {q.origin} → {q.destination}
+                        <JobKindIcon
+                          category={q.serviceCategory}
+                          mode={q.mode}
+                          className="size-4 text-fg-muted"
+                        />
+                        {jobKindLabel(q.serviceCategory, q.mode)} ·{' '}
+                        {locationText(q.serviceCategory, q.origin, q.destination)}
                       </span>
                     ),
                   },
@@ -290,13 +306,46 @@ export function QuotationDetailPage() {
 
         <div className="space-y-6">
           <Card>
-            <CardHeader title="Work orders" description="Jobs created from this quotation" />
+            <CardHeader title="Sales orders" description="Customer orders confirmed from this quotation" />
+            <CardBody>
+              {q.salesOrders.length === 0 ? (
+                <p className="text-body-s text-fg-muted">
+                  {q.status === 'Accepted'
+                    ? 'No sales order yet. Create one with the customer’s PO reference.'
+                    : 'Available once the customer accepts.'}
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {q.salesOrders.map((so) => (
+                    <li key={so.id}>
+                      <Link
+                        to="/sales-orders/$id"
+                        params={{ id: so.id }}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-border-subtle px-3 py-2.5 hover:bg-canvas"
+                      >
+                        <span className="min-w-0">
+                          <DocRef>{so.number}</DocRef>
+                          <span className="block truncate text-caption text-fg-muted">
+                            PO {so.customerPoRef}
+                          </span>
+                        </span>
+                        <StatusBadge status={so.status} />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader title="Work orders" description="Jobs running under its sales orders" />
             <CardBody>
               {q.workOrders.length === 0 ? (
                 <p className="text-body-s text-fg-muted">
-                  {q.status === 'Accepted'
-                    ? 'No work order yet. Create one to start the job.'
-                    : 'Available once the customer accepts.'}
+                  {q.salesOrders.length
+                    ? 'No work order yet. Open the sales order to create one.'
+                    : 'Created from a sales order.'}
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -458,7 +507,8 @@ function CustomerPreview({ q }: { q: QuotationDetail }) {
             <div className="sm:text-right">
               <p className="text-caption uppercase tracking-wide text-fg-muted">Service</p>
               <p className="mt-1 font-semibold">
-                {q.mode} freight · {q.origin} → {q.destination}
+                {jobKindLabel(q.serviceCategory, q.mode)} ·{' '}
+                {locationText(q.serviceCategory, q.origin, q.destination)}
               </p>
             </div>
           </div>

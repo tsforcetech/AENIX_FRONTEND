@@ -1,7 +1,6 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { Plus } from 'lucide-react';
 import type { EnquiryStatus } from '@/domain/types';
-import { modeIcons } from '@/shared/ui/ModeIcon';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { ButtonLink } from '@/shared/ui/Button';
 import { Card } from '@/shared/ui/Card';
@@ -10,6 +9,7 @@ import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
 import { DocRef } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { formatDate, formatNumber } from '@/shared/utils/format';
+import { ServiceTypeCell, ServiceTypeFilter } from '@/features/sales-orders/commercial-ui';
 import { useEnquiries, type EnquiryRow } from './api';
 
 const route = getRouteApi('/_app/enquiries');
@@ -38,21 +38,15 @@ const columns: Column<EnquiryRow>[] = [
   },
   {
     key: 'route',
-    header: 'Route',
-    cell: (r) => {
-      const Icon = modeIcons[r.mode];
-      return (
-        <div className="flex items-start gap-2">
-          <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-fg-muted" />
-          <div>
-            <p className="whitespace-nowrap">
-              {r.origin} → {r.destination}
-            </p>
-            <p className="text-caption text-fg-muted">{r.mode} freight</p>
-          </div>
-        </div>
-      );
-    },
+    header: 'Service',
+    cell: (r) => (
+      <ServiceTypeCell
+        category={r.serviceCategory}
+        mode={r.mode}
+        origin={r.origin}
+        destination={r.destination}
+      />
+    ),
   },
   {
     key: 'cargo',
@@ -61,9 +55,11 @@ const columns: Column<EnquiryRow>[] = [
     cell: (r) => (
       <div className="text-caption text-fg-secondary">
         <p>{r.cargo.equipment}</p>
-        <p className="text-fg-muted">
-          {formatNumber(r.cargo.weightKg)} kg · {r.cargo.volumeCbm} cbm
-        </p>
+        {r.cargo.weightKg || r.cargo.volumeCbm ? (
+          <p className="text-fg-muted">
+            {formatNumber(r.cargo.weightKg)} kg · {r.cargo.volumeCbm} cbm
+          </p>
+        ) : null}
       </div>
     ),
   },
@@ -89,13 +85,14 @@ export function EnquiriesListPage() {
     page: search.page,
     status: search.status,
     search: search.q,
+    type: search.type,
   });
 
   return (
     <div>
       <PageHeader
         title="Enquiries"
-        description="Customer requests for transport, warehousing and customs. Quote them, or go straight to a work order."
+        description="Customer requests for transport, warehousing or a direct service. Quote them, or confirm a sales order directly."
         actions={
           <ButtonLink to="/enquiries/new" icon={<Plus aria-hidden="true" />}>
             New enquiry
@@ -111,7 +108,13 @@ export function EnquiriesListPage() {
           }
           search={search.q ?? ''}
           onSearch={(q) => void navigate({ search: (p) => ({ ...p, q: q || undefined, page: undefined }) })}
-          searchPlaceholder="Search number, customer, lane…"
+          searchPlaceholder="Search number, customer, location…"
+          extra={
+            <ServiceTypeFilter
+              value={search.type}
+              onChange={(type) => void navigate({ search: (p) => ({ ...p, type, page: undefined }) })}
+            />
+          }
         />
         <DataTable
           caption="Enquiries"

@@ -11,6 +11,7 @@ export const services: typeof Seed.services = [];
 export const vendorRates: typeof Seed.vendorRates = [];
 export const enquiries: typeof Seed.enquiries = [];
 export const quotations: typeof Seed.quotations = [];
+export const salesOrders: typeof Seed.salesOrders = [];
 export const contracts: typeof Seed.contracts = [];
 export const workOrders: typeof Seed.workOrders = [];
 export const stockItems: typeof Seed.stockItems = [];

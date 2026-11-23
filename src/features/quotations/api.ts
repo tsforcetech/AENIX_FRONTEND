@@ -5,9 +5,13 @@ import type {
   PriceLine,
   Quotation,
   QuotationStatus,
+  SalesOrder,
+  ServiceCategory,
   TransportMode,
   WorkOrder,
 } from '@/domain/types';
+import { jobKindLabel } from '@/domain/workflow';
+import { locationText } from '@/features/sales-orders/commercial-ui';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
@@ -26,7 +30,8 @@ export interface QuotationRow extends Quotation {
 
 export interface QuotationDetail extends QuotationRow {
   enquiryNumber?: string;
-  workOrders: Pick<WorkOrder, 'id' | 'number' | 'status'>[];
+  salesOrders: Pick<SalesOrder, 'id' | 'number' | 'status' | 'customerPoRef'>[];
+  workOrders: Pick<WorkOrder, 'id' | 'number' | 'status' | 'salesOrderId'>[];
   contracts: Pick<Contract, 'id' | 'number' | 'status'>[];
   versions: Pick<Quotation, 'id' | 'number' | 'version' | 'status' | 'createdAt'>[];
 }
@@ -34,7 +39,8 @@ export interface QuotationDetail extends QuotationRow {
 export interface QuotationInput {
   enquiryId?: string;
   customerId: string;
-  mode: TransportMode;
+  serviceCategory: ServiceCategory;
+  mode?: TransportMode;
   origin: string;
   destination: string;
   agreement: Quotation['agreement'];
@@ -46,7 +52,8 @@ export interface QuotationInput {
 
 export interface QuotationDraftPrefill {
   customerId: string;
-  mode: TransportMode;
+  serviceCategory: ServiceCategory;
+  mode?: TransportMode;
   origin: string;
   destination: string;
   enquiryNumber: string;
@@ -107,6 +114,7 @@ function transition(id: string, status: QuotationStatus, action: string) {
 export const quotationsApi = {
   list(params: ListParams): Promise<Page<QuotationRow>> {
     const rows = [...protoDb.get().quotations]
+      .filter((q) => !params.type || q.serviceCategory === params.type)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(toRow);
     return latency(
@@ -123,9 +131,15 @@ export const quotationsApi = {
     return latency({
       ...toRow(q),
       enquiryNumber: db.enquiries.find((e) => e.id === q.enquiryId)?.number,
+      salesOrders: db.salesOrders
+        .filter((so) => so.quotationId === id)
+        .map((so) => ({ id: so.id, number: so.number, status: so.status, customerPoRef: so.customerPoRef })),
       workOrders: db.workOrders
-        .filter((w) => w.source.refId === id)
-        .map((w) => ({ id: w.id, number: w.number, status: w.status })),
+        .filter((w) => {
+          const so = w.salesOrderId ? db.salesOrders.find((x) => x.id === w.salesOrderId) : undefined;
+          return so?.quotationId === id || (w.source.type === 'Quotation' && w.source.refId === id);
+        })
+        .map((w) => ({ id: w.id, number: w.number, status: w.status, salesOrderId: w.salesOrderId })),
       contracts: db.contracts
         .filter((c) => c.quotationId === id)
         .map((c) => ({ id: c.id, number: c.number, status: c.status })),
@@ -155,7 +169,7 @@ export const quotationsApi = {
       const unitCost = rate?.rate ?? 0;
       return {
         serviceId,
-        description: `${svc?.name ?? 'Service'} — ${e.origin} → ${e.destination}`,
+        description: `${svc?.name ?? 'Service'} — ${locationText(e.serviceCategory, e.origin, e.destination)}`,
         quantity: 1,
         unit: svc?.unit ?? 'Unit',
         unitCost,
@@ -165,6 +179,7 @@ export const quotationsApi = {
     return latency(
       {
         customerId: e.customerId,
+        serviceCategory: e.serviceCategory,
         mode: e.mode,
         origin: e.origin,
         destination: e.destination,
@@ -250,7 +265,7 @@ export const quotationsApi = {
       number: `CTR-${year}-${String(seq).padStart(3, '0')}`,
       customerId: q.customerId,
       quotationId: q.id,
-      title: `${q.origin} → ${q.destination} ${q.mode.toLowerCase()} rates`,
+      title: `${locationText(q.serviceCategory, q.origin, q.destination)} — ${jobKindLabel(q.serviceCategory, q.mode).toLowerCase()} rates`,
       startDate: start.toISOString().slice(0, 10),
       endDate: end.toISOString().slice(0, 10),
       status: 'Active',
@@ -295,6 +310,7 @@ function useInvalidate() {
     void qc.invalidateQueries({ queryKey: ['quotations'] });
     void qc.invalidateQueries({ queryKey: ['enquiries'] });
     void qc.invalidateQueries({ queryKey: ['contracts'] });
+    void qc.invalidateQueries({ queryKey: ['sales-orders'] });
     void qc.invalidateQueries({ queryKey: ['home'] });
   };
 }

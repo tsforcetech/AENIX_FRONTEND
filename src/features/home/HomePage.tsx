@@ -12,9 +12,12 @@ import {
   Ship,
   Truck,
   Wallet,
+  Warehouse,
+  Wrench,
 } from 'lucide-react';
 import { useState } from 'react';
-import type { TransportMode } from '@/domain/types';
+import { jobKindLabel } from '@/domain/workflow';
+import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { useSession } from '@/shared/auth/session';
 import { ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
@@ -29,11 +32,30 @@ import {
   formatNumber,
   formatRelative,
 } from '@/shared/utils/format';
-import { useHomeOverview, type HomeOverview } from './api';
+import { JOB_KINDS, useHomeOverview, type HomeOverview, type JobKind } from './api';
 
-const modeIcon: Record<TransportMode, typeof Truck> = { Road: Truck, Sea: Ship, Air: Plane };
-/** Categorical slots 1–3 (validated); identity also carried by label + icon. */
-const modeColor: Record<TransportMode, string> = { Road: '#2a78d6', Sea: '#eb6834', Air: '#1baf7a' };
+/** Categorical slots 1–5 in fixed order (validated); labels and counts always shown (slots 3–5 < 3:1). */
+const kindColor: Record<JobKind, string> = {
+  Road: '#2a78d6',
+  Sea: '#eb6834',
+  Air: '#1baf7a',
+  Warehouse: '#eda100',
+  Service: '#e87ba4',
+};
+const kindLabel: Record<JobKind, string> = {
+  Road: 'Road transport',
+  Sea: 'Sea freight',
+  Air: 'Air freight',
+  Warehouse: 'Warehouse',
+  Service: 'Direct service',
+};
+const kindIcon: Record<JobKind, typeof Truck> = {
+  Road: Truck,
+  Sea: Ship,
+  Air: Plane,
+  Warehouse,
+  Service: Wrench,
+};
 
 function greeting(hour: number) {
   return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
@@ -145,7 +167,7 @@ function HomeContent({ data }: { data: HomeOverview }) {
       <div className="grid gap-6 xl:grid-cols-3">
         <ActiveShipments items={data.activeShipments} className="xl:col-span-2" />
         <div className="space-y-6">
-          <ModeMix mix={data.modeMix} />
+          <KindMix mix={data.kindMix} />
           <WarehouseCard w={data.warehouse} />
         </div>
       </div>
@@ -164,7 +186,7 @@ function Pipeline({ stages }: { stages: HomeOverview['pipeline'] }) {
         description="Where every customer request is right now — enquiry through to collected cash."
       />
       <CardBody>
-        <ol className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+        <ol className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-7">
           {stages.map((s, i) => (
             <li key={s.key}>
               <Link
@@ -389,7 +411,6 @@ function ActiveShipments({
       <CardBody className="pt-3">
         <ul className="divide-y divide-border-subtle">
           {items.map((s) => {
-            const Icon = modeIcon[s.mode];
             return (
               <li key={s.id}>
                 <Link
@@ -398,7 +419,7 @@ function ActiveShipments({
                   className="-mx-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg px-2 py-3.5 hover:bg-canvas"
                 >
                   <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-canvas text-fg-secondary">
-                    <Icon aria-hidden="true" className="size-5" strokeWidth={1.8} />
+                    <JobKindIcon category={s.serviceCategory} mode={s.mode} className="size-5" />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
@@ -406,9 +427,11 @@ function ActiveShipments({
                       <StatusBadge status={s.status} />
                     </span>
                     <span className="mt-0.5 block truncate text-body-s font-medium">
-                      {s.origin} → {s.destination}
+                      {s.destination ? `${s.origin} → ${s.destination}` : s.origin}
                     </span>
-                    <span className="block truncate text-caption text-fg-muted">{s.customer}</span>
+                    <span className="block truncate text-caption text-fg-muted">
+                      {jobKindLabel(s.serviceCategory, s.mode)} · {s.customer}
+                    </span>
                   </span>
                   <span className="w-full sm:w-56">
                     <span className="flex justify-between gap-2 whitespace-nowrap text-caption text-fg-muted">
@@ -439,40 +462,42 @@ function ActiveShipments({
   );
 }
 
-function ModeMix({ mix }: { mix: Record<TransportMode, number> }) {
-  const modes = Object.keys(mix) as TransportMode[];
-  const total = modes.reduce((s, m) => s + mix[m], 0) || 1;
+function KindMix({ mix }: { mix: Record<JobKind, number> }) {
+  const total = JOB_KINDS.reduce((s, k) => s + mix[k], 0) || 1;
   return (
     <Card>
-      <CardHeader title="Jobs by mode" description={`${total} work orders this month`} />
+      <CardHeader
+        title="Jobs by type"
+        description={`${total} work orders · transport, warehouse and direct service`}
+      />
       <CardBody>
         <div
           className="flex h-3 gap-[2px] overflow-hidden rounded-full"
           role="img"
-          aria-label={modes.map((m) => `${m} ${mix[m]}`).join(', ')}
+          aria-label={JOB_KINDS.map((k) => `${kindLabel[k]} ${mix[k]}`).join(', ')}
         >
-          {modes.map((m) => (
+          {JOB_KINDS.filter((k) => mix[k] > 0).map((k) => (
             <span
-              key={m}
-              style={{ width: `${(mix[m] / total) * 100}%`, background: modeColor[m] }}
+              key={k}
+              style={{ width: `${(mix[k] / total) * 100}%`, background: kindColor[k] }}
               className="first:rounded-l-full last:rounded-r-full"
             />
           ))}
         </div>
         <ul className="mt-4 space-y-2.5">
-          {modes.map((m) => {
-            const Icon = modeIcon[m];
+          {JOB_KINDS.map((k) => {
+            const Icon = kindIcon[k];
             return (
-              <li key={m} className="flex items-center gap-2.5 text-body-s">
+              <li key={k} className="flex items-center gap-2.5 text-body-s">
                 <span
                   aria-hidden="true"
                   className="size-2.5 rounded-sm"
-                  style={{ background: modeColor[m] }}
+                  style={{ background: kindColor[k] }}
                 />
                 <Icon aria-hidden="true" className="size-4 text-fg-muted" />
-                <span className="flex-1">{m}</span>
-                <span className="tabular-nums text-fg-muted">{Math.round((mix[m] / total) * 100)}%</span>
-                <span className="w-6 text-right font-medium tabular-nums">{mix[m]}</span>
+                <span className="flex-1">{kindLabel[k]}</span>
+                <span className="tabular-nums text-fg-muted">{Math.round((mix[k] / total) * 100)}%</span>
+                <span className="w-6 text-right font-medium tabular-nums">{mix[k]}</span>
               </li>
             );
           })}

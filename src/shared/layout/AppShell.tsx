@@ -17,6 +17,7 @@ import { Topbar, type QuickCreate } from './Topbar';
 const staffQuickCreate: QuickCreate[] = [
   { label: 'New enquiry', to: '/enquiries/new' },
   { label: 'New quotation', to: '/quotations/new' },
+  { label: 'New sales order', to: '/sales-orders/new' },
   { label: 'New work order', to: '/work-orders/new' },
   { label: 'Record collection', to: '/collections/new' },
 ];

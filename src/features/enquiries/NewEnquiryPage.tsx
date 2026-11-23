@@ -3,34 +3,58 @@ import { useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { useController, useForm } from 'react-hook-form';
 import { z } from 'zod';
-import type { TransportMode } from '@/domain/types';
+import { ModePicker, serviceFitsType, ServiceTypePicker } from '@/features/sales-orders/commercial-ui';
 import { useCustomerOptions, useServiceOptions } from '@/shared/data/lookups';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { SelectField, TextareaField, TextField } from '@/shared/ui/Field';
-import { modeIcons } from '@/shared/ui/ModeIcon';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToast } from '@/shared/ui/Toast';
 import { useCreateEnquiry } from './api';
 
-const MODES: TransportMode[] = ['Road', 'Sea', 'Air'];
-
-const schema = z.object({
-  customerId: z.string().min(1, 'Choose a customer'),
-  mode: z.enum(['Road', 'Sea', 'Air']),
-  origin: z.string().trim().min(2, 'Enter the origin').max(80),
-  destination: z.string().trim().min(2, 'Enter the destination').max(80),
-  requiredBy: z.string().min(1, 'Choose a date'),
-  serviceIds: z.array(z.string()).min(1, 'Select at least one service'),
-  description: z.string().trim().min(2, 'Describe the cargo').max(160),
-  packages: z.coerce.number().int().positive('Must be more than 0'),
-  weightKg: z.coerce.number().positive('Must be more than 0'),
-  volumeCbm: z.coerce.number().positive('Must be more than 0'),
-  equipment: z.string().max(60).optional(),
-  notes: z.string().max(1000).optional(),
-});
+const schema = z
+  .object({
+    customerId: z.string().min(1, 'Choose a customer'),
+    serviceCategory: z.enum(['Transport', 'Warehouse', 'Service']),
+    mode: z.enum(['Road', 'Sea', 'Air']),
+    origin: z.string().trim().min(2, 'Enter a location').max(80),
+    destination: z.string().trim().max(80),
+    storagePeriod: z.string().trim().max(60).optional(),
+    requiredBy: z.string().min(1, 'Choose a date'),
+    serviceIds: z.array(z.string()).min(1, 'Select at least one service'),
+    description: z.string().trim().min(2, 'Describe the goods or the service').max(160),
+    packages: z.coerce.number().int().min(0, 'Cannot be negative'),
+    weightKg: z.coerce.number().min(0, 'Cannot be negative'),
+    volumeCbm: z.coerce.number().min(0, 'Cannot be negative'),
+    equipment: z.string().max(60).optional(),
+    notes: z.string().max(1000).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.serviceCategory === 'Transport' && v.destination.length < 2) {
+      ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
+    }
+    if (v.serviceCategory !== 'Service') {
+      if (v.packages <= 0)
+        ctx.addIssue({ code: 'custom', path: ['packages'], message: 'Must be more than 0' });
+      if (v.weightKg <= 0)
+        ctx.addIssue({ code: 'custom', path: ['weightKg'], message: 'Must be more than 0' });
+      if (v.volumeCbm <= 0)
+        ctx.addIssue({ code: 'custom', path: ['volumeCbm'], message: 'Must be more than 0' });
+    }
+  });
 type FormInput = z.input<typeof schema>;
 type FormOutput = z.output<typeof schema>;
+
+const originLabel = {
+  Transport: 'Origin',
+  Warehouse: 'Warehouse / site',
+  Service: 'Service location',
+} as const;
+const originPlaceholder = {
+  Transport: 'e.g. Jebel Ali',
+  Warehouse: 'e.g. JAFZA WH-1',
+  Service: 'e.g. DXB Cargo Village',
+} as const;
 
 export function NewEnquiryPage() {
   const navigate = useNavigate();
@@ -45,24 +69,33 @@ export function NewEnquiryPage() {
     formState: { errors },
   } = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(schema),
-    defaultValues: { mode: 'Road', serviceIds: [], requiredBy: '2026-12-05' },
+    defaultValues: {
+      serviceCategory: 'Transport',
+      mode: 'Road',
+      serviceIds: [],
+      requiredBy: '2026-12-05',
+      destination: '',
+    },
   });
+  const category = useController({ control, name: 'serviceCategory' });
   const mode = useController({ control, name: 'mode' });
   const svc = useController({ control, name: 'serviceIds' });
-  const selectedMode = mode.field.value;
-  const serviceChoices = (services.data ?? []).filter(
-    (s) => s.mode === selectedMode || s.mode === 'Customs' || s.mode === 'Warehouse',
-  );
+  const type = category.field.value;
+  const serviceChoices = (services.data ?? []).filter((s) => serviceFitsType(s.mode, type, mode.field.value));
 
   const onSubmit = handleSubmit(async (v) => {
+    const notes = [v.storagePeriod ? `Expected storage period: ${v.storagePeriod}` : '', v.notes ?? '']
+      .filter(Boolean)
+      .join('\n');
     const created = await create.mutateAsync({
       customerId: v.customerId,
-      mode: v.mode,
+      serviceCategory: v.serviceCategory,
+      mode: v.serviceCategory === 'Transport' ? v.mode : undefined,
       origin: v.origin,
-      destination: v.destination,
+      destination: v.serviceCategory === 'Transport' ? v.destination : '',
       requiredBy: v.requiredBy,
       serviceIds: v.serviceIds,
-      notes: v.notes ?? '',
+      notes,
       cargo: {
         description: v.description,
         packages: v.packages,
@@ -71,7 +104,10 @@ export function NewEnquiryPage() {
         equipment: v.equipment,
       },
     });
-    toast({ title: `${created.number} created`, body: 'You can now prepare a quotation.' });
+    toast({
+      title: `${created.number} created`,
+      body: 'Prepare a quotation, or confirm a sales order directly.',
+    });
     void navigate({ to: '/enquiries/$id', params: { id: created.id } });
   });
 
@@ -80,11 +116,11 @@ export function NewEnquiryPage() {
       <PageHeader
         title="New enquiry"
         crumbs={[{ label: 'Enquiries', to: '/enquiries' }, { label: 'New' }]}
-        description="Capture what the customer needs. Pricing happens on the quotation."
+        description="Capture what the customer needs: transport, warehousing or a direct service. Pricing happens on the quotation or sales order."
       />
       <form onSubmit={onSubmit} noValidate className="space-y-6">
         <Card>
-          <CardHeader title="Customer & route" />
+          <CardHeader title="Customer & service" />
           <CardBody className="grid gap-5 sm:grid-cols-2">
             <SelectField
               label="Customer"
@@ -95,54 +131,53 @@ export function NewEnquiryPage() {
               className="sm:col-span-2"
               {...register('customerId')}
             />
-            <fieldset className="sm:col-span-2">
-              <legend className="mb-1.5 text-body-s font-medium">Mode</legend>
-              <div className="grid grid-cols-3 gap-2">
-                {MODES.map((m) => {
-                  const Icon = modeIcons[m];
-                  const checked = mode.field.value === m;
-                  return (
-                    <label
-                      key={m}
-                      className={clsx(
-                        'flex cursor-pointer items-center justify-center gap-2 rounded-lg border py-2.5 text-body-s font-medium transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-focus',
-                        checked
-                          ? 'border-fg bg-surface-inverse text-fg-inverse'
-                          : 'border-border bg-surface hover:bg-surface-muted',
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        className="sr-only"
-                        name={mode.field.name}
-                        value={m}
-                        checked={checked}
-                        onChange={() => {
-                          mode.field.onChange(m);
-                          svc.field.onChange([]);
-                        }}
-                      />
-                      <Icon aria-hidden="true" className="size-4" />
-                      {m}
-                    </label>
-                  );
-                })}
+            <div className="sm:col-span-2">
+              <ServiceTypePicker
+                name={category.field.name}
+                value={type}
+                onChange={(c) => {
+                  category.field.onChange(c);
+                  svc.field.onChange([]);
+                }}
+              />
+            </div>
+            {type === 'Transport' ? (
+              <div className="sm:col-span-2">
+                <ModePicker
+                  name={mode.field.name}
+                  value={mode.field.value}
+                  onChange={(m) => {
+                    mode.field.onChange(m);
+                    svc.field.onChange([]);
+                  }}
+                />
               </div>
-            </fieldset>
+            ) : null}
             <TextField
-              label="Origin"
+              label={originLabel[type]}
               required
-              placeholder="e.g. Jebel Ali"
+              placeholder={originPlaceholder[type]}
               error={errors.origin?.message}
               {...register('origin')}
             />
-            <TextField
-              label="Destination"
-              required
-              placeholder="e.g. Riyadh"
-              error={errors.destination?.message}
-              {...register('destination')}
-            />
+            {type === 'Transport' ? (
+              <TextField
+                label="Destination"
+                required
+                placeholder="e.g. Riyadh"
+                error={errors.destination?.message}
+                {...register('destination')}
+              />
+            ) : type === 'Warehouse' ? (
+              <TextField
+                label="Expected storage period"
+                placeholder="e.g. 3 months"
+                error={errors.storagePeriod?.message}
+                {...register('storagePeriod')}
+              />
+            ) : (
+              <div aria-hidden="true" className="hidden sm:block" />
+            )}
             <TextField
               label="Required by"
               type="date"
@@ -154,7 +189,16 @@ export function NewEnquiryPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Services requested" description="Filtered by the selected mode" />
+          <CardHeader
+            title="Services requested"
+            description={
+              type === 'Transport'
+                ? `${mode.field.value} services plus customs and insurance`
+                : type === 'Warehouse'
+                  ? 'Warehouse services'
+                  : 'Direct services (no transport leg)'
+            }
+          />
           <CardBody>
             <fieldset aria-describedby={errors.serviceIds ? 'svc-err' : undefined}>
               <legend className="sr-only">Services requested</legend>
@@ -197,13 +241,20 @@ export function NewEnquiryPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Cargo" />
+          <CardHeader
+            title={type === 'Service' ? 'Service details' : 'Goods'}
+            description={type === 'Service' ? 'Quantities are optional for a direct service.' : undefined}
+          />
           <CardBody className="grid gap-5 sm:grid-cols-4">
             <TextField
               label="Description"
               required
               className="sm:col-span-4"
-              placeholder="e.g. Palletised ceramic tiles"
+              placeholder={
+                type === 'Service'
+                  ? 'e.g. Import declaration for diagnostic equipment'
+                  : 'e.g. Palletised ceramic tiles'
+              }
               error={errors.description?.message}
               {...register('description')}
             />
@@ -211,7 +262,7 @@ export function NewEnquiryPage() {
               label="Packages"
               type="number"
               inputMode="numeric"
-              required
+              required={type !== 'Service'}
               error={errors.packages?.message}
               {...register('packages')}
             />
@@ -219,7 +270,7 @@ export function NewEnquiryPage() {
               label="Weight (kg)"
               type="number"
               inputMode="decimal"
-              required
+              required={type !== 'Service'}
               error={errors.weightKg?.message}
               {...register('weightKg')}
             />
@@ -228,13 +279,13 @@ export function NewEnquiryPage() {
               type="number"
               inputMode="decimal"
               step="0.1"
-              required
+              required={type !== 'Service'}
               error={errors.volumeCbm?.message}
               {...register('volumeCbm')}
             />
             <TextField
-              label="Equipment"
-              placeholder="e.g. 40ft trailer"
+              label={type === 'Warehouse' ? 'Handling unit' : 'Equipment'}
+              placeholder={type === 'Warehouse' ? 'e.g. 18 pallets' : 'e.g. 40ft trailer'}
               error={errors.equipment?.message}
               {...register('equipment')}
             />

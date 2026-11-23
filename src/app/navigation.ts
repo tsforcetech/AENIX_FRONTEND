@@ -11,6 +11,7 @@ import {
   MessageSquareText,
   Receipt,
   Settings,
+  ShoppingCart,
   Tags,
   Truck,
   Wallet,
@@ -38,6 +39,7 @@ export const staffNavigation: NavGroup[] = [
     items: [
       { label: 'Enquiries', to: '/enquiries', icon: MessageSquareText, phase: 3 },
       { label: 'Quotations', to: '/quotations', icon: FileText, phase: 3 },
+      { label: 'Sales orders', to: '/sales-orders', icon: ShoppingCart, phase: 3 },
       { label: 'Contracts', to: '/contracts', icon: FileSignature, phase: 3 },
     ],
   },
@@ -53,7 +55,7 @@ export const staffNavigation: NavGroup[] = [
     label: 'Finance',
     items: [
       { label: 'Invoices', to: '/invoices', icon: Receipt, phase: 7 },
-      { label: 'Vendor bills', to: '/vendor-bills', icon: ClipboardList, phase: 7 },
+      { label: 'Purchase invoices', to: '/vendor-bills', icon: ClipboardList, phase: 7 },
       { label: 'Collections', to: '/collections', icon: Wallet, phase: 7 },
       { label: 'Accounting', to: '/accounting', icon: Landmark, phase: 8 },
     ],
