@@ -244,7 +244,7 @@ export const salesOrdersApi = {
     protoDb.update((s) => ({ ...s, salesOrders: [so, ...s.salesOrders] }));
     if (confirm) setEnquiryWon(so.enquiryId);
     logActivity({
-      entity: 'Quotation',
+      entity: 'Sales order',
       entityId: so.id,
       entityRef: so.number,
       action: confirm ? 'confirmed a sales order' : 'saved a draft sales order',
@@ -261,7 +261,7 @@ export const salesOrdersApi = {
     }));
     if (status === 'Confirmed') setEnquiryWon(so.enquiryId);
     logActivity({
-      entity: 'Quotation',
+      entity: 'Sales order',
       entityId: id,
       entityRef: so.number,
       action:

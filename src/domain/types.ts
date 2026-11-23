@@ -401,6 +401,7 @@ export interface ActivityEvent {
   entity:
     | 'Enquiry'
     | 'Quotation'
+    | 'Sales order'
     | 'Contract'
     | 'Work order'
     | 'Warehouse'
