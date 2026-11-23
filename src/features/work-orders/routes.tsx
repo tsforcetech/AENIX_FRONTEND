@@ -21,6 +21,7 @@ export function workOrdersRoutes(parent: AppParentRoute) {
         customerId: str(s.customerId),
         quotationId: str(s.quotationId),
         contractId: str(s.contractId),
+        salesOrderId: str(s.salesOrderId),
       }),
       component: NewWorkOrderPage,
     }),
