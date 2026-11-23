@@ -1,0 +1,317 @@
+/**
+ * PROVISIONAL UI view-models for the workflow prototype (FE-PROTO-001).
+ *
+ * These are NOT API contracts. When Antigravity publishes the versioned OpenAPI contract
+ * for a module, that module's types are replaced by the generated ones and the screens
+ * are adapted. Field names here are deliberately business-readable, not wire formats.
+ */
+
+export type Id = string;
+export type IsoDate = string; // YYYY-MM-DD
+export type IsoDateTime = string;
+
+export type TransportMode = 'Road' | 'Sea' | 'Air';
+export type ServiceMode = TransportMode | 'Warehouse' | 'Customs';
+
+// ---------- Masters ----------
+export interface Customer {
+  id: Id;
+  code: string;
+  name: string;
+  industry: string;
+  city: string;
+  country: string;
+  trnMasked: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  creditLimit: number;
+  paymentTermsDays: number;
+  status: 'Active' | 'On hold' | 'Inactive';
+  createdAt: IsoDate;
+}
+
+export type VendorCategory = 'Transporter' | 'Shipping line' | 'Airline' | 'Customs broker' | 'Warehouse';
+
+export interface Vendor {
+  id: Id;
+  code: string;
+  name: string;
+  category: VendorCategory;
+  city: string;
+  country: string;
+  contactName: string;
+  contactEmail: string;
+  rating: 1 | 2 | 3 | 4 | 5;
+  paymentTermsDays: number;
+  status: 'Active' | 'On hold' | 'Inactive';
+}
+
+export interface Service {
+  id: Id;
+  code: string;
+  name: string;
+  mode: ServiceMode;
+  unit: string;
+  description: string;
+}
+
+export interface VendorRate {
+  id: Id;
+  vendorId: Id;
+  serviceId: Id;
+  origin: string;
+  destination: string;
+  unit: string;
+  rate: number;
+  validFrom: IsoDate;
+  validTo: IsoDate;
+}
+
+// ---------- Commercial ----------
+export interface Cargo {
+  description: string;
+  packages: number;
+  weightKg: number;
+  volumeCbm: number;
+  equipment?: string; // e.g. 40ft container, 3-ton truck
+}
+
+export type EnquiryStatus = 'New' | 'Quoting' | 'Quoted' | 'Won' | 'Lost';
+
+export interface Enquiry {
+  id: Id;
+  number: string;
+  customerId: Id;
+  mode: TransportMode;
+  serviceIds: Id[];
+  origin: string;
+  destination: string;
+  cargo: Cargo;
+  requiredBy: IsoDate;
+  status: EnquiryStatus;
+  owner: string;
+  notes: string;
+  createdAt: IsoDateTime;
+}
+
+export interface PriceLine {
+  id: Id;
+  serviceId: Id;
+  description: string;
+  quantity: number;
+  unit: string;
+  unitPrice: number;
+  unitCost: number;
+}
+
+export type QuotationStatus = 'Draft' | 'Pending approval' | 'Sent' | 'Accepted' | 'Rejected' | 'Expired';
+
+export interface Quotation {
+  id: Id;
+  number: string;
+  version: number;
+  enquiryId?: Id;
+  customerId: Id;
+  mode: TransportMode;
+  origin: string;
+  destination: string;
+  agreement: 'One-time' | 'Long-term';
+  status: QuotationStatus;
+  validUntil: IsoDate;
+  lines: PriceLine[];
+  terms: string;
+  createdAt: IsoDateTime;
+  owner: string;
+}
+
+export type ContractStatus = 'Draft' | 'Active' | 'Expiring' | 'Expired';
+
+export interface Contract {
+  id: Id;
+  number: string;
+  customerId: Id;
+  quotationId?: Id;
+  title: string;
+  startDate: IsoDate;
+  endDate: IsoDate;
+  status: ContractStatus;
+  lines: PriceLine[];
+  billingCycle: 'Per job' | 'Monthly';
+}
+
+// ---------- Operations ----------
+export type WorkOrderStatus =
+  'Draft' | 'Confirmed' | 'In progress' | 'In transit' | 'Delivered' | 'Completed' | 'Cancelled';
+
+export interface Milestone {
+  id: Id;
+  label: string;
+  status: 'Done' | 'Current' | 'Pending';
+  at?: IsoDateTime;
+}
+
+export interface VendorAssignment {
+  id: Id;
+  vendorId: Id;
+  serviceId: Id;
+  agreedCost: number;
+  status: 'Requested' | 'Accepted' | 'Completed';
+}
+
+/** Work Order IS the Job (AENIX business rule). */
+export interface WorkOrder {
+  id: Id;
+  number: string;
+  customerId: Id;
+  source: { type: 'Quotation' | 'Contract' | 'Direct'; refId?: Id };
+  mode: TransportMode;
+  origin: string;
+  destination: string;
+  cargo: Cargo;
+  status: WorkOrderStatus;
+  priority: 'Normal' | 'High' | 'Urgent';
+  milestones: Milestone[];
+  vendorAssignments: VendorAssignment[];
+  lines: PriceLine[];
+  hasWarehouse: boolean;
+  invoiceId?: Id;
+  createdAt: IsoDateTime;
+  eta: IsoDate;
+  owner: string;
+}
+
+// ---------- Warehouse ----------
+export interface StockItem {
+  id: Id;
+  sku: string;
+  customerId: Id;
+  description: string;
+  warehouse: string;
+  location: string;
+  qtyOnHand: number;
+  uom: string;
+  pallets: number;
+  receivedAt: IsoDate;
+}
+
+export type MovementType = 'Receipt' | 'Dispatch' | 'Transfer' | 'Adjustment';
+
+export interface StockMovement {
+  id: Id;
+  number: string;
+  type: MovementType;
+  customerId: Id;
+  workOrderId?: Id;
+  date: IsoDate;
+  warehouse: string;
+  lines: { stockItemId: Id; quantity: number }[];
+  status: 'Draft' | 'Posted';
+  reference: string;
+}
+
+export interface StorageBillingRun {
+  id: Id;
+  number: string;
+  customerId: Id;
+  periodFrom: IsoDate;
+  periodTo: IsoDate;
+  palletDays: number;
+  ratePerPalletDay: number;
+  status: 'Draft' | 'Invoiced';
+  invoiceId?: Id;
+}
+
+// ---------- Finance ----------
+export type InvoiceStatus = 'Draft' | 'Posted' | 'Partially paid' | 'Paid' | 'Overdue' | 'Cancelled';
+
+export interface InvoiceLine {
+  id: Id;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  vatRate: number; // 0.05 standard UAE VAT
+}
+
+export interface Invoice {
+  id: Id;
+  number: string;
+  customerId: Id;
+  workOrderId?: Id;
+  storageRunId?: Id;
+  issueDate: IsoDate;
+  dueDate: IsoDate;
+  lines: InvoiceLine[];
+  paid: number;
+  status: InvoiceStatus;
+}
+
+export type BillStatus = 'Draft' | 'Approved' | 'Partially paid' | 'Paid' | 'Overdue';
+
+export interface VendorBill {
+  id: Id;
+  number: string;
+  vendorRef: string;
+  vendorId: Id;
+  workOrderId?: Id;
+  billDate: IsoDate;
+  dueDate: IsoDate;
+  amount: number;
+  vat: number;
+  paid: number;
+  status: BillStatus;
+}
+
+export type PaymentMethod = 'Bank transfer' | 'Cheque' | 'PDC' | 'Cash' | 'Card';
+
+export interface Collection {
+  id: Id;
+  number: string;
+  customerId: Id;
+  date: IsoDate;
+  method: PaymentMethod;
+  amount: number;
+  reference: string;
+  chequeDate?: IsoDate;
+  allocations: { invoiceId: Id; amount: number }[];
+  status: 'Unallocated' | 'Allocated' | 'PDC pending' | 'Bounced';
+}
+
+export interface JournalEntry {
+  id: Id;
+  number: string;
+  date: IsoDate;
+  source: 'Invoice' | 'Vendor bill' | 'Collection' | 'Manual' | 'Storage billing';
+  reference: string;
+  memo: string;
+  lines: { account: string; debit: number; credit: number }[];
+  status: 'Posted' | 'Reversed';
+}
+
+// ---------- Cross-cutting ----------
+export interface ActivityEvent {
+  id: Id;
+  at: IsoDateTime;
+  actor: string;
+  entity:
+    | 'Enquiry'
+    | 'Quotation'
+    | 'Contract'
+    | 'Work order'
+    | 'Warehouse'
+    | 'Invoice'
+    | 'Collection'
+    | 'Vendor bill';
+  entityId: Id;
+  entityRef: string;
+  action: string;
+}
+
+export interface AppNotification {
+  id: Id;
+  at: IsoDateTime;
+  title: string;
+  body: string;
+  read: boolean;
+  href?: string;
+}

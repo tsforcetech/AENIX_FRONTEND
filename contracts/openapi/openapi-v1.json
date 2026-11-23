@@ -1,0 +1,107 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AENIX ERP Technical Foundation API",
+    "version": "1.0.0-phase0",
+    "description": "Baseline technical health and metadata endpoints for AENIX ERP. Business endpoints are strictly gated."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5000",
+      "description": "Local development server"
+    }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "HealthCheckLive",
+        "summary": "Liveness probe endpoint",
+        "description": "Returns HTTP 200 OK if the API host is responsive.",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "Healthy" },
+                    "timestampUtc": { "type": "string", "format": "date-time" }
+                  },
+                  "required": ["status", "timestampUtc"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "HealthCheckReady",
+        "summary": "Readiness probe endpoint",
+        "description": "Returns HTTP 200 OK if the API is ready to accept traffic.",
+        "responses": {
+          "200": {
+            "description": "Service is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "Ready" },
+                    "timestampUtc": { "type": "string", "format": "date-time" }
+                  },
+                  "required": ["status", "timestampUtc"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/meta/version": {
+      "get": {
+        "operationId": "MetaVersion",
+        "summary": "Application version and metadata",
+        "description": "Returns safe, non-sensitive build and environment information.",
+        "responses": {
+          "200": {
+            "description": "Version information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "application": { "type": "string", "example": "AENIX ERP API" },
+                    "version": { "type": "string", "example": "1.0.0-phase0" },
+                    "environment": { "type": "string", "example": "Development" },
+                    "timestampUtc": { "type": "string", "format": "date-time" }
+                  },
+                  "required": ["application", "version", "environment", "timestampUtc"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "nullable": true },
+          "title": { "type": "string", "nullable": true },
+          "status": { "type": "integer", "format": "int32", "nullable": true },
+          "detail": { "type": "string", "nullable": true },
+          "instance": { "type": "string", "nullable": true },
+          "correlationId": { "type": "string" },
+          "traceId": { "type": "string" }
+        },
+        "required": ["status", "title", "correlationId"]
+      }
+    }
+  }
+}

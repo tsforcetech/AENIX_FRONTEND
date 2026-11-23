@@ -1,0 +1,1128 @@
+/**
+ * PROTOTYPE SAMPLE DATA — fictional companies, people and amounts.
+ * Never use as production seed, demo data on a live system, or test fixtures for finance sign-off.
+ */
+import type {
+  ActivityEvent,
+  AppNotification,
+  Collection,
+  Contract,
+  Customer,
+  Enquiry,
+  Invoice,
+  JournalEntry,
+  PriceLine,
+  Quotation,
+  Service,
+  StockItem,
+  StockMovement,
+  StorageBillingRun,
+  TransportMode,
+  Vendor,
+  VendorBill,
+  VendorRate,
+  WorkOrder,
+  WorkOrderStatus,
+  Milestone,
+} from '@/domain/types';
+import { invoiceTotals } from '@/domain/calc';
+
+/** Fixed "today" so the prototype looks the same for every reviewer. */
+export const PROTO_TODAY: string = '2026-11-23';
+
+export const customers: Customer[] = [
+  c(
+    1,
+    'Sandstone Building Supplies',
+    'Construction',
+    'Dammam',
+    'Saudi Arabia',
+    'Faisal Al-Harbi',
+    250000,
+    45,
+  ),
+  c(2, 'Coral Bay Trading LLC', 'General trading', 'Dubai', 'UAE', 'Priya Menon', 400000, 30),
+  c(3, 'Horizon Retail Group', 'Retail', 'Dubai', 'UAE', 'Daniel Brooks', 600000, 60),
+  c(4, 'Crescent Medical Supplies', 'Healthcare', 'Abu Dhabi', 'UAE', 'Dr. Leila Haddad', 300000, 30),
+  c(5, 'Palm Valley Foods', 'Food & beverage', 'Sharjah', 'UAE', 'Omar Siddiqui', 200000, 30),
+  c(6, 'Gulfline Industrial Supplies', 'Industrial', 'Abu Dhabi', 'UAE', 'Ravi Kumar', 350000, 45),
+  c(7, 'Skyline Electronics FZE', 'Electronics', 'Jebel Ali Free Zone', 'UAE', 'Mei Lin', 500000, 30),
+  c(8, 'Amber Dune Cosmetics', 'Consumer goods', 'Dubai', 'UAE', 'Sara Al-Mansouri', 150000, 30, 'On hold'),
+];
+
+function c(
+  n: number,
+  name: string,
+  industry: string,
+  city: string,
+  country: string,
+  contactName: string,
+  creditLimit: number,
+  paymentTermsDays: number,
+  status: Customer['status'] = 'Active',
+): Customer {
+  const slug = name.toLowerCase().split(' ')[0];
+  return {
+    id: `cus-${n}`,
+    code: `CUS-${String(n).padStart(4, '0')}`,
+    name,
+    industry,
+    city,
+    country,
+    trnMasked: `1000•••••••${String(100 + n * 7).slice(-3)}`,
+    contactName,
+    contactEmail: `${contactName.split(' ').slice(-1)[0]!.toLowerCase()}@${slug}.example`,
+    contactPhone: `+971 5• ••• ${String(1000 + n * 37).slice(-4)}`,
+    creditLimit,
+    paymentTermsDays,
+    status,
+    createdAt: `2026-0${(n % 9) + 1}-1${n % 9}`,
+  };
+}
+
+export const vendors: Vendor[] = [
+  v(1, 'Swift Haul Transport LLC', 'Transporter', 'Dubai', 'UAE', 'Imran Shaikh', 5),
+  v(2, 'Dune Line Trucking', 'Transporter', 'Sharjah', 'UAE', 'Ahmed Rashid', 4),
+  v(3, 'BlueWave Shipping Lines', 'Shipping line', 'Jebel Ali', 'UAE', 'Grace Tan', 4),
+  v(4, 'Pearl Ocean Container Line', 'Shipping line', 'Singapore', 'Singapore', 'Kenji Watanabe', 3),
+  v(5, 'AeroCargo Express', 'Airline', 'Dubai', 'UAE', 'Lucas Martin', 4),
+  v(6, 'ClearPath Customs Brokers', 'Customs broker', 'Dubai', 'UAE', 'Nadia Farouk', 5),
+  v(7, 'Harbor Gate Warehousing', 'Warehouse', 'Jebel Ali Free Zone', 'UAE', 'Thomas Reid', 4),
+  v(8, 'Oryx Desert Freight', 'Transporter', 'Riyadh', 'Saudi Arabia', 'Khalid Al-Otaibi', 3),
+];
+
+function v(
+  n: number,
+  name: string,
+  category: Vendor['category'],
+  city: string,
+  country: string,
+  contactName: string,
+  rating: Vendor['rating'],
+): Vendor {
+  return {
+    id: `ven-${n}`,
+    code: `VEN-${String(n).padStart(4, '0')}`,
+    name,
+    category,
+    city,
+    country,
+    contactName,
+    contactEmail: `ops@${name.toLowerCase().split(' ')[0]}.example`,
+    rating,
+    paymentTermsDays: 30,
+    status: 'Active',
+  };
+}
+
+export const services: Service[] = [
+  s(1, 'Road freight — FTL', 'Road', 'Truck', 'Full truck load, door to door'),
+  s(2, 'Road freight — LTL', 'Road', 'Pallet', 'Shared load per pallet'),
+  s(3, 'Sea freight — 20ft FCL', 'Sea', 'Container', 'Full container load, port to port'),
+  s(4, 'Sea freight — 40ft FCL', 'Sea', 'Container', 'Full container load, port to port'),
+  s(5, 'Air freight', 'Air', 'Kg', 'Chargeable weight, airport to airport'),
+  s(6, 'Customs clearance', 'Customs', 'Declaration', 'Import/export declaration and duty handling'),
+  s(7, 'Warehouse storage', 'Warehouse', 'Pallet-day', 'Ambient racked storage'),
+  s(8, 'Handling in / out', 'Warehouse', 'Pallet', 'Receiving, put-away and dispatch handling'),
+  s(9, 'Last-mile delivery', 'Road', 'Drop', 'Urban delivery within emirate'),
+  s(10, 'Cargo insurance', 'Customs', 'Shipment', 'All-risk cover on declared value'),
+];
+
+function s(n: number, name: string, mode: Service['mode'], unit: string, description: string): Service {
+  return { id: `svc-${n}`, code: `SVC-${String(n).padStart(3, '0')}`, name, mode, unit, description };
+}
+
+export const vendorRates: VendorRate[] = [
+  r(1, 'ven-1', 'svc-1', 'Jebel Ali', 'Al Quoz', 'Truck', 650),
+  r(2, 'ven-1', 'svc-1', 'Dubai', 'Abu Dhabi', 'Truck', 900),
+  r(3, 'ven-2', 'svc-2', 'Sharjah', 'Dubai', 'Pallet', 45),
+  r(4, 'ven-8', 'svc-1', 'Dubai', 'Riyadh', 'Truck', 5200),
+  r(5, 'ven-8', 'svc-1', 'Dammam', 'Dubai', 'Truck', 3900),
+  r(6, 'ven-3', 'svc-4', 'Shanghai', 'Jebel Ali', 'Container', 7400),
+  r(7, 'ven-4', 'svc-3', 'Mumbai', 'Jebel Ali', 'Container', 2100),
+  r(8, 'ven-5', 'svc-5', 'Frankfurt', 'DXB', 'Kg', 11.5),
+  r(9, 'ven-6', 'svc-6', 'UAE', 'UAE', 'Declaration', 350),
+  r(10, 'ven-7', 'svc-7', 'JAFZA', 'JAFZA', 'Pallet-day', 2.2),
+  r(11, 'ven-7', 'svc-8', 'JAFZA', 'JAFZA', 'Pallet', 12),
+  r(12, 'ven-2', 'svc-9', 'Dubai', 'Dubai', 'Drop', 85),
+];
+
+function r(
+  n: number,
+  vendorId: string,
+  serviceId: string,
+  origin: string,
+  destination: string,
+  unit: string,
+  rate: number,
+): VendorRate {
+  return {
+    id: `rate-${n}`,
+    vendorId,
+    serviceId,
+    origin,
+    destination,
+    unit,
+    rate,
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+  };
+}
+
+// ---------- Commercial ----------
+let lineSeq = 0;
+function line(
+  serviceId: string,
+  description: string,
+  quantity: number,
+  unit: string,
+  unitPrice: number,
+  unitCost: number,
+): PriceLine {
+  lineSeq += 1;
+  return { id: `ln-${lineSeq}`, serviceId, description, quantity, unit, unitPrice, unitCost };
+}
+
+interface Lane {
+  mode: TransportMode;
+  origin: string;
+  destination: string;
+  equipment: string;
+  lines: () => PriceLine[];
+}
+
+const lanes: Record<string, Lane> = {
+  jaToQuoz: {
+    mode: 'Road',
+    origin: 'Jebel Ali',
+    destination: 'Al Quoz',
+    equipment: '40ft trailer',
+    lines: () => [
+      line('svc-1', 'FTL Jebel Ali → Al Quoz', 2, 'Truck', 950, 650),
+      line('svc-6', 'Import customs clearance', 1, 'Declaration', 550, 350),
+    ],
+  },
+  dxbToRiyadh: {
+    mode: 'Road',
+    origin: 'Dubai',
+    destination: 'Riyadh',
+    equipment: '40ft trailer',
+    lines: () => [
+      line('svc-1', 'FTL Dubai → Riyadh', 3, 'Truck', 6300, 5200),
+      line('svc-6', 'Export + KSA border clearance', 1, 'Declaration', 1200, 800),
+    ],
+  },
+  dammamToDxb: {
+    mode: 'Road',
+    origin: 'Dammam',
+    destination: 'Dubai',
+    equipment: 'Flatbed',
+    lines: () => [
+      line('svc-1', 'FTL Dammam → Dubai', 4, 'Truck', 4800, 3900),
+      line('svc-6', 'Import customs clearance', 1, 'Declaration', 600, 350),
+    ],
+  },
+  shaToJa: {
+    mode: 'Sea',
+    origin: 'Shanghai',
+    destination: 'Jebel Ali',
+    equipment: '40ft FCL',
+    lines: () => [
+      line('svc-4', 'Ocean freight Shanghai → Jebel Ali', 2, 'Container', 9200, 7400),
+      line('svc-6', 'Import customs clearance', 2, 'Declaration', 550, 350),
+      line('svc-1', 'Port to warehouse haulage', 2, 'Truck', 900, 650),
+    ],
+  },
+  bomToJa: {
+    mode: 'Sea',
+    origin: 'Mumbai',
+    destination: 'Jebel Ali',
+    equipment: '20ft FCL',
+    lines: () => [
+      line('svc-3', 'Ocean freight Mumbai → Jebel Ali', 3, 'Container', 2900, 2100),
+      line('svc-6', 'Import customs clearance', 1, 'Declaration', 550, 350),
+    ],
+  },
+  fraToDxb: {
+    mode: 'Air',
+    origin: 'Frankfurt',
+    destination: 'DXB',
+    equipment: 'ULD',
+    lines: () => [
+      line('svc-5', 'Air freight FRA → DXB', 1200, 'Kg', 14.5, 11.5),
+      line('svc-6', 'Import customs clearance', 1, 'Declaration', 650, 350),
+      line('svc-10', 'Cargo insurance', 1, 'Shipment', 400, 250),
+    ],
+  },
+  shjToDoha: {
+    mode: 'Road',
+    origin: 'Sharjah',
+    destination: 'Doha',
+    equipment: '3-ton truck',
+    lines: () => [
+      line('svc-1', 'FTL Sharjah → Doha', 1, 'Truck', 4200, 3300),
+      line('svc-6', 'Export clearance', 1, 'Declaration', 600, 350),
+    ],
+  },
+  dxbLastMile: {
+    mode: 'Road',
+    origin: 'JAFZA',
+    destination: 'Dubai (multi-drop)',
+    equipment: '1-ton van',
+    lines: () => [
+      line('svc-9', 'Last-mile multi-drop', 24, 'Drop', 120, 85),
+      line('svc-8', 'Handling out', 18, 'Pallet', 18, 12),
+    ],
+  },
+};
+
+const cargo = (
+  description: string,
+  packages: number,
+  weightKg: number,
+  volumeCbm: number,
+  equipment: string,
+) => ({
+  description,
+  packages,
+  weightKg,
+  volumeCbm,
+  equipment,
+});
+
+const owners = ['Aisha Khan', 'Rahul Nair', 'Mohammed Saleh', 'Elena Petrova'];
+
+interface FlowSpec {
+  n: number;
+  customer: number;
+  lane: keyof typeof lanes;
+  cargo: ReturnType<typeof cargo>;
+  enquiryStatus: Enquiry['status'];
+  quote?: { status: Quotation['status']; agreement?: Quotation['agreement'] };
+  wo?: { status: WorkOrderStatus; priority?: WorkOrder['priority']; warehouse?: boolean };
+  inv?: { status: 'Draft' | 'Posted' | 'Partially paid' | 'Paid' | 'Overdue'; paidRatio?: number };
+  day: number; // day offset in November 2026 for creation
+}
+
+const flows: FlowSpec[] = [
+  {
+    n: 1084,
+    customer: 1,
+    lane: 'dammamToDxb',
+    cargo: cargo('Ceramic tiles on pallets', 48, 21000, 38, 'Flatbed'),
+    enquiryStatus: 'Quoting',
+    quote: { status: 'Draft' },
+    day: 21,
+  },
+  {
+    n: 1083,
+    customer: 2,
+    lane: 'dxbToRiyadh',
+    cargo: cargo('Packaged household goods', 66, 18500, 72, '40ft trailer'),
+    enquiryStatus: 'Won',
+    quote: { status: 'Accepted', agreement: 'Long-term' },
+    wo: { status: 'In transit' },
+    inv: { status: 'Partially paid', paidRatio: 0.5 },
+    day: 3,
+  },
+  {
+    n: 1082,
+    customer: 3,
+    lane: 'shaToJa',
+    cargo: cargo('Apparel cartons', 1240, 16800, 128, '40ft FCL'),
+    enquiryStatus: 'Won',
+    quote: { status: 'Accepted' },
+    wo: { status: 'In progress', warehouse: true },
+    inv: { status: 'Partially paid', paidRatio: 0.5 },
+    day: 2,
+  },
+  {
+    n: 1081,
+    customer: 4,
+    lane: 'fraToDxb',
+    cargo: cargo('Temperature-controlled medical devices', 32, 1200, 7.5, 'ULD'),
+    enquiryStatus: 'Won',
+    quote: { status: 'Accepted' },
+    wo: { status: 'Delivered', priority: 'Urgent' },
+    inv: { status: 'Partially paid', paidRatio: 0.5 },
+    day: 4,
+  },
+  {
+    n: 1080,
+    customer: 5,
+    lane: 'shjToDoha',
+    cargo: cargo('Packaged snacks', 22, 6400, 24, '3-ton truck'),
+    enquiryStatus: 'Won',
+    quote: { status: 'Accepted' },
+    wo: { status: 'In transit' },
+    inv: { status: 'Posted' },
+    day: 6,
+  },
+  {
+    n: 1079,
+    customer: 6,
+    lane: 'bomToJa',
+    cargo: cargo('Steel fittings', 90, 41000, 60, '20ft FCL'),
+    enquiryStatus: 'Won',
+    quote: { status: 'Accepted' },
+    wo: { status: 'Completed', warehouse: true },
+    inv: { status: 'Paid' },
+    day: 1,
+  },
+  {
+    n: 1078,
+    customer: 7,
+    lane: 'jaToQuoz',
+    cargo: cargo('Consumer electronics', 340, 9800, 55, '40ft trailer'),
+    enquiryStatus: 'Won',
+    quote: { status: 'Accepted' },
+    wo: { status: 'Completed' },
+    inv: { status: 'Overdue' },
+    day: 1,
+  },
+  {
+    n: 1077,
+    customer: 3,
+    lane: 'dxbLastMile',
+    cargo: cargo('Retail store replenishment', 18, 4200, 22, '1-ton van'),
+    enquiryStatus: 'Won',
+    quote: { status: 'Accepted', agreement: 'Long-term' },
+    wo: { status: 'Confirmed', warehouse: true },
+    day: 18,
+  },
+  {
+    n: 1076,
+    customer: 2,
+    lane: 'jaToQuoz',
+    cargo: cargo('Kitchen appliances', 120, 8800, 46, '40ft trailer'),
+    enquiryStatus: 'Quoted',
+    quote: { status: 'Sent' },
+    day: 17,
+  },
+  {
+    n: 1075,
+    customer: 4,
+    lane: 'fraToDxb',
+    cargo: cargo('Diagnostic reagents', 14, 600, 3.1, 'ULD'),
+    enquiryStatus: 'Quoted',
+    quote: { status: 'Pending approval' },
+    day: 19,
+  },
+  {
+    n: 1074,
+    customer: 8,
+    lane: 'bomToJa',
+    cargo: cargo('Cosmetics raw materials', 40, 12500, 26, '20ft FCL'),
+    enquiryStatus: 'Lost',
+    quote: { status: 'Rejected' },
+    day: 8,
+  },
+  {
+    n: 1073,
+    customer: 6,
+    lane: 'dxbToRiyadh',
+    cargo: cargo('Industrial valves', 30, 14200, 40, '40ft trailer'),
+    enquiryStatus: 'New',
+    day: 22,
+  },
+  {
+    n: 1072,
+    customer: 7,
+    lane: 'shaToJa',
+    cargo: cargo('Laptops and accessories', 820, 11300, 110, '40ft FCL'),
+    enquiryStatus: 'New',
+    day: 23,
+  },
+  {
+    n: 1071,
+    customer: 5,
+    lane: 'dammamToDxb',
+    cargo: cargo('Bottled water', 60, 24000, 50, 'Flatbed'),
+    enquiryStatus: 'Quoted',
+    quote: { status: 'Expired' },
+    day: 5,
+  },
+];
+
+const dt = (day: number, hh = 9) =>
+  `2026-11-${String(day).padStart(2, '0')}T${String(hh).padStart(2, '0')}:15:00+04:00`;
+const d = (day: number, month = 11) =>
+  `2026-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+const addDays = (iso: string, days: number) =>
+  new Date(Date.parse(iso) + days * 86_400_000).toISOString().slice(0, 10);
+
+export const enquiries: Enquiry[] = [];
+export const quotations: Quotation[] = [];
+export const workOrders: WorkOrder[] = [];
+export const invoices: Invoice[] = [];
+
+const milestoneTemplates: Record<TransportMode, string[]> = {
+  Road: [
+    'Booking confirmed',
+    'Vehicle assigned',
+    'Loaded at origin',
+    'In transit',
+    'Border / customs cleared',
+    'Delivered',
+  ],
+  Sea: [
+    'Booking confirmed',
+    'Container loaded',
+    'Vessel departed',
+    'Arrived at port',
+    'Customs cleared',
+    'Delivered to warehouse',
+  ],
+  Air: [
+    'Booking confirmed',
+    'Cargo received at origin',
+    'Flight departed',
+    'Arrived at DXB',
+    'Customs cleared',
+    'Delivered',
+  ],
+};
+
+const progressByStatus: Record<WorkOrderStatus, number> = {
+  Draft: 0,
+  Confirmed: 1,
+  'In progress': 3,
+  'In transit': 4,
+  Delivered: 6,
+  Completed: 6,
+  Cancelled: 0,
+};
+
+function milestones(mode: TransportMode, status: WorkOrderStatus, day: number): Milestone[] {
+  const done = progressByStatus[status];
+  return milestoneTemplates[mode].map((label, i) => ({
+    id: `ms-${mode}-${i}`,
+    label,
+    status: i < done ? 'Done' : i === done ? 'Current' : 'Pending',
+    at: i < done ? dt(Math.min(day + i, 23), 8 + i) : undefined,
+  }));
+}
+
+const vendorForService: Record<string, string> = {
+  'svc-1': 'ven-1',
+  'svc-3': 'ven-4',
+  'svc-4': 'ven-3',
+  'svc-5': 'ven-5',
+  'svc-6': 'ven-6',
+  'svc-8': 'ven-7',
+  'svc-9': 'ven-2',
+  'svc-10': 'ven-6',
+};
+
+let invSeq = 3030;
+let woSeq = 2050;
+
+for (const f of flows) {
+  const lane = lanes[f.lane]!;
+  const enquiryId = `enq-${f.n}`;
+  const owner = owners[f.n % owners.length]!;
+  enquiries.push({
+    id: enquiryId,
+    number: `ENQ-${f.n}`,
+    customerId: `cus-${f.customer}`,
+    mode: lane.mode,
+    serviceIds: [...new Set(lane.lines().map((l) => l.serviceId))],
+    origin: lane.origin,
+    destination: lane.destination,
+    cargo: f.cargo,
+    requiredBy: d(Math.min(f.day + 10, 30)),
+    status: f.enquiryStatus,
+    owner,
+    notes: '',
+    createdAt: dt(f.day),
+  });
+  if (!f.quote) continue;
+  const qLines = lane.lines();
+  const quotationId = `qt-${f.n}`;
+  quotations.push({
+    id: quotationId,
+    number: `QT-${f.n}`,
+    version: f.quote.status === 'Accepted' && f.n % 2 === 0 ? 2 : 1,
+    enquiryId,
+    customerId: `cus-${f.customer}`,
+    mode: lane.mode,
+    origin: lane.origin,
+    destination: lane.destination,
+    agreement: f.quote.agreement ?? 'One-time',
+    status: f.quote.status,
+    validUntil: f.quote.status === 'Expired' ? d(20) : d(30, 12),
+    lines: qLines,
+    terms: 'Rates exclude duties and taxes unless stated. VAT 5% applies. Validity as shown.',
+    createdAt: dt(f.day, 11),
+    owner,
+  });
+  if (!f.wo) continue;
+  woSeq -= 1;
+  const woId = `wo-${woSeq}`;
+  const woLines = qLines.map((l) => ({ ...l, id: `${l.id}-wo` }));
+  const wo: WorkOrder = {
+    id: woId,
+    number: `JOB-${woSeq}`,
+    customerId: `cus-${f.customer}`,
+    source: { type: 'Quotation', refId: quotationId },
+    mode: lane.mode,
+    origin: lane.origin,
+    destination: lane.destination,
+    cargo: f.cargo,
+    status: f.wo.status,
+    priority: f.wo.priority ?? 'Normal',
+    milestones: milestones(lane.mode, f.wo.status, f.day + 1),
+    vendorAssignments: woLines.map((l, i) => ({
+      id: `va-${woSeq}-${i}`,
+      vendorId: vendorForService[l.serviceId] ?? 'ven-1',
+      serviceId: l.serviceId,
+      agreedCost: Math.round(l.quantity * l.unitCost),
+      status: f.wo!.status === 'Completed' || f.wo!.status === 'Delivered' ? 'Completed' : 'Accepted',
+    })),
+    lines: woLines,
+    hasWarehouse: !!f.wo.warehouse,
+    createdAt: dt(f.day + 1),
+    eta: ['Completed', 'Delivered'].includes(f.wo.status)
+      ? d(Math.min(f.day + 9, 22))
+      : d(Math.min(Math.max(f.day + 9, 24), 30)),
+    owner,
+  };
+  if (f.inv) {
+    invSeq -= 1;
+    const invId = `inv-${invSeq}`;
+    wo.invoiceId = invId;
+    const inv: Invoice = {
+      id: invId,
+      number: `INV-${invSeq}`,
+      customerId: wo.customerId,
+      workOrderId: woId,
+      issueDate: d(Math.min(f.day + 2, 23)),
+      dueDate: f.inv.status === 'Overdue' ? d(15) : addDays(d(Math.min(f.day + 2, 23)), 30),
+      lines: woLines.map((l) => ({
+        id: `${l.id}-inv`,
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        vatRate: 0.05,
+      })),
+      paid: 0,
+      status: f.inv.status,
+    };
+    const { total } = invoiceTotals(inv);
+    inv.paid = f.inv.status === 'Paid' ? total : Math.round(total * (f.inv.paidRatio ?? 0) * 100) / 100;
+    invoices.push(inv);
+  }
+  workOrders.push(wo);
+}
+
+// A direct work order (no enquiry / quotation / contract) — authorized direct-job path.
+workOrders.push({
+  id: 'wo-2051',
+  number: 'JOB-2051',
+  customerId: 'cus-7',
+  source: { type: 'Direct' },
+  mode: 'Road',
+  origin: 'JAFZA',
+  destination: 'Dubai Silicon Oasis',
+  cargo: cargo('Server racks', 6, 2400, 12, '3-ton truck'),
+  status: 'Draft',
+  priority: 'High',
+  milestones: milestones('Road', 'Draft', 23),
+  vendorAssignments: [],
+  lines: [line('svc-1', 'FTL JAFZA → Dubai Silicon Oasis', 1, 'Truck', 1100, 700)],
+  hasWarehouse: true,
+  createdAt: dt(23, 10),
+  eta: d(26),
+  owner: 'Aisha Khan',
+});
+
+export const contracts: Contract[] = [
+  {
+    id: 'ctr-1',
+    number: 'CTR-2026-014',
+    customerId: 'cus-2',
+    quotationId: 'qt-1083',
+    title: 'GCC road distribution — annual rates',
+    startDate: '2026-07-01',
+    endDate: '2027-06-30',
+    status: 'Active',
+    lines: [
+      line('svc-1', 'FTL Dubai → Riyadh', 1, 'Truck', 6100, 5200),
+      line('svc-1', 'FTL Dubai → Abu Dhabi', 1, 'Truck', 1150, 900),
+    ],
+    billingCycle: 'Per job',
+  },
+  {
+    id: 'ctr-2',
+    number: 'CTR-2026-011',
+    customerId: 'cus-3',
+    quotationId: 'qt-1077',
+    title: 'JAFZA storage & last-mile replenishment',
+    startDate: '2026-03-01',
+    endDate: '2027-02-28',
+    status: 'Active',
+    lines: [
+      line('svc-7', 'Ambient storage', 1, 'Pallet-day', 3.5, 2.2),
+      line('svc-8', 'Handling in / out', 1, 'Pallet', 18, 12),
+      line('svc-9', 'Last-mile drop', 1, 'Drop', 120, 85),
+    ],
+    billingCycle: 'Monthly',
+  },
+  {
+    id: 'ctr-3',
+    number: 'CTR-2025-032',
+    customerId: 'cus-6',
+    title: 'Import consolidation — India lanes',
+    startDate: '2025-12-01',
+    endDate: '2026-11-30',
+    status: 'Expiring',
+    lines: [line('svc-3', 'Ocean freight Mumbai → Jebel Ali', 1, 'Container', 2800, 2100)],
+    billingCycle: 'Per job',
+  },
+];
+
+// ---------- Warehouse ----------
+export const stockItems: StockItem[] = [
+  st(1, 'HRG-APP-001', 3, 'Apparel cartons — winter range', 'A-01-03', 620, 'Carton', 26),
+  st(2, 'HRG-APP-002', 3, 'Apparel cartons — accessories', 'A-01-04', 410, 'Carton', 14),
+  st(3, 'HRG-HOM-010', 3, 'Home décor assorted', 'A-02-01', 180, 'Carton', 9),
+  st(4, 'GIS-STL-100', 6, 'Steel pipe fittings 2"', 'B-04-02', 1800, 'Piece', 22),
+  st(5, 'GIS-VAL-220', 6, 'Industrial gate valves', 'B-04-05', 96, 'Piece', 8),
+  st(6, 'SKE-LAP-014', 7, 'Laptops 14" (boxed)', 'C-01-01', 540, 'Unit', 18),
+  st(7, 'SKE-MON-027', 7, 'Monitors 27"', 'C-01-02', 260, 'Unit', 13),
+  st(8, 'SKE-ACC-100', 7, 'Keyboard & mouse sets', 'C-01-06', 1200, 'Unit', 6),
+  st(9, 'CMS-GLV-001', 4, 'Nitrile gloves (cases)', 'D-03-01', 300, 'Case', 10),
+  st(10, 'PVF-SNK-050', 5, 'Packaged snacks', 'E-01-02', 0, 'Carton', 0),
+];
+
+function st(
+  n: number,
+  sku: string,
+  customer: number,
+  description: string,
+  location: string,
+  qtyOnHand: number,
+  uom: string,
+  pallets: number,
+): StockItem {
+  return {
+    id: `stk-${n}`,
+    sku,
+    customerId: `cus-${customer}`,
+    description,
+    warehouse: 'JAFZA WH-1',
+    location,
+    qtyOnHand,
+    uom,
+    pallets,
+    receivedAt: d(1 + (n % 20)),
+  };
+}
+
+export const stockMovements: StockMovement[] = [
+  mv(
+    1,
+    'GRN-5521',
+    'Receipt',
+    3,
+    'wo-2048',
+    12,
+    [
+      ['stk-1', 620],
+      ['stk-2', 410],
+    ],
+    'Posted',
+    'Container MSKU 418220-4',
+  ),
+  mv(
+    2,
+    'GRN-5522',
+    'Receipt',
+    6,
+    'wo-2045',
+    9,
+    [
+      ['stk-4', 1800],
+      ['stk-5', 96],
+    ],
+    'Posted',
+    'Container TGHU 772031-0',
+  ),
+  mv(3, 'DSP-3310', 'Dispatch', 3, 'wo-2043', 20, [['stk-3', 40]], 'Draft', 'Store replenishment wave 47'),
+  mv(
+    4,
+    'GRN-5523',
+    'Receipt',
+    7,
+    undefined,
+    16,
+    [
+      ['stk-6', 540],
+      ['stk-7', 260],
+      ['stk-8', 1200],
+    ],
+    'Posted',
+    'Customer delivery — no transport job',
+  ),
+  mv(5, 'DSP-3309', 'Dispatch', 5, undefined, 14, [['stk-10', 220]], 'Posted', 'Customer collection'),
+  mv(
+    6,
+    'ADJ-0042',
+    'Adjustment',
+    4,
+    undefined,
+    18,
+    [['stk-9', -4]],
+    'Posted',
+    'Damaged in handling — approved',
+  ),
+  mv(7, 'TRF-0107', 'Transfer', 7, undefined, 21, [['stk-8', 200]], 'Posted', 'C-01-05 → C-01-06'),
+];
+
+function mv(
+  n: number,
+  number: string,
+  type: StockMovement['type'],
+  customer: number,
+  workOrderId: string | undefined,
+  day: number,
+  lines: [string, number][],
+  status: StockMovement['status'],
+  reference: string,
+): StockMovement {
+  return {
+    id: `mv-${n}`,
+    number,
+    type,
+    customerId: `cus-${customer}`,
+    workOrderId,
+    date: d(day),
+    warehouse: 'JAFZA WH-1',
+    lines: lines.map(([stockItemId, quantity]) => ({ stockItemId, quantity })),
+    status,
+    reference,
+  };
+}
+
+export const storageRuns: StorageBillingRun[] = [
+  {
+    id: 'sbr-1',
+    number: 'SBR-2026-10-03',
+    customerId: 'cus-3',
+    periodFrom: '2026-10-01',
+    periodTo: '2026-10-31',
+    palletDays: 1426,
+    ratePerPalletDay: 3.5,
+    status: 'Invoiced',
+    invoiceId: 'inv-3021',
+  },
+  {
+    id: 'sbr-2',
+    number: 'SBR-2026-10-06',
+    customerId: 'cus-6',
+    periodFrom: '2026-10-01',
+    periodTo: '2026-10-31',
+    palletDays: 682,
+    ratePerPalletDay: 3.2,
+    status: 'Invoiced',
+    invoiceId: 'inv-3020',
+  },
+  {
+    id: 'sbr-3',
+    number: 'SBR-2026-11-03',
+    customerId: 'cus-3',
+    periodFrom: '2026-11-01',
+    periodTo: '2026-11-30',
+    palletDays: 1281,
+    ratePerPalletDay: 3.5,
+    status: 'Draft',
+  },
+  {
+    id: 'sbr-4',
+    number: 'SBR-2026-11-07',
+    customerId: 'cus-7',
+    periodFrom: '2026-11-01',
+    periodTo: '2026-11-30',
+    palletDays: 296,
+    ratePerPalletDay: 3.5,
+    status: 'Draft',
+  },
+];
+
+invoices.push(
+  {
+    id: 'inv-3021',
+    number: 'INV-3021',
+    customerId: 'cus-3',
+    storageRunId: 'sbr-1',
+    issueDate: '2026-11-01',
+    dueDate: '2026-12-31',
+    lines: [
+      {
+        id: 'il-s1',
+        description: 'Storage Oct 2026 — 1,426 pallet-days',
+        quantity: 1426,
+        unitPrice: 3.5,
+        vatRate: 0.05,
+      },
+    ],
+    paid: 0,
+    status: 'Posted',
+  },
+  {
+    id: 'inv-3020',
+    number: 'INV-3020',
+    customerId: 'cus-6',
+    storageRunId: 'sbr-2',
+    issueDate: '2026-11-01',
+    dueDate: '2026-12-16',
+    lines: [
+      {
+        id: 'il-s2',
+        description: 'Storage Oct 2026 — 682 pallet-days',
+        quantity: 682,
+        unitPrice: 3.2,
+        vatRate: 0.05,
+      },
+    ],
+    paid: 2291.52,
+    status: 'Paid',
+  },
+);
+
+// ---------- Vendor bills ----------
+export const vendorBills: VendorBill[] = workOrders
+  .filter((wo) => wo.status === 'Completed' || wo.status === 'Delivered' || wo.status === 'In transit')
+  .flatMap((wo, i) =>
+    wo.vendorAssignments.slice(0, 2).map((va, j) => {
+      const paid = wo.status === 'Completed' && j === 0;
+      return {
+        id: `bill-${i}-${j}`,
+        number: `BILL-${7700 + i * 2 + j}`,
+        vendorRef: `${vendors.find((x) => x.id === va.vendorId)!.code.replace('VEN', 'SI')}-${880 + i * 3 + j}`,
+        vendorId: va.vendorId,
+        workOrderId: wo.id,
+        billDate: d(10 + i),
+        dueDate: addDays(d(10 + i), 30),
+        amount: va.agreedCost,
+        vat: Math.round(va.agreedCost * 0.05 * 100) / 100,
+        paid: paid ? Math.round(va.agreedCost * 1.05 * 100) / 100 : 0,
+        status: paid ? ('Paid' as const) : j === 1 && i === 0 ? ('Draft' as const) : ('Approved' as const),
+      };
+    }),
+  );
+
+// ---------- Collections ----------
+export const collections: Collection[] = invoices
+  .filter((inv) => inv.paid > 0)
+  .map((inv, i) => ({
+    id: `rc-${i + 1}`,
+    number: `RCPT-${4410 + i}`,
+    customerId: inv.customerId,
+    date: d(12 + i),
+    method: (['Bank transfer', 'Cheque', 'Bank transfer', 'Card', 'Bank transfer'] as const)[i % 5]!,
+    amount: inv.paid,
+    reference: `TRX${880120 + i * 17}`,
+    allocations: [{ invoiceId: inv.id, amount: inv.paid }],
+    status: 'Allocated' as const,
+  }));
+
+collections.push(
+  {
+    id: 'rc-pdc-1',
+    number: 'RCPT-4420',
+    customerId: 'cus-7',
+    date: '2026-11-20',
+    method: 'PDC',
+    amount: 15000,
+    reference: 'CHQ 004512 — Emirates NBD',
+    chequeDate: '2026-12-20',
+    allocations: [],
+    status: 'PDC pending',
+  },
+  {
+    id: 'rc-un-1',
+    number: 'RCPT-4421',
+    customerId: 'cus-2',
+    date: '2026-11-22',
+    method: 'Bank transfer',
+    amount: 5000,
+    reference: 'TRX990341',
+    allocations: [],
+    status: 'Unallocated',
+  },
+);
+
+// ---------- Journals (derived, illustrative) ----------
+export const journals: JournalEntry[] = [
+  ...invoices
+    .filter((i) => i.status !== 'Draft')
+    .map((inv, k) => {
+      const t = invoiceTotals(inv);
+      return {
+        id: `jv-inv-${k}`,
+        number: `JV-${9100 + k}`,
+        date: inv.issueDate,
+        source: (inv.storageRunId ? 'Storage billing' : 'Invoice') as JournalEntry['source'],
+        reference: inv.number,
+        memo: `Customer invoice ${inv.number}`,
+        lines: [
+          { account: '1200 Accounts receivable', debit: t.total, credit: 0 },
+          {
+            account: inv.storageRunId ? '4200 Storage revenue' : '4100 Freight revenue',
+            debit: 0,
+            credit: t.subtotal,
+          },
+          { account: '2200 VAT output payable', debit: 0, credit: t.vat },
+        ],
+        status: 'Posted' as const,
+      };
+    }),
+  ...collections
+    .filter((c) => c.status === 'Allocated')
+    .map((rc, k) => ({
+      id: `jv-rc-${k}`,
+      number: `JV-${9200 + k}`,
+      date: rc.date,
+      source: 'Collection' as const,
+      reference: rc.number,
+      memo: `Receipt ${rc.number}`,
+      lines: [
+        { account: '1100 Bank — current account', debit: rc.amount, credit: 0 },
+        { account: '1200 Accounts receivable', debit: 0, credit: rc.amount },
+      ],
+      status: 'Posted' as const,
+    })),
+];
+
+// ---------- Activity & notifications ----------
+export const activity: ActivityEvent[] = [
+  ev(23, 10, 'Aisha Khan', 'Work order', 'wo-2051', 'JOB-2051', 'created a direct work order'),
+  ev(23, 9, 'Rahul Nair', 'Enquiry', 'enq-1072', 'ENQ-1072', 'logged a new enquiry'),
+  ev(22, 16, 'Mohammed Saleh', 'Collection', 'rc-un-1', 'RCPT-4421', 'recorded a receipt (unallocated)'),
+  ev(22, 11, 'Elena Petrova', 'Enquiry', 'enq-1073', 'ENQ-1073', 'logged a new enquiry'),
+  ev(21, 15, 'Aisha Khan', 'Quotation', 'qt-1084', 'QT-1084', 'started a draft quotation'),
+  ev(20, 14, 'Mohammed Saleh', 'Collection', 'rc-pdc-1', 'RCPT-4420', 'received a PDC dated 20 Dec'),
+  ev(20, 10, 'Rahul Nair', 'Warehouse', 'mv-3', 'DSP-3310', 'prepared a dispatch'),
+  ev(19, 12, 'Elena Petrova', 'Quotation', 'qt-1075', 'QT-1075', 'submitted for approval'),
+  ev(18, 9, 'Aisha Khan', 'Work order', 'wo-2043', 'JOB-2043', 'confirmed the work order'),
+];
+
+function ev(
+  day: number,
+  hh: number,
+  actor: string,
+  entity: ActivityEvent['entity'],
+  entityId: string,
+  entityRef: string,
+  action: string,
+): ActivityEvent {
+  return { id: `ev-${entityId}-${day}${hh}`, at: dt(day, hh), actor, entity, entityId, entityRef, action };
+}
+
+export const notifications: AppNotification[] = [
+  {
+    id: 'n1',
+    at: dt(23, 9),
+    title: 'Quotation awaiting your approval',
+    body: 'QT-1075 · Crescent Medical Supplies',
+    read: false,
+    href: '/quotations/qt-1075',
+  },
+  {
+    id: 'n2',
+    at: dt(22, 17),
+    title: 'Invoice overdue',
+    body: 'INV-3024 · Skyline Electronics FZE is 8 days overdue',
+    read: false,
+    href: '/invoices/inv-3024',
+  },
+  {
+    id: 'n3',
+    at: dt(22, 8),
+    title: 'Milestone reached',
+    body: 'JOB-2047 arrived at DXB',
+    read: false,
+    href: '/work-orders/wo-2047',
+  },
+  {
+    id: 'n4',
+    at: dt(20, 14),
+    title: 'PDC received',
+    body: 'RCPT-4420 · cheque dated 20 Dec 2026',
+    read: true,
+    href: '/collections',
+  },
+  {
+    id: 'n5',
+    at: dt(18, 11),
+    title: 'Contract expiring',
+    body: 'CTR-2025-032 ends on 30 Nov 2026',
+    read: true,
+    href: '/contracts',
+  },
+];
+
+/** Monthly series for dashboard/report charts (AED, fictional). */
+export const monthlyRevenue = [
+  { month: 'Jun', revenue: 312000, cost: 241000 },
+  { month: 'Jul', revenue: 348000, cost: 262000 },
+  { month: 'Aug', revenue: 331000, cost: 255000 },
+  { month: 'Sep', revenue: 389000, cost: 292000 },
+  { month: 'Oct', revenue: 412000, cost: 305000 },
+  { month: 'Nov', revenue: 436000, cost: 318000 },
+];
+
+/** Sample staff users for the illustrative Settings screen (Identity module arrives in Phase 1). */
+export const staffUsers: {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  mfa: 'Enabled' | 'Not enrolled';
+  status: 'Active' | 'Inactive';
+}[] = [
+  {
+    id: 'u1',
+    name: 'Aisha Khan',
+    email: 'aisha.khan@aenix.example',
+    role: 'Operations manager',
+    mfa: 'Enabled',
+    status: 'Active',
+  },
+  {
+    id: 'u2',
+    name: 'Rahul Nair',
+    email: 'rahul.nair@aenix.example',
+    role: 'Sales executive',
+    mfa: 'Enabled',
+    status: 'Active',
+  },
+  {
+    id: 'u3',
+    name: 'Mohammed Saleh',
+    email: 'mohammed.saleh@aenix.example',
+    role: 'Accountant',
+    mfa: 'Enabled',
+    status: 'Active',
+  },
+  {
+    id: 'u4',
+    name: 'Elena Petrova',
+    email: 'elena.petrova@aenix.example',
+    role: 'Sales executive',
+    mfa: 'Not enrolled',
+    status: 'Active',
+  },
+  {
+    id: 'u5',
+    name: 'Thomas Reid',
+    email: 'thomas.reid@aenix.example',
+    role: 'Warehouse supervisor',
+    mfa: 'Not enrolled',
+    status: 'Inactive',
+  },
+];
+
+/** Prefilled prototype sign-in identifier (login page). */
+export const prototypeLoginHint: string = 'aisha.khan@aenix.example';

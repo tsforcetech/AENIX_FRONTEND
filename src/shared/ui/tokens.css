@@ -1,0 +1,111 @@
+/*
+ * AENIX semantic design tokens — SINGLE SOURCE for colour / typography / shape.
+ *
+ * Source: owner-supplied UI reference, Figma "Aenix - Freightdesk"
+ * (file N8vJQJUHGkxDhQqhiHBJ4M, node 40:882 "Enquiry"), variables read 2026-11-23.
+ * Brand: AENIX red + charcoal on white (owner instruction; matches logo pixels ≈ #a0241c / #4c4c4c).
+ * Values not defined in Figma are marked "NOT IN REFERENCE" and must be confirmed.
+ *
+ * Components consume ONLY the semantic tokens (bottom section), never the palette directly.
+ */
+:root {
+  /* ---- Primitive palette (from Figma variables) ---- */
+  --palette-white: #ffffff; /* Surface/Default, Text/Inverse */
+  --palette-canvas: #f7f7f7; /* Surface/Canvas */
+  --palette-ink: #1a1a1a; /* Text/Primary, Surface/Inverse */
+  --palette-charcoal-700: #3a3332; /* Text/Secondary, Icon/Primary */
+  --palette-charcoal-600: #524847; /* Text/Muted, Icon/Secondary */
+  --palette-charcoal-500: #756d6c; /* Border/Strong */
+  --palette-charcoal-400: #8b8584; /* Icon/Disabled */
+  --palette-charcoal-200: #c9c6c6; /* Border/Default */
+  --palette-charcoal-100: #eeeded; /* Border/Subtle */
+  --palette-logo-charcoal: #4c4c4c; /* Logo wordmark (sampled) */
+  --palette-brand-red: #9a2119; /* Surface/Brand, Text/Brand, Icon/Brand */
+  --palette-brand-red-subtle: #faf4f4; /* Surface/Brand Subtle */
+  --palette-warning: #c2410c; /* Text/Warning */
+  --palette-warning-subtle: #fff7ed; /* Surface/Warning */
+  --palette-success: #047857; /* Text/Success */
+  --palette-success-subtle: #ecfdf5; /* Surface/Success */
+  --palette-brand-red-hover: #7f1b14; /* derived: brand red darkened for hover */
+  --palette-info: #1d5fa8; /* NOT IN REFERENCE — confirm */
+  --palette-info-subtle: #eff5fc; /* NOT IN REFERENCE — confirm */
+
+  /* ---- Semantic colour tokens ---- */
+  --color-surface: var(--palette-white);
+  --color-canvas: var(--palette-canvas);
+  --color-surface-muted: var(--palette-canvas);
+  --color-surface-inverse: var(--palette-ink);
+  --color-fg: var(--palette-ink);
+  --color-fg-secondary: var(--palette-charcoal-700);
+  --color-fg-muted: var(--palette-charcoal-600);
+  --color-fg-disabled: var(--palette-charcoal-400);
+  --color-fg-inverse: var(--palette-white);
+  --color-border: var(--palette-charcoal-200);
+  --color-border-subtle: var(--palette-charcoal-100);
+  --color-border-strong: var(--palette-charcoal-500);
+
+  /* Primary action = dark (e.g. "New enquiry" in reference); brand red = identity/active/highlight. */
+  --color-primary: var(--palette-ink);
+  --color-primary-hover: var(--palette-charcoal-700);
+  --color-primary-fg: var(--palette-white);
+  --color-brand: var(--palette-brand-red);
+  --color-brand-hover: var(--palette-brand-red-hover);
+  --color-brand-subtle: var(--palette-brand-red-subtle);
+  --color-brand-fg: var(--palette-white);
+
+  --color-danger: var(--palette-brand-red); /* NOT IN REFERENCE as a separate token — confirm */
+  --color-danger-subtle: var(--palette-brand-red-subtle);
+  --color-warning: var(--palette-warning);
+  --color-warning-subtle: var(--palette-warning-subtle);
+  --color-success: var(--palette-success);
+  --color-success-subtle: var(--palette-success-subtle);
+  --color-info: var(--palette-info);
+  --color-info-subtle: var(--palette-info-subtle);
+  --color-focus: var(--palette-brand-red);
+
+  /* ---- Typography (Figma: Font Family/Body + Headings = DM Sans, Mono = IBM Plex Mono) ---- */
+  --font-sans: 'DM Sans Variable', 'DM Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-caption: 12px; /* line-height 14 */
+  --text-caption--line-height: 14px;
+  --text-body-s: 14px; /* line-height 18 */
+  --text-body-s--line-height: 18px;
+  --text-heading-m: 32px; /* line-height 40, weight 600 */
+  --text-heading-m--line-height: 40px;
+
+  /* ---- Shape & spacing (Figma: Border radius/*, Scale/*) ---- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+  --radius-control: var(--radius-md);
+  --border-width: 1px;
+  --spacing: 4px; /* Scale/100 — Tailwind spacing unit, so p-2 = 8px, p-4 = 16px ... */
+  --shadow-card: 0 1px 2px rgb(26 26 26 / 0.04), 0 1px 3px rgb(26 26 26 / 0.03);
+  --shadow-card-hover: 0 4px 16px rgb(26 26 26 / 0.07), 0 1px 3px rgb(26 26 26 / 0.04);
+
+  color-scheme: light;
+}
+
+/*
+ * Dark theme: the reference contains no dark variables. Opt-in via data-theme="dark" only;
+ * values below are provisional and must be confirmed against a dark reference before use.
+ */
+:root[data-theme='dark'] {
+  --color-surface: #1f1d1d;
+  --color-canvas: var(--palette-ink);
+  --color-surface-muted: #262323;
+  --color-surface-inverse: var(--palette-white);
+  --color-fg: #f7f7f7;
+  --color-fg-secondary: #dedada;
+  --color-fg-muted: #b5afae;
+  --color-fg-inverse: var(--palette-ink);
+  --color-border: #4a4342;
+  --color-border-subtle: #332e2e;
+  --color-border-strong: #8b8584;
+  --color-primary: var(--palette-white);
+  --color-primary-hover: #eeeded;
+  --color-primary-fg: var(--palette-ink);
+  --color-focus: #e0645a;
+  color-scheme: dark;
+}

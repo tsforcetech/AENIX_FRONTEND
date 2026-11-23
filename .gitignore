@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-prototype
+dist-artifact
+coverage
+playwright-report
+test-results
+*.local
+.env
+.env.*
+!.env.development
+!.env.prototype
+!.env.artifact
+!.env.example
+.claude/worktrees/

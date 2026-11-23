@@ -1,0 +1,10 @@
+dist
+dist-prototype
+dist-artifact
+coverage
+pnpm-lock.yaml
+public/mockServiceWorker.js
+src/api/generated
+playwright-report
+test-results
+contracts
