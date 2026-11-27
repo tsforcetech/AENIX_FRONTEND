@@ -628,6 +628,7 @@ for (const f of flows) {
       lines: woLines.map((l) => ({
         id: `${l.id}-inv`,
         salesOrderId: soId,
+        uom: l.unit,
         description: l.description,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
@@ -1244,7 +1245,8 @@ invoices.push(
     lines: [
       {
         id: 'il-s1',
-        description: 'Storage Oct 2026 — 1,426 pallet-days',
+        uom: 'Pallet-day',
+        description: 'Storage (1-Oct-26 to 31-Oct-26) — pallet-days',
         quantity: 1426,
         unitPrice: 3.5,
         vatRate: 0.05,
@@ -1263,7 +1265,8 @@ invoices.push(
     lines: [
       {
         id: 'il-s2',
-        description: 'Storage Oct 2026 — 682 pallet-days',
+        uom: 'Pallet-day',
+        description: 'Storage (1-Oct-26 to 31-Oct-26) — pallet-days',
         quantity: 682,
         unitPrice: 3.2,
         vatRate: 0.05,

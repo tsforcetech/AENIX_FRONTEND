@@ -1,4 +1,18 @@
 import { nextDocNumber } from '@/domain/numbering';
+import type { StorageBasis } from '@/domain/types';
+
+/** UOM printed on the tax invoice for each storage basis. */
+export const basisUom: Record<StorageBasis, string> = {
+  'Sq.ft per period': 'Sq.ft',
+  'Pallet-day': 'Pallet-day',
+  'CBM-day': 'CBM-day',
+};
+
+/** 1-Oct-26 style, as on the owner's invoices. */
+function shortDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  return `${d.getUTCDate()}-${d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })}-${String(d.getUTCFullYear()).slice(-2)}`;
+}
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Invoice, StorageBillingRun } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
@@ -23,6 +37,8 @@ export interface GenerateRunInput {
   month: string; // YYYY-MM
   ratePerPalletDay: number;
   palletDays: number;
+  /** Charging basis; quantity and rate are in this basis' units. */
+  basis: StorageBasis;
 }
 
 export function daysInMonth(month: string): number {
@@ -84,6 +100,7 @@ export const storageBillingApi = {
       customerId: input.customerId,
       periodFrom,
       periodTo,
+      basis: input.basis,
       palletDays: input.palletDays,
       ratePerPalletDay: input.ratePerPalletDay,
       status: 'Draft',
@@ -119,7 +136,8 @@ export const storageBillingApi = {
       lines: [
         {
           id: newId('il'),
-          description: `Storage ${monthLabel(run.periodFrom.slice(0, 7))} — ${run.palletDays.toLocaleString('en-AE')} pallet-days`,
+          uom: basisUom[run.basis ?? 'Pallet-day'],
+          description: `${run.basis === 'Sq.ft per period' ? 'Dry Storage' : 'Storage'} (${shortDate(run.periodFrom)} to ${shortDate(run.periodTo)})`,
           quantity: run.palletDays,
           unitPrice: run.ratePerPalletDay,
           vatRate: 0.05,

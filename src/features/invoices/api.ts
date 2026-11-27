@@ -38,6 +38,8 @@ export interface InvoiceDetail extends InvoiceRow {
     | 'trnMasked'
     | 'contactName'
     | 'contactEmail'
+    | 'contactPhone'
+    | 'postalAddress'
     | 'paymentTermsDays'
   >;
   payments: (Pick<Collection, 'id' | 'number' | 'date' | 'method' | 'reference'> & { amount: number })[];
@@ -152,6 +154,8 @@ export const invoicesApi = {
         trnMasked: c.trnMasked,
         contactName: c.contactName,
         contactEmail: c.contactEmail,
+        contactPhone: c.contactPhone,
+        postalAddress: c.postalAddress,
         paymentTermsDays: c.paymentTermsDays,
       },
       payments,
@@ -185,6 +189,7 @@ export const invoicesApi = {
       lines: lines.map((l): InvoiceLine => ({
         id: newId('il'),
         salesOrderId: l.salesOrderId,
+        uom: l.uom,
         description: l.description,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
@@ -342,7 +347,7 @@ export interface NewInvoiceInput {
   customerId: string;
   issueDate: string;
   dueDate: string;
-  lines: { salesOrderId: string; description: string; quantity: number; unitPrice: number }[];
+  lines: { salesOrderId: string; description: string; quantity: number; unitPrice: number; uom?: string }[];
 }
 
 /**

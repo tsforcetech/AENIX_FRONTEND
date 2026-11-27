@@ -47,8 +47,13 @@ export function formatMoneyCompact(amount: number): string {
   return `${BUSINESS_CURRENCY} ${compact.format(amount)}`;
 }
 
-export function formatNumber(n: number): string {
-  return new Intl.NumberFormat(BUSINESS_LOCALE).format(n);
+export function formatNumber(n: number, fractionDigits?: number): string {
+  return new Intl.NumberFormat(
+    BUSINESS_LOCALE,
+    fractionDigits === undefined
+      ? undefined
+      : { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits },
+  ).format(n);
 }
 
 export function formatRelative(iso: string, nowIso?: string): string {

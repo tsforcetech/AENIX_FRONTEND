@@ -35,7 +35,7 @@ export function ReconciliationTable({
         <span>
           {result.ok
             ? `All lines match — ${result.actualTotal} of ${result.expectedTotal} units.`
-            : `${result.mismatches} line${result.mismatches === 1 ? '' : 's'} need attention — ${expectedLabel}: ${result.expectedTotal}, ${actualLabel}: ${result.actualTotal}.`}
+            : `${result.mismatches} ${result.mismatches === 1 ? 'line needs' : 'lines need'} attention — ${expectedLabel}: ${result.expectedTotal}, ${actualLabel}: ${result.actualTotal}.`}
         </span>
       </div>
       <div

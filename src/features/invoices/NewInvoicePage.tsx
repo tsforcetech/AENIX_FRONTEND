@@ -88,6 +88,7 @@ export function NewInvoicePage() {
             description: l.description,
             quantity: l.quantity,
             unitPrice: l.unitPrice,
+            uom: l.unit,
           })),
         },
       });
