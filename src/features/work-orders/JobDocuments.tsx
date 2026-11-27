@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
+  FileSpreadsheet,
+  FileText,
   PackageCheck,
   Plus,
   Send,
@@ -11,8 +13,11 @@ import {
   Upload,
 } from 'lucide-react';
 import { useId, useState } from 'react';
-import type { CustomerRequest, DocLine } from '@/domain/types';
+import { jobStock } from '@/domain/stock';
+import type { CustomerRequest, DocLine, Inbound } from '@/domain/types';
+import { useProtoDb } from '@/prototype/store';
 import { AttachmentChip } from '@/shared/ui/Attachment';
+import { Logo } from '@/shared/ui/Logo';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
@@ -20,16 +25,29 @@ import { Dialog } from '@/shared/ui/Dialog';
 import { inputClasses, SelectField, TextField } from '@/shared/ui/Field';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { ReconciliationTable } from '@/shared/ui/ReconciliationTable';
+import {
+  GRN_FIELDS,
+  PL_FIELDS,
+  POD_FIELDS,
+  REQUEST_FIELDS,
+  SpreadsheetImport,
+  type ImportedRow,
+} from '@/shared/ui/SpreadsheetImport';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatDateTime } from '@/shared/utils/format';
 import {
   availableToRelease,
   grnResult,
+  hasReceivedStock,
+  inboundStage,
   podResult,
-  toAttachment,
+  useAddInbound,
   useCreateRequest,
   useDocAction,
+  warehouseVendorOf,
   type DocAction,
+  type InboundStage,
+  type InboundHeader,
   type WorkOrderDetail,
 } from './api';
 
@@ -51,189 +69,383 @@ function useRun() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Inbound: product list (PL) → warehouse team → GRN upload → comparison
+// Running stock on the job (many inbounds and outbounds over time)
 // ---------------------------------------------------------------------------------------------
 
-export function InboundCard({ wo }: { wo: WorkOrderDetail }) {
-  const { run, pending } = useRun();
-  const [editPl, setEditPl] = useState(false);
-  const [grnOpen, setGrnOpen] = useState(false);
-  const pl = wo.packingList;
-  const grn = wo.grn;
-  const result = grnResult(wo);
-  const closed = wo.status === 'Completed' || wo.status === 'Cancelled';
-
+export function JobStockCard({ wo }: { wo: WorkOrderDetail }) {
+  const rows = jobStock(wo);
+  const t = rows.reduce(
+    (acc, r) => ({
+      received: acc.received + r.received,
+      damaged: acc.damaged + r.damaged,
+      delivered: acc.delivered + r.delivered,
+      reserved: acc.reserved + r.reserved,
+      onHand: acc.onHand + r.onHand,
+      available: acc.available + r.available,
+    }),
+    { received: 0, damaged: 0, delivered: 0, reserved: 0, onHand: 0, available: 0 },
+  );
   return (
     <Card>
       <CardHeader
-        title="Inbound · product list → GRN"
-        description="Send the product list (PL) to the warehouse team, upload the GRN they return, and compare."
-        actions={
-          pl ? (
-            <div className="flex items-center gap-2">
-              <StatusBadge status={pl.status} />
-              {grn ? <StatusBadge status={grn.status} /> : null}
-            </div>
-          ) : null
-        }
+        title="Stock on this job"
+        description="Running balance across every inbound GRN and every delivered release (good units only)."
       />
-      <CardBody className="space-y-5">
-        <ol className="grid gap-2 sm:grid-cols-3" aria-label="Inbound steps">
-          <Step n={1} label="Product list" done={!!pl?.lines.length} current={!pl || pl.status === 'Draft'} />
-          <Step
-            n={2}
-            label="Sent to warehouse"
-            done={pl?.status === 'Sent to warehouse'}
-            current={pl?.status === 'Draft'}
-          />
-          <Step
-            n={3}
-            label="GRN uploaded & checked"
-            done={grn?.status === 'Verified'}
-            current={pl?.status === 'Sent to warehouse'}
-          />
-        </ol>
-
-        {/* PL */}
-        <section aria-labelledby="pl-h" className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 id="pl-h" className="text-body-s font-semibold">
-              Product list {pl ? <DocRef className="ml-1">{pl.number}</DocRef> : null}
-            </h3>
-            <div className="flex gap-2">
-              {!closed && (!pl || pl.status === 'Draft') ? (
-                <Button size="sm" variant="secondary" onClick={() => setEditPl(true)}>
-                  {pl?.lines.length ? 'Edit PL' : 'Add product list'}
-                </Button>
-              ) : null}
-              {!closed && pl?.status === 'Draft' && pl.lines.length ? (
-                <Button
-                  size="sm"
-                  icon={<Send aria-hidden="true" />}
-                  busy={pending}
-                  onClick={() =>
-                    run({ kind: 'sendPl', id: wo.id }, `${pl.number} sent to the warehouse team`)
-                  }
-                >
-                  Send to warehouse
-                </Button>
-              ) : null}
-            </div>
+      <CardBody>
+        {rows.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-body-s text-fg-muted">
+            No stock yet. Add an inbound receipt with the customer’s product list.
+          </p>
+        ) : (
+          <div
+            className="overflow-x-auto rounded-lg border border-border-subtle"
+            tabIndex={0}
+            role="region"
+            aria-label="Stock on this job"
+          >
+            <table className="w-full min-w-[720px] text-left text-body-s">
+              <caption className="sr-only">Stock per SKU on {wo.number}</caption>
+              <thead>
+                <tr className="border-b border-border-subtle bg-canvas text-caption uppercase tracking-wide text-fg-muted">
+                  <th scope="col" className="px-3 py-2 font-medium">
+                    SKU
+                  </th>
+                  <th scope="col" className="px-3 py-2 font-medium">
+                    Description
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Received
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Damaged
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Delivered
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Reserved
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    On hand
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Available
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.sku} className="border-b border-border-subtle last:border-0">
+                    <td className="whitespace-nowrap px-3 py-2 font-mono text-[13px]">{r.sku}</td>
+                    <td className="px-3 py-2">
+                      {r.description} <span className="text-caption text-fg-muted">{r.uom}</span>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.received}</td>
+                    <td
+                      className={clsx(
+                        'px-3 py-2 text-right tabular-nums',
+                        r.damaged > 0 && 'font-medium text-danger',
+                      )}
+                    >
+                      {r.damaged || '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.delivered}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.reserved || '—'}</td>
+                    <td className="px-3 py-2 text-right font-medium tabular-nums">{r.onHand}</td>
+                    <td
+                      className={clsx(
+                        'px-3 py-2 text-right font-semibold tabular-nums',
+                        r.available < 0 && 'text-danger',
+                      )}
+                    >
+                      {r.available}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-border bg-canvas font-semibold">
+                  <th scope="row" colSpan={2} className="px-3 py-2 text-left">
+                    Total ({rows.length} SKU{rows.length === 1 ? '' : 's'})
+                  </th>
+                  <td className="px-3 py-2 text-right tabular-nums">{t.received}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{t.damaged || '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{t.delivered}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{t.reserved || '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{t.onHand}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{t.available}</td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
-          {pl?.lines.length ? (
-            <>
-              <LinesTable lines={pl.lines} caption="Product list lines" />
-              {pl.sentAt ? (
-                <p className="text-caption text-fg-muted">
-                  Sent to warehouse team {formatDateTime(pl.sentAt)}
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <p className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-body-s text-fg-muted">
-              No product list yet. Add the SKUs and quantities the warehouse should expect.
-            </p>
-          )}
-        </section>
-
-        {/* GRN */}
-        {pl?.status === 'Sent to warehouse' ? (
-          <section aria-labelledby="grn-h" className="space-y-3 border-t border-border-subtle pt-5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 id="grn-h" className="text-body-s font-semibold">
-                Goods received note {grn ? <DocRef className="ml-1">{grn.number}</DocRef> : null}
-              </h3>
-              {!closed && !grn ? (
-                <Button size="sm" icon={<Upload aria-hidden="true" />} onClick={() => setGrnOpen(true)}>
-                  Upload GRN
-                </Button>
-              ) : null}
-            </div>
-            {!grn ? (
-              <p className="flex items-center gap-2 rounded-lg bg-info-subtle px-3 py-2.5 text-body-s text-info">
-                <PackageCheck aria-hidden="true" className="size-4 shrink-0" /> Waiting for the warehouse
-                team’s GRN.
-              </p>
-            ) : (
-              <>
-                <div className="flex flex-wrap items-center gap-3">
-                  {grn.attachment ? <AttachmentChip file={grn.attachment} /> : null}
-                  <p className="text-caption text-fg-muted">Received {formatDateTime(grn.receivedAt)}</p>
-                </div>
-                {result ? (
-                  <ReconciliationTable
-                    result={result}
-                    expectedLabel="PL qty"
-                    actualLabel="GRN qty"
-                    caption={`${pl.number} compared with ${grn.number}`}
-                  />
-                ) : null}
-                {!closed && grn.status === 'Uploaded' ? (
-                  <div className="flex flex-wrap justify-end gap-2">
-                    {result?.ok ? (
-                      <Button
-                        size="sm"
-                        icon={<CheckCircle2 aria-hidden="true" />}
-                        busy={pending}
-                        onClick={() => run({ kind: 'verifyGrn', id: wo.id }, `${grn.number} verified`)}
-                      >
-                        Verify GRN
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        icon={<AlertTriangle aria-hidden="true" />}
-                        busy={pending}
-                        onClick={() =>
-                          run({ kind: 'grnVariance', id: wo.id }, `Variance raised on ${grn.number}`)
-                        }
-                      >
-                        Raise variance
-                      </Button>
-                    )}
-                  </div>
-                ) : null}
-              </>
-            )}
-          </section>
-        ) : null}
+        )}
       </CardBody>
-
-      {editPl ? <PlEditorDialog wo={wo} onClose={() => setEditPl(false)} /> : null}
-      {grnOpen ? <GrnUploadDialog wo={wo} onClose={() => setGrnOpen(false)} /> : null}
     </Card>
   );
 }
 
-function Step({ n, label, done, current }: { n: number; label: string; done?: boolean; current?: boolean }) {
+// ---------------------------------------------------------------------------------------------
+// Inbound receipts (many): customer PL → warehouse → GRN upload → comparison
+// ---------------------------------------------------------------------------------------------
+
+const stageOrder: Record<InboundStage, number> = {
+  'Draft PL': 0,
+  Expected: 1,
+  'Variance raised': 2,
+  'GRN uploaded': 3,
+  Verified: 4,
+};
+
+export function InboundCard({ wo }: { wo: WorkOrderDetail }) {
+  const [newOpen, setNewOpen] = useState(false);
+  const closed = wo.status === 'Completed' || wo.status === 'Cancelled';
+  const inbounds = [...wo.inbounds].sort(
+    (a, b) =>
+      stageOrder[inboundStage(a)] - stageOrder[inboundStage(b)] || b.expectedAt.localeCompare(a.expectedAt),
+  );
+  const open = inbounds.filter((ib) => inboundStage(ib) !== 'Verified').length;
   return (
-    <li
-      className={clsx(
-        'flex items-center gap-2 rounded-lg border px-3 py-2 text-body-s',
-        done
-          ? 'border-success/25 bg-success-subtle'
-          : current
-            ? 'border-brand/30 bg-brand-subtle'
-            : 'border-border-subtle',
-      )}
-    >
-      <span
-        className={clsx(
-          'grid size-6 shrink-0 place-items-center rounded-full text-caption font-semibold',
-          done
-            ? 'bg-success text-primary-fg'
-            : current
-              ? 'bg-brand text-brand-fg'
-              : 'bg-surface-muted text-fg-muted',
+    <Card>
+      <CardHeader
+        title="Inbound receipts · PL → GRN"
+        description="Every consignment the customer sends: their product list (PL / ASN) goes to the warehouse, the GRN comes back and is cross-checked. Goods arrive many times over a storage job."
+        actions={
+          !closed ? (
+            <Button size="sm" icon={<Plus aria-hidden="true" />} onClick={() => setNewOpen(true)}>
+              New inbound
+            </Button>
+          ) : null
+        }
+      />
+      <CardBody>
+        {inbounds.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-body-s text-fg-muted">
+            No inbound yet. Add one when the customer sends a product list — import it straight from their
+            Excel file.
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 text-caption text-fg-muted">
+              {inbounds.length} inbound{inbounds.length === 1 ? '' : 's'} · {open} open
+            </p>
+            <ul className="space-y-3">
+              {inbounds.map((ib) => (
+                <InboundItem
+                  key={ib.id}
+                  wo={wo}
+                  ib={ib}
+                  closed={closed}
+                  defaultOpen={inboundStage(ib) !== 'Verified'}
+                />
+              ))}
+            </ul>
+          </>
         )}
+      </CardBody>
+      {newOpen ? <NewInboundDialog wo={wo} onClose={() => setNewOpen(false)} /> : null}
+    </Card>
+  );
+}
+
+function InboundItem({
+  wo,
+  ib,
+  closed,
+  defaultOpen,
+}: {
+  wo: WorkOrderDetail;
+  ib: Inbound;
+  closed: boolean;
+  defaultOpen: boolean;
+}) {
+  const { run, pending } = useRun();
+  const [expanded, setExpanded] = useState(defaultOpen);
+  const [editPl, setEditPl] = useState(false);
+  const [grnOpen, setGrnOpen] = useState(false);
+  const [docOpen, setDocOpen] = useState(false);
+  const pl = ib.packingList;
+  const grn = ib.grn;
+  const stage = inboundStage(ib);
+  const result = grnResult(ib);
+  const plQty = pl.lines.reduce((s, l) => s + l.quantity, 0);
+  const bodyId = useId();
+
+  return (
+    <li className="rounded-xl border border-border-subtle">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={bodyId}
+        onClick={() => setExpanded((x) => !x)}
+        className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-xl px-4 py-3 text-left hover:bg-canvas"
       >
-        {done ? <CheckCircle2 aria-hidden="true" className="size-3.5" /> : n}
-      </span>
-      <span className={clsx('font-medium', !done && !current && 'text-fg-muted')}>
-        {label}
-        <span className="sr-only">{done ? ' — done' : current ? ' — next' : ' — pending'}</span>
-      </span>
+        <ChevronRight
+          aria-hidden="true"
+          className={clsx('size-4 shrink-0 text-fg-muted transition-transform', expanded && 'rotate-90')}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-2">
+            <DocRef>{ib.number}</DocRef>
+            <StatusBadge
+              status={
+                stage === 'Draft PL'
+                  ? 'Draft'
+                  : stage === 'Expected'
+                    ? 'Sent to warehouse'
+                    : stage === 'GRN uploaded'
+                      ? 'Uploaded'
+                      : stage
+              }
+            />
+            {result ? (
+              <StatusBadge
+                status={
+                  result.ok
+                    ? 'Match'
+                    : `${result.mismatches} line${result.mismatches === 1 ? '' : 's'} differ`
+                }
+              />
+            ) : null}
+          </span>
+          <span className="mt-0.5 block truncate text-caption text-fg-muted">
+            {ib.reference || 'No reference'} · expected {formatDate(ib.expectedAt)} · {pl.number}:{' '}
+            {pl.lines.length} SKU
+            {pl.lines.length === 1 ? '' : 's'}, {plQty} units{grn ? ` · ${grn.number}` : ''}
+          </span>
+        </span>
+      </button>
+
+      {expanded ? (
+        <div id={bodyId} className="space-y-4 border-t border-border-subtle px-4 py-4">
+          <section aria-label={`${pl.number} product list`} className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-body-s font-semibold">
+                Product list <DocRef className="ml-1">{pl.number}</DocRef>
+                {pl.source ? (
+                  <span className="ml-2 text-caption font-normal text-fg-muted">via {pl.source}</span>
+                ) : null}
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {!closed && pl.status === 'Draft' ? (
+                  <>
+                    <Button size="sm" variant="secondary" onClick={() => setEditPl(true)}>
+                      Edit PL
+                    </Button>
+                    <Button
+                      size="sm"
+                      icon={<Send aria-hidden="true" />}
+                      busy={pending}
+                      disabled={!pl.lines.length}
+                      onClick={() =>
+                        run(
+                          { kind: 'sendPl', id: wo.id, inboundId: ib.id },
+                          `${pl.number} sent to the warehouse team`,
+                        )
+                      }
+                    >
+                      Send PL to warehouse
+                    </Button>
+                  </>
+                ) : null}
+                {!closed && pl.status === 'Sent to warehouse' && !grn ? (
+                  <Button size="sm" icon={<Upload aria-hidden="true" />} onClick={() => setGrnOpen(true)}>
+                    Upload GRN
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+            {pl.attachment ? <AttachmentChip file={pl.attachment} /> : null}
+            {!grn ? <LinesTable lines={pl.lines} caption={`${pl.number} lines`} /> : null}
+            {pl.sentAt ? (
+              <p className="text-caption text-fg-muted">Sent to warehouse team {formatDateTime(pl.sentAt)}</p>
+            ) : null}
+            {pl.status === 'Sent to warehouse' && !grn ? (
+              <p className="flex items-center gap-2 rounded-lg bg-info-subtle px-3 py-2.5 text-body-s text-info">
+                <PackageCheck aria-hidden="true" className="size-4 shrink-0" /> Waiting for the warehouse
+                team’s GRN.
+              </p>
+            ) : null}
+          </section>
+
+          {grn ? (
+            <section
+              aria-label={`${grn.number} goods received note`}
+              className="space-y-3 border-t border-border-subtle pt-4"
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <h4 className="text-body-s font-semibold">
+                  Goods received note <DocRef className="ml-1">{grn.number}</DocRef>
+                </h4>
+                {grn.attachment ? <AttachmentChip file={grn.attachment} /> : null}
+                <p className="text-caption text-fg-muted">Received {formatDateTime(grn.receivedAt)}</p>
+              </div>
+              {result ? (
+                <ReconciliationTable
+                  result={result}
+                  expectedLabel="PL qty"
+                  actualLabel="GRN qty"
+                  caption={`${pl.number} compared with ${grn.number}`}
+                />
+              ) : null}
+              {!closed && grn.status === 'Uploaded' ? (
+                <div className="flex flex-wrap justify-end gap-2">
+                  {result?.ok ? (
+                    <Button
+                      size="sm"
+                      icon={<CheckCircle2 aria-hidden="true" />}
+                      busy={pending}
+                      onClick={() =>
+                        run({ kind: 'verifyGrn', id: wo.id, inboundId: ib.id }, `${grn.number} verified`)
+                      }
+                    >
+                      Verify GRN
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      icon={<AlertTriangle aria-hidden="true" />}
+                      busy={pending}
+                      onClick={() =>
+                        run(
+                          { kind: 'grnVariance', id: wo.id, inboundId: ib.id },
+                          `Variance raised on ${grn.number}`,
+                        )
+                      }
+                    >
+                      Raise variance
+                    </Button>
+                  )}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-canvas px-3 py-2">
+                <span className="text-caption text-fg-muted">
+                  {grn.customerGrnNumber
+                    ? `Customer GRN ${grn.customerGrnNumber} issued ${formatDateTime(grn.customerGrnIssuedAt ?? '')}`
+                    : 'Send the customer Aenix’s own GRN for this receipt.'}
+                </span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<FileText aria-hidden="true" />}
+                  busy={pending}
+                  onClick={() => {
+                    if (grn.customerGrnNumber) return setDocOpen(true);
+                    run({ kind: 'issueCustomerGrn', id: wo.id, inboundId: ib.id }, 'Customer GRN issued');
+                    setDocOpen(true);
+                  }}
+                >
+                  {grn.customerGrnNumber ? 'View customer GRN' : 'Issue customer GRN'}
+                </Button>
+              </div>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+
+      {docOpen && grn ? <CustomerGrnDialog wo={wo} ib={ib} onClose={() => setDocOpen(false)} /> : null}
+      {editPl ? <PlEditorDialog wo={wo} ib={ib} onClose={() => setEditPl(false)} /> : null}
+      {grnOpen ? <GrnUploadDialog wo={wo} ib={ib} onClose={() => setGrnOpen(false)} /> : null}
     </li>
   );
 }
@@ -272,63 +484,96 @@ function LinesTable({ lines, caption }: { lines: DocLine[]; caption: string }) {
   );
 }
 
-type DraftLine = { sku: string; description: string; quantity: string; uom: string };
+type DraftLine = {
+  sku: string;
+  description: string;
+  quantity: string;
+  uom: string;
+  /** Optional detail carried from the customer's or vendor's Excel. */
+  extra?: Pick<DocLine, 'barcode' | 'batch' | 'productionDate' | 'expiryDate' | 'cbm'>;
+};
 
-function PlEditorDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => void }) {
-  const { run, pending } = useRun();
-  const [lines, setLines] = useState<DraftLine[]>(
-    wo.packingList?.lines.map((l) => ({ ...l, quantity: String(l.quantity) })) ?? [
-      { sku: '', description: '', quantity: '1', uom: 'Ctn' },
-    ],
-  );
-  const [error, setError] = useState<string>();
+const blankLine = (): DraftLine => ({ sku: '', description: '', quantity: '1', uom: 'Ctn' });
+
+/** Validates draft PL lines; returns the clean lines or an error message. */
+function cleanPlLines(lines: DraftLine[]): DocLine[] | string {
+  const clean = lines.filter((l) => l.sku.trim() || l.description.trim());
+  const skus = clean.map((l) => l.sku.trim().toUpperCase());
+  if (!clean.length) return 'Add at least one product.';
+  if (clean.some((l) => !l.sku.trim() || !(Number(l.quantity) > 0)))
+    return 'Every product needs a SKU and a quantity above 0.';
+  if (new Set(skus).size !== skus.length) return 'Each SKU can appear only once — merge duplicate lines.';
+  return clean.map((l) => ({
+    sku: l.sku.trim().toUpperCase(),
+    description: l.description.trim() || l.sku.trim().toUpperCase(),
+    quantity: Math.round(Number(l.quantity)),
+    uom: l.uom.trim() || 'Pcs',
+    ...l.extra,
+  }));
+}
+
+/** Imported PL rows → draft lines; quantities of a repeated SKU are added together. */
+function plRowsToDraft(rows: ImportedRow[]): DraftLine[] {
+  const map = new Map<string, DraftLine>();
+  for (const r of rows) {
+    const sku = String(r.sku ?? '')
+      .trim()
+      .toUpperCase();
+    if (!sku) continue;
+    const prev = map.get(sku);
+    const qty = Number(r.quantity) || 0;
+    const cbm = (prev?.extra?.cbm ?? 0) + (Number(r.cbm) || 0);
+    map.set(sku, {
+      sku,
+      description: prev?.description || String(r.description ?? ''),
+      quantity: String((Number(prev?.quantity) || 0) + qty),
+      uom: prev?.uom || String(r.uom ?? 'Pcs'),
+      // Repeated SKUs are merged (quantities and CBM added); first batch/dates are kept.
+      extra: {
+        barcode: prev?.extra?.barcode ?? (r.barcode ? String(r.barcode) : undefined),
+        batch: prev?.extra?.batch ?? (r.batch ? String(r.batch) : undefined),
+        productionDate:
+          prev?.extra?.productionDate ?? (r.productionDate ? String(r.productionDate) : undefined),
+        expiryDate: prev?.extra?.expiryDate ?? (r.expiryDate ? String(r.expiryDate) : undefined),
+        cbm: cbm ? Math.round(cbm * 10000) / 10000 : undefined,
+      },
+    });
+  }
+  return [...map.values()];
+}
+
+/** Editable PL lines + "Import from Excel". */
+function PlLinesEditor({
+  lines,
+  setLines,
+  onImportClick,
+}: {
+  lines: DraftLine[];
+  setLines: (fn: (ls: DraftLine[]) => DraftLine[]) => void;
+  onImportClick: () => void;
+}) {
   const set = (i: number, k: keyof DraftLine, v: string) =>
     setLines((ls) => ls.map((l, j) => (j === i ? { ...l, [k]: v } : l)));
-
-  const save = () => {
-    const clean = lines.filter((l) => l.sku.trim() || l.description.trim());
-    const skus = clean.map((l) => l.sku.trim().toUpperCase());
-    if (!clean.length) return setError('Add at least one product.');
-    if (
-      clean.some((l) => !l.sku.trim() || !l.description.trim() || !(Number(l.quantity) > 0) || !l.uom.trim())
-    )
-      return setError('Every product needs a SKU, description, quantity above 0 and a unit.');
-    if (new Set(skus).size !== skus.length) return setError('Each SKU can appear only once.');
-    run(
-      {
-        kind: 'savePl',
-        id: wo.id,
-        lines: clean.map((l) => ({
-          sku: l.sku.trim().toUpperCase(),
-          description: l.description.trim(),
-          quantity: Math.round(Number(l.quantity)),
-          uom: l.uom.trim(),
-        })),
-      },
-      'Product list saved',
-      onClose,
-    );
-  };
-
+  const total = lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
   return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="lg"
-      title="Product list (PL)"
-      description="What the warehouse team should expect to receive for this job."
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button busy={pending} onClick={save}>
-            Save product list
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-2">
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-body-s font-medium">
+          Product lines{' '}
+          <span className="font-normal text-fg-muted">
+            · {lines.length} SKUs · {total} units
+          </span>
+        </p>
+        <Button
+          size="sm"
+          variant="secondary"
+          icon={<FileSpreadsheet aria-hidden="true" />}
+          onClick={onImportClick}
+        >
+          Import from Excel
+        </Button>
+      </div>
+      <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
         {lines.map((l, i) => (
           <div key={i} className="grid grid-cols-[1fr_2fr_80px_70px_40px] gap-2">
             <input
@@ -346,12 +591,11 @@ function PlEditorDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => v
               className={clsx(inputClasses, 'h-10')}
             />
             <input
-              type="number"
-              min={1}
+              inputMode="numeric"
               aria-label={`Product ${i + 1} quantity`}
               value={l.quantity}
               onChange={(e) => set(i, 'quantity', e.target.value)}
-              className={clsx(inputClasses, 'h-10')}
+              className={clsx(inputClasses, 'h-10 text-right tabular-nums')}
             />
             <input
               aria-label={`Product ${i + 1} unit`}
@@ -369,21 +613,227 @@ function PlEditorDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => v
             </button>
           </div>
         ))}
-        <Button
-          size="sm"
-          variant="ghost"
-          icon={<Plus aria-hidden="true" />}
-          onClick={() => setLines((ls) => [...ls, { sku: '', description: '', quantity: '1', uom: 'Ctn' }])}
-        >
-          Add product
-        </Button>
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={<Plus aria-hidden="true" />}
+        onClick={() => setLines((ls) => [...ls, blankLine()])}
+      >
+        Add product
+      </Button>
+    </div>
+  );
+}
+
+function NewInboundDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => void }) {
+  const add = useAddInbound();
+  const toast = useToast();
+  const [reference, setReference] = useState('');
+  const [expectedAt, setExpectedAt] = useState('2026-11-30');
+  const [header, setHeader] = useState<InboundHeader>({});
+  const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
+  const [file, setFile] = useState<{ name: string; sizeKb: number }>();
+  const [send, setSend] = useState(true);
+  const [importOpen, setImportOpen] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const submit = () => {
+    const clean = cleanPlLines(lines);
+    if (typeof clean === 'string') return setError(clean);
+    if (reference.trim().length < 2)
+      return setError('Enter the customer’s reference (ASN, container, AWB or truck no.).');
+    setError(undefined);
+    add.mutate(
+      {
+        id: wo.id,
+        reference: reference.trim(),
+        expectedAt,
+        lines: clean,
+        send,
+        header,
+        source: file ? 'Excel import' : 'Staff',
+        attachment: file
+          ? {
+              fileName: file.name,
+              sizeKb: file.sizeKb,
+              uploadedAt: new Date().toISOString(),
+              uploadedBy: 'Staff',
+            }
+          : undefined,
+      },
+      {
+        onSuccess: (ib) => {
+          toast({
+            title: `${ib.number} added`,
+            body: send
+              ? `${ib.packingList.number} sent to the warehouse team.`
+              : 'Saved as a draft product list.',
+          });
+          onClose();
+        },
+        onError: (e) => setError(e instanceof Error ? e.message : 'Could not add the inbound.'),
+      },
+    );
+  };
+
+  return (
+    <>
+      <Dialog
+        open
+        onClose={onClose}
+        size="lg"
+        title="New inbound receipt"
+        description={`A new consignment for ${wo.customerName}. Import their product list from Excel or type the lines.`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button busy={add.isPending} onClick={submit}>
+              {send ? 'Add & send PL to warehouse' : 'Save as draft'}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              label="Customer reference"
+              required
+              placeholder="ASN / container / AWB / truck no."
+              value={reference}
+              onChange={(e) => setReference(e.target.value)}
+            />
+            <TextField
+              label="Expected on"
+              type="date"
+              required
+              value={expectedAt}
+              onChange={(e) => setExpectedAt(e.target.value)}
+            />
+          </div>
+          <details className="rounded-lg border border-border-subtle px-3 py-2">
+            <summary className="cursor-pointer text-body-s font-medium">
+              Shipment details{' '}
+              <span className="font-normal text-fg-muted">— ASN, BOE, container, seal, BL (optional)</span>
+            </summary>
+            <div className="mt-3 grid gap-3 pb-1 sm:grid-cols-3">
+              {(
+                [
+                  ['asnNo', 'ASN #'],
+                  ['boeNo', 'BOE (bill of entry)'],
+                  ['containerNo', 'Container no.'],
+                  ['sealNo', 'Seal no.'],
+                  ['blNo', 'BL / AWB no.'],
+                  ['supplierName', 'Supplier'],
+                  ['location', 'Warehouse location'],
+                ] as const
+              ).map(([k, label]) => (
+                <TextField
+                  key={k}
+                  label={label}
+                  value={header[k] ?? ''}
+                  onChange={(e) => setHeader((h) => ({ ...h, [k]: e.target.value || undefined }))}
+                />
+              ))}
+            </div>
+          </details>
+          {file ? (
+            <p className="flex items-center gap-2 text-caption text-fg-muted">
+              <FileSpreadsheet aria-hidden="true" className="size-4 text-success" /> Imported from {file.name}{' '}
+              — attached to the PL.
+            </p>
+          ) : null}
+          <PlLinesEditor lines={lines} setLines={setLines} onImportClick={() => setImportOpen(true)} />
+          <label className="flex items-center gap-2 text-body-s">
+            <input
+              type="checkbox"
+              checked={send}
+              onChange={(e) => setSend(e.target.checked)}
+              className="size-4 accent-[var(--color-brand)]"
+            />
+            Send the PL to the warehouse team now
+          </label>
+          {error ? (
+            <p role="alert" className="text-caption font-medium text-danger">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </Dialog>
+      <SpreadsheetImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import product list"
+        fields={PL_FIELDS}
+        templateKey={`PL:${wo.customerId}`}
+        partyName={wo.customerName}
+        onImport={(rows, f) => {
+          setLines(() => plRowsToDraft(rows));
+          setFile(f);
+        }}
+      />
+    </>
+  );
+}
+
+function PlEditorDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound; onClose: () => void }) {
+  const { run, pending } = useRun();
+  const [lines, setLines] = useState<DraftLine[]>(
+    ib.packingList.lines.length
+      ? ib.packingList.lines.map((l) => ({ ...l, quantity: String(l.quantity) }))
+      : [blankLine()],
+  );
+  const [importOpen, setImportOpen] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const save = () => {
+    const clean = cleanPlLines(lines);
+    if (typeof clean === 'string') return setError(clean);
+    run(
+      { kind: 'savePl', id: wo.id, inboundId: ib.id, lines: clean },
+      `${ib.packingList.number} saved`,
+      onClose,
+    );
+  };
+
+  return (
+    <>
+      <Dialog
+        open
+        onClose={onClose}
+        size="lg"
+        title={`Product list ${ib.packingList.number}`}
+        description={`What the warehouse team should expect for ${ib.number}.`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button busy={pending} onClick={save}>
+              Save product list
+            </Button>
+          </>
+        }
+      >
+        <PlLinesEditor lines={lines} setLines={setLines} onImportClick={() => setImportOpen(true)} />
         {error ? (
-          <p role="alert" className="text-caption font-medium text-danger">
+          <p role="alert" className="mt-2 text-caption font-medium text-danger">
             {error}
           </p>
         ) : null}
-      </div>
-    </Dialog>
+      </Dialog>
+      <SpreadsheetImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import product list"
+        fields={PL_FIELDS}
+        templateKey={`PL:${wo.customerId}`}
+        partyName={wo.customerName}
+        onImport={(rows) => setLines(() => plRowsToDraft(rows))}
+      />
+    </>
   );
 }
 
@@ -392,11 +842,13 @@ function FileField({
   file,
   onFile,
   error,
+  note,
 }: {
   label: string;
-  file?: File;
+  file?: { name: string; sizeKb: number };
   onFile: (f?: File) => void;
   error?: string;
+  note?: string;
 }) {
   const id = useId();
   return (
@@ -410,7 +862,7 @@ function FileField({
       <input
         id={id}
         type="file"
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept=".pdf,.jpg,.jpeg,.png,.xlsx,.csv"
         aria-invalid={!!error || undefined}
         aria-describedby={`${id}-hint`}
         onChange={(e) => onFile(e.target.files?.[0])}
@@ -418,8 +870,8 @@ function FileField({
       />
       <p id={`${id}-hint`} className="text-caption text-fg-muted">
         {file
-          ? `${file.name} · ${Math.max(1, Math.round(file.size / 1024))} KB`
-          : 'PDF or image. The prototype keeps the file name only.'}
+          ? `${file.name} · ${file.sizeKb} KB`
+          : (note ?? 'PDF, image or the Excel/CSV file. The prototype keeps the file name only.')}
       </p>
       {error ? (
         <p role="alert" className="text-caption font-medium text-danger">
@@ -430,26 +882,102 @@ function FileField({
   );
 }
 
-function GrnUploadDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => void }) {
+const fileMeta = (f: File) => ({ name: f.name, sizeKb: Math.max(1, Math.round(f.size / 1024)) });
+const asAttachment = (f: { name: string; sizeKb: number }) => ({
+  fileName: f.name,
+  sizeKb: f.sizeKb,
+  uploadedAt: new Date().toISOString(),
+  uploadedBy: 'Staff',
+});
+
+type GrnRow = {
+  sku: string;
+  expected: number;
+  received: string;
+  damaged: string;
+  remarks: string;
+  extra?: { batch?: string; productionDate?: string; expiryDate?: string; cbm?: number };
+};
+
+function GrnUploadDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound; onClose: () => void }) {
   const { run, pending } = useRun();
-  const pl = wo.packingList!;
-  const [file, setFile] = useState<File>();
+  const pl = ib.packingList;
+  const wh = warehouseVendorOf(wo);
+  const [file, setFile] = useState<{ name: string; sizeKb: number }>();
   const [number, setNumber] = useState('');
   const [date, setDate] = useState(PROTO_TODAY);
-  const [rows, setRows] = useState(
-    pl.lines.map((l) => ({ sku: l.sku, received: String(l.quantity), damaged: '0', remarks: '' })),
+  const [rows, setRows] = useState<GrnRow[]>(
+    pl.lines.map((l) => ({
+      sku: l.sku,
+      expected: l.quantity,
+      received: String(l.quantity),
+      damaged: '0',
+      remarks: '',
+    })),
   );
+  const [importOpen, setImportOpen] = useState(false);
+  const [imported, setImported] = useState<string>();
   const [errors, setErrors] = useState<{ file?: string; number?: string; rows?: string }>({});
   const set = (i: number, k: 'received' | 'damaged' | 'remarks', v: string) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
 
+  const applyImport = (data: ImportedRow[], f: { name: string; sizeKb: number }) => {
+    const bySku = new Map<
+      string,
+      { received: number; damaged: number; remarks: string; extra: NonNullable<GrnRow['extra']> }
+    >();
+    for (const r of data) {
+      const sku = String(r.sku ?? '')
+        .trim()
+        .toUpperCase();
+      if (!sku) continue;
+      const prev = bySku.get(sku);
+      bySku.set(sku, {
+        received: (prev?.received ?? 0) + (Number(r.receivedQty) || 0),
+        damaged: (prev?.damaged ?? 0) + (Number(r.damagedQty) || 0),
+        remarks: [prev?.remarks, r.remarks ? String(r.remarks) : ''].filter(Boolean).join('; '),
+        extra: {
+          batch: prev?.extra.batch ?? (r.batch ? String(r.batch) : undefined),
+          productionDate:
+            prev?.extra.productionDate ?? (r.productionDate ? String(r.productionDate) : undefined),
+          expiryDate: prev?.extra.expiryDate ?? (r.expiryDate ? String(r.expiryDate) : undefined),
+          cbm: (prev?.extra.cbm ?? 0) + (Number(r.cbm) || 0) || undefined,
+        },
+      });
+    }
+    const next: GrnRow[] = pl.lines.map((l) => {
+      const g = bySku.get(l.sku);
+      bySku.delete(l.sku);
+      return {
+        sku: l.sku,
+        expected: l.quantity,
+        received: String(g?.received ?? 0), // missing in the GRN file = not received
+        damaged: String(g?.damaged ?? 0),
+        remarks: g?.remarks ?? '',
+        extra: g?.extra,
+      };
+    });
+    for (const [sku, g] of bySku)
+      next.push({
+        sku,
+        expected: 0,
+        received: String(g.received),
+        damaged: String(g.damaged),
+        remarks: g.remarks,
+      });
+    setRows(next);
+    setImported(`${data.length} rows imported from ${f.name}`);
+    if (!file) setFile(f);
+  };
+
   const submit = () => {
     const e: typeof errors = {};
-    if (!file) e.file = 'Attach the signed GRN from the warehouse team.';
+    if (!file) e.file = 'Attach the signed GRN (PDF/photo) or the GRN Excel from the warehouse.';
     if (number.trim().length < 3) e.number = 'Enter the GRN number.';
     if (
       rows.some(
-        (r) => Number(r.received) < 0 || Number(r.damaged) < 0 || Number(r.damaged) > Number(r.received),
+        (r) =>
+          !(Number(r.received) >= 0) || !(Number(r.damaged) >= 0) || Number(r.damaged) > Number(r.received),
       )
     )
       e.rows = 'Quantities cannot be negative, and damaged cannot exceed received.';
@@ -459,15 +987,17 @@ function GrnUploadDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => 
       {
         kind: 'uploadGrn',
         id: wo.id,
+        inboundId: ib.id,
         grn: {
           number: number.trim().toUpperCase(),
           receivedAt: `${date}T12:00:00+04:00`,
-          attachment: toAttachment(file!),
+          attachment: asAttachment(file!),
           lines: rows.map((r) => ({
             sku: r.sku,
             receivedQty: Math.round(Number(r.received) || 0),
             damagedQty: Math.round(Number(r.damaged) || 0),
             remarks: r.remarks.trim() || undefined,
+            ...r.extra,
           })),
         },
       },
@@ -477,107 +1007,147 @@ function GrnUploadDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => 
   };
 
   return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="lg"
-      title="Upload GRN"
-      description={`Enter what the warehouse team actually received against ${pl.number}.`}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button busy={pending} icon={<Upload aria-hidden="true" />} onClick={submit}>
-            Upload GRN
-          </Button>
-        </>
-      }
-    >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FileField label="Signed GRN document" file={file} onFile={setFile} error={errors.file} />
-        <TextField
-          label="GRN number"
-          required
-          placeholder="e.g. GRN-5531"
-          value={number}
-          onChange={(e) => setNumber(e.target.value)}
-          error={errors.number}
-        />
-        <TextField
-          label="Received on"
-          type="date"
-          required
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-        />
-        <div className="overflow-x-auto sm:col-span-2">
-          <table className="w-full min-w-[520px] text-left text-body-s">
-            <caption className="sr-only">Received quantities per product</caption>
-            <thead>
-              <tr className="text-caption uppercase tracking-wide text-fg-muted">
-                <th scope="col" className="pb-2 font-medium">
-                  SKU
-                </th>
-                <th scope="col" className="pb-2 text-right font-medium">
-                  PL qty
-                </th>
-                <th scope="col" className="w-24 pb-2 pl-2 font-medium">
-                  Received
-                </th>
-                <th scope="col" className="w-24 pb-2 pl-2 font-medium">
-                  Damaged
-                </th>
-                <th scope="col" className="pb-2 pl-2 font-medium">
-                  Remarks
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={r.sku}>
-                  <td className="py-1 font-mono text-[13px]">{r.sku}</td>
-                  <td className="py-1 text-right tabular-nums">{pl.lines[i]!.quantity}</td>
-                  <td className="py-1 pl-2">
-                    <input
-                      type="number"
-                      min={0}
-                      aria-label={`${r.sku} received quantity`}
-                      value={r.received}
-                      onChange={(e) => set(i, 'received', e.target.value)}
-                      className={clsx(inputClasses, 'h-9')}
-                    />
-                  </td>
-                  <td className="py-1 pl-2">
-                    <input
-                      type="number"
-                      min={0}
-                      aria-label={`${r.sku} damaged quantity`}
-                      value={r.damaged}
-                      onChange={(e) => set(i, 'damaged', e.target.value)}
-                      className={clsx(inputClasses, 'h-9')}
-                    />
-                  </td>
-                  <td className="py-1 pl-2">
-                    <input
-                      aria-label={`${r.sku} remarks`}
-                      value={r.remarks}
-                      onChange={(e) => set(i, 'remarks', e.target.value)}
-                      className={clsx(inputClasses, 'h-9')}
-                    />
-                  </td>
+    <>
+      <Dialog
+        open
+        onClose={onClose}
+        size="lg"
+        title={`Upload GRN for ${ib.number}`}
+        description={`What ${wh.name} actually received against ${pl.number}. Import their GRN Excel or type the quantities.`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button busy={pending} icon={<Upload aria-hidden="true" />} onClick={submit}>
+              Upload GRN
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FileField
+            label="GRN document"
+            file={file}
+            onFile={(f) => setFile(f ? fileMeta(f) : undefined)}
+            error={errors.file}
+          />
+          <TextField
+            label="GRN number"
+            required
+            placeholder="e.g. GRN-5531"
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            error={errors.number}
+          />
+          <TextField
+            label="Received on"
+            type="date"
+            required
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2">
+            <p className="text-body-s font-medium">Received quantities</p>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<FileSpreadsheet aria-hidden="true" />}
+              onClick={() => setImportOpen(true)}
+            >
+              Import GRN from Excel
+            </Button>
+          </div>
+          {imported ? (
+            <p role="status" className="text-caption text-success sm:col-span-2">
+              {imported}. Lines not in the file are set to 0 received; extra SKUs are kept as “not expected”.
+            </p>
+          ) : null}
+          <div
+            className="max-h-72 overflow-auto sm:col-span-2"
+            tabIndex={0}
+            role="region"
+            aria-label="Received quantities per product"
+          >
+            <table className="w-full min-w-[560px] text-left text-body-s">
+              <caption className="sr-only">Received quantities per product</caption>
+              <thead>
+                <tr className="text-caption uppercase tracking-wide text-fg-muted">
+                  <th scope="col" className="pb-2 font-medium">
+                    SKU
+                  </th>
+                  <th scope="col" className="pb-2 text-right font-medium">
+                    PL qty
+                  </th>
+                  <th scope="col" className="w-24 pb-2 pl-2 font-medium">
+                    Received
+                  </th>
+                  <th scope="col" className="w-24 pb-2 pl-2 font-medium">
+                    Damaged
+                  </th>
+                  <th scope="col" className="pb-2 pl-2 font-medium">
+                    Remarks
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r.sku}>
+                    <td className="py-1 font-mono text-[13px]">
+                      {r.sku}
+                      {r.expected === 0 ? (
+                        <span className="ml-1 font-sans text-caption text-warning">not on PL</span>
+                      ) : null}
+                    </td>
+                    <td className="py-1 text-right tabular-nums">{r.expected}</td>
+                    <td className="py-1 pl-2">
+                      <input
+                        inputMode="numeric"
+                        aria-label={`${r.sku} received quantity`}
+                        value={r.received}
+                        onChange={(e) => set(i, 'received', e.target.value)}
+                        className={clsx(inputClasses, 'h-9 text-right tabular-nums')}
+                      />
+                    </td>
+                    <td className="py-1 pl-2">
+                      <input
+                        inputMode="numeric"
+                        aria-label={`${r.sku} damaged quantity`}
+                        value={r.damaged}
+                        onChange={(e) => set(i, 'damaged', e.target.value)}
+                        className={clsx(inputClasses, 'h-9 text-right tabular-nums')}
+                      />
+                    </td>
+                    <td className="py-1 pl-2">
+                      <input
+                        aria-label={`${r.sku} remarks`}
+                        value={r.remarks}
+                        onChange={(e) => set(i, 'remarks', e.target.value)}
+                        className={clsx(inputClasses, 'h-9')}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {errors.rows ? (
-            <p role="alert" className="mt-2 text-caption font-medium text-danger">
+            <p role="alert" className="text-caption font-medium text-danger sm:col-span-2">
               {errors.rows}
             </p>
           ) : null}
         </div>
-      </div>
-    </Dialog>
+      </Dialog>
+      <SpreadsheetImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import GRN"
+        fields={GRN_FIELDS}
+        templateKey={`GRN:${wh.id}`}
+        partyName={wh.name}
+        onImport={applyImport}
+      />
+    </>
   );
 }
 
@@ -591,8 +1161,8 @@ export function CustomerRequestsCard({ wo }: { wo: WorkOrderDetail }) {
   return (
     <Card>
       <CardHeader
-        title="Customer requests · request → POD"
-        description="Out / delivery requests from the customer, closed by the vendor’s or warehouse’s proof of delivery."
+        title="Outbound releases · request → POD"
+        description="Every out-bond / delivery request the customer makes while goods are stored, each closed by the vendor’s or warehouse’s POD (cross-checked)."
         actions={
           !closed ? (
             <Button
@@ -732,8 +1302,16 @@ function RequestItem({ wo, req }: { wo: WorkOrderDetail; req: CustomerRequest })
 function NewRequestDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () => void }) {
   const create = useCreateRequest();
   const toast = useToast();
-  const known: DocLine[] = wo.packingList?.lines ?? [];
-  const avail = wo.serviceCategory === 'Warehouse' && wo.grn ? availableToRelease(wo) : undefined;
+  const stocked = hasReceivedStock(wo);
+  // Releasable SKUs: running stock once goods were received; otherwise the SKUs on the product lists.
+  const known: DocLine[] = stocked
+    ? jobStock(wo)
+        .filter((s) => s.onHand > 0)
+        .map((s) => ({ sku: s.sku, description: s.description, quantity: s.available, uom: s.uom }))
+    : [...new Map(wo.inbounds.flatMap((ib) => ib.packingList.lines).map((l) => [l.sku, l])).values()];
+  const avail = stocked ? availableToRelease(wo) : undefined;
+  const [importOpen, setImportOpen] = useState(false);
+  const [imported, setImported] = useState<string>();
   const [deliverTo, setDeliverTo] = useState('');
   const [requiredBy, setRequiredBy] = useState('2026-11-27');
   const [rows, setRows] = useState<DraftLine[]>(
@@ -747,17 +1325,50 @@ function NewRequestDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
   const set = (i: number, k: keyof DraftLine, v: string) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
 
+  /** Excel release list → quantities on known SKUs; unknown SKUs are added (and then fail the stock check). */
+  const applyImport = (data: ImportedRow[], f: { name: string }) => {
+    const qty = new Map<string, number>();
+    const meta = new Map<string, ImportedRow>();
+    for (const r of data) {
+      const sku = String(r.sku ?? '')
+        .trim()
+        .toUpperCase();
+      if (!sku) continue;
+      qty.set(sku, (qty.get(sku) ?? 0) + (Number(r.quantity) || 0));
+      meta.set(sku, r);
+    }
+    setRows((rs) => {
+      const next = rs.map((r) => {
+        const q = qty.get(r.sku.trim().toUpperCase());
+        qty.delete(r.sku.trim().toUpperCase());
+        return { ...r, quantity: String(q ?? 0) };
+      });
+      for (const [sku, q] of qty) {
+        const m = meta.get(sku);
+        next.push({
+          sku,
+          description: String(m?.description ?? sku),
+          quantity: String(q),
+          uom: String(m?.uom ?? 'Pcs'),
+        });
+      }
+      return next;
+    });
+    setImported(`${data.length} rows imported from ${f.name}`);
+  };
+
   const submit = () => {
     const rowErr: Record<number, string> = {};
     rows.forEach((r, i) => {
       const q = Number(r.quantity);
-      if (q > 0 && avail && q > Math.max(0, avail.get(r.sku) ?? 0))
-        rowErr[i] = `Only ${Math.max(0, avail.get(r.sku) ?? 0)} good units available to release`;
+      const a = Math.max(0, avail?.get(r.sku.trim().toUpperCase()) ?? 0);
+      if (q > 0 && avail && q > a)
+        rowErr[i] = a === 0 ? 'Not in stock on this job' : `Only ${a} good units available to release`;
     });
     const lines = rows
       .filter((r) => Number(r.quantity) > 0)
       .map((r) => ({
-        sku: known.length ? r.sku : r.sku.trim().toUpperCase(),
+        sku: r.sku.trim().toUpperCase(),
         description: r.description.trim() || r.sku,
         quantity: Math.round(Number(r.quantity)),
         uom: r.uom.trim() || 'Pcs',
@@ -791,111 +1402,138 @@ function NewRequestDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
   };
 
   return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="lg"
-      title="New customer request"
-      description="Log the customer’s out / delivery request against this job."
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button busy={create.isPending} onClick={submit}>
-            Log request
-          </Button>
-        </>
-      }
-    >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <TextField
-          label="Deliver to"
-          required
-          placeholder="e.g. Customer store — Dubai Mall"
-          value={deliverTo}
-          onChange={(e) => setDeliverTo(e.target.value)}
-          error={errors.deliverTo}
-          className="sm:col-span-2"
-        />
-        <TextField
-          label="Required by"
-          type="date"
-          required
-          value={requiredBy}
-          onChange={(e) => setRequiredBy(e.target.value)}
-        />
-        <div className="space-y-2 sm:col-span-2">
-          <p className="text-body-s font-medium">Items</p>
-          {rows.map((r, i) => (
-            <div key={i} className="space-y-1">
-              <div className="grid grid-cols-[1fr_2fr_90px_70px] gap-2">
-                <input
-                  aria-label={`Item ${i + 1} SKU`}
-                  placeholder="SKU"
-                  value={r.sku}
-                  readOnly={known.length > 0}
-                  onChange={(e) => set(i, 'sku', e.target.value)}
-                  className={clsx(inputClasses, 'h-10 font-mono read-only:bg-surface-muted')}
-                />
-                <input
-                  aria-label={`Item ${i + 1} description`}
-                  placeholder="Description"
-                  value={r.description}
-                  readOnly={known.length > 0}
-                  onChange={(e) => set(i, 'description', e.target.value)}
-                  className={clsx(inputClasses, 'h-10 read-only:bg-surface-muted')}
-                />
-                <input
-                  type="number"
-                  min={0}
-                  aria-label={`Item ${i + 1} quantity`}
-                  aria-invalid={!!errors.rows[i] || undefined}
-                  value={r.quantity}
-                  onChange={(e) => set(i, 'quantity', e.target.value)}
-                  className={clsx(inputClasses, 'h-10')}
-                />
-                <input
-                  aria-label={`Item ${i + 1} unit`}
-                  value={r.uom}
-                  readOnly={known.length > 0}
-                  onChange={(e) => set(i, 'uom', e.target.value)}
-                  className={clsx(inputClasses, 'h-10 read-only:bg-surface-muted')}
-                />
-              </div>
-              {avail ? (
-                <p
-                  className={clsx(
-                    'text-caption',
-                    errors.rows[i] ? 'font-medium text-danger' : 'text-fg-muted',
-                  )}
-                  role={errors.rows[i] ? 'alert' : undefined}
-                >
-                  {errors.rows[i] ?? `${Math.max(0, avail.get(r.sku) ?? 0)} good units available`}
-                </p>
-              ) : null}
-            </div>
-          ))}
-          {known.length === 0 ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<Plus aria-hidden="true" />}
-              onClick={() =>
-                setRows((rs) => [...rs, { sku: '', description: '', quantity: '1', uom: 'Pcs' }])
-              }
-            >
-              Add item
+    <>
+      <Dialog
+        open
+        onClose={onClose}
+        size="lg"
+        title="New release request"
+        description="The customer’s out-bond / delivery request. Releases can happen many times while goods are stored."
+        footer={
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
             </Button>
-          ) : null}
-          {errors.lines ? (
-            <p role="alert" className="text-caption font-medium text-danger">
-              {errors.lines}
-            </p>
-          ) : null}
+            <Button busy={create.isPending} onClick={submit}>
+              Log request
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField
+            label="Deliver to"
+            required
+            placeholder="e.g. Customer store — Dubai Mall"
+            value={deliverTo}
+            onChange={(e) => setDeliverTo(e.target.value)}
+            error={errors.deliverTo}
+            className="sm:col-span-2"
+          />
+          <TextField
+            label="Required by"
+            type="date"
+            required
+            value={requiredBy}
+            onChange={(e) => setRequiredBy(e.target.value)}
+          />
+          <div className="space-y-2 sm:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-body-s font-medium">Items</p>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<FileSpreadsheet aria-hidden="true" />}
+                onClick={() => setImportOpen(true)}
+              >
+                Import from Excel
+              </Button>
+            </div>
+            {imported ? (
+              <p role="status" className="text-caption text-success">
+                {imported}. Check the quantities against available stock below.
+              </p>
+            ) : null}
+            {rows.map((r, i) => (
+              <div key={i} className="space-y-1">
+                <div className="grid grid-cols-[1fr_2fr_90px_70px] gap-2">
+                  <input
+                    aria-label={`Item ${i + 1} SKU`}
+                    placeholder="SKU"
+                    value={r.sku}
+                    readOnly={known.some((k) => k.sku === r.sku)}
+                    onChange={(e) => set(i, 'sku', e.target.value)}
+                    className={clsx(inputClasses, 'h-10 font-mono read-only:bg-surface-muted')}
+                  />
+                  <input
+                    aria-label={`Item ${i + 1} description`}
+                    placeholder="Description"
+                    value={r.description}
+                    readOnly={known.some((k) => k.sku === r.sku)}
+                    onChange={(e) => set(i, 'description', e.target.value)}
+                    className={clsx(inputClasses, 'h-10 read-only:bg-surface-muted')}
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    aria-label={`Item ${i + 1} quantity`}
+                    aria-invalid={!!errors.rows[i] || undefined}
+                    value={r.quantity}
+                    onChange={(e) => set(i, 'quantity', e.target.value)}
+                    className={clsx(inputClasses, 'h-10')}
+                  />
+                  <input
+                    aria-label={`Item ${i + 1} unit`}
+                    value={r.uom}
+                    readOnly={known.some((k) => k.sku === r.sku)}
+                    onChange={(e) => set(i, 'uom', e.target.value)}
+                    className={clsx(inputClasses, 'h-10 read-only:bg-surface-muted')}
+                  />
+                </div>
+                {avail ? (
+                  <p
+                    className={clsx(
+                      'text-caption',
+                      errors.rows[i] ? 'font-medium text-danger' : 'text-fg-muted',
+                    )}
+                    role={errors.rows[i] ? 'alert' : undefined}
+                  >
+                    {errors.rows[i] ??
+                      `${Math.max(0, avail.get(r.sku.trim().toUpperCase()) ?? 0)} good units available`}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+            {!stocked ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Plus aria-hidden="true" />}
+                onClick={() =>
+                  setRows((rs) => [...rs, { sku: '', description: '', quantity: '1', uom: 'Pcs' }])
+                }
+              >
+                Add item
+              </Button>
+            ) : null}
+            {errors.lines ? (
+              <p role="alert" className="text-caption font-medium text-danger">
+                {errors.lines}
+              </p>
+            ) : null}
+          </div>
         </div>
-      </div>
-    </Dialog>
+      </Dialog>
+      <SpreadsheetImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import release request"
+        fields={REQUEST_FIELDS}
+        templateKey={`REQ:${wo.customerId}`}
+        partyName={wo.customerName}
+        onImport={applyImport}
+      />
+    </>
   );
 }
 
@@ -971,13 +1609,15 @@ function PodUploadDialog({
   onClose: () => void;
 }) {
   const { run, pending } = useRun();
-  const [file, setFile] = useState<File>();
+  const [file, setFile] = useState<{ name: string; sizeKb: number }>();
   const [number, setNumber] = useState('');
   const [date, setDate] = useState(PROTO_TODAY);
   const [receivedBy, setReceivedBy] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
+  const [imported, setImported] = useState<string>();
   const [vendorId, setVendorId] = useState(wo.assignments[0]?.vendorId ?? '');
   const [rows, setRows] = useState(
-    req.lines.map((l) => ({ sku: l.sku, delivered: String(l.quantity), remarks: '' })),
+    req.lines.map((l) => ({ sku: l.sku, requested: l.quantity, delivered: String(l.quantity), remarks: '' })),
   );
   const [errors, setErrors] = useState<{
     file?: string;
@@ -990,6 +1630,31 @@ function PodUploadDialog({
   const vendorOptions = [
     ...new Map(wo.assignments.map((a) => [a.vendorId, { value: a.vendorId, label: a.vendorName }])).values(),
   ];
+  const vendorName = vendorOptions.find((v) => v.value === vendorId)?.label;
+
+  const applyImport = (data: ImportedRow[], f: { name: string; sizeKb: number }) => {
+    const by = new Map<string, { qty: number; remarks: string }>();
+    for (const r of data) {
+      const sku = String(r.sku ?? '')
+        .trim()
+        .toUpperCase();
+      if (!sku) continue;
+      const prev = by.get(sku);
+      by.set(sku, {
+        qty: (prev?.qty ?? 0) + (Number(r.deliveredQty) || 0),
+        remarks: [prev?.remarks, r.remarks ? String(r.remarks) : ''].filter(Boolean).join('; '),
+      });
+    }
+    const next = req.lines.map((l) => {
+      const p = by.get(l.sku);
+      by.delete(l.sku);
+      return { sku: l.sku, requested: l.quantity, delivered: String(p?.qty ?? 0), remarks: p?.remarks ?? '' };
+    });
+    for (const [sku, p] of by) next.push({ sku, requested: 0, delivered: String(p.qty), remarks: p.remarks });
+    setRows(next);
+    setImported(`${data.length} rows imported from ${f.name}`);
+    if (!file) setFile(f);
+  };
 
   const submit = () => {
     const e: typeof errors = {};
@@ -1009,7 +1674,7 @@ function PodUploadDialog({
           vendorId: vendorId || undefined,
           deliveredAt: `${date}T12:00:00+04:00`,
           receivedBy: receivedBy.trim(),
-          attachment: toAttachment(file!),
+          attachment: asAttachment(file!),
           lines: rows.map((r) => ({
             sku: r.sku,
             deliveredQty: Math.round(Number(r.delivered) || 0),
@@ -1023,110 +1688,147 @@ function PodUploadDialog({
   };
 
   return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="lg"
-      title={`Upload POD for ${req.number}`}
-      description="Enter what was actually delivered, as signed on the proof of delivery."
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button busy={pending} icon={<Upload aria-hidden="true" />} onClick={submit}>
-            Upload POD
-          </Button>
-        </>
-      }
-    >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FileField label="Signed POD document" file={file} onFile={setFile} error={errors.file} />
-        <TextField
-          label="POD number"
-          required
-          placeholder="e.g. POD-88130"
-          value={number}
-          onChange={(e) => setNumber(e.target.value)}
-          error={errors.number}
-        />
-        <TextField
-          label="Delivered on"
-          type="date"
-          required
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-        />
-        <TextField
-          label="Received by"
-          required
-          placeholder="Name / role of the signatory"
-          value={receivedBy}
-          onChange={(e) => setReceivedBy(e.target.value)}
-          error={errors.receivedBy}
-        />
-        {vendorOptions.length ? (
-          <SelectField
-            label="Delivered by"
-            options={vendorOptions}
-            value={vendorId}
-            onChange={(e) => setVendorId(e.target.value)}
+    <>
+      <Dialog
+        open
+        onClose={onClose}
+        size="lg"
+        title={`Upload POD for ${req.number}`}
+        description="Enter what was actually delivered, as signed on the proof of delivery."
+        footer={
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button busy={pending} icon={<Upload aria-hidden="true" />} onClick={submit}>
+              Upload POD
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <FileField
+            label="POD document"
+            file={file}
+            onFile={(f) => setFile(f ? fileMeta(f) : undefined)}
+            error={errors.file}
           />
-        ) : null}
-        <div className="overflow-x-auto sm:col-span-2">
-          <table className="w-full min-w-[480px] text-left text-body-s">
-            <caption className="sr-only">Delivered quantities per item</caption>
-            <thead>
-              <tr className="text-caption uppercase tracking-wide text-fg-muted">
-                <th scope="col" className="pb-2 font-medium">
-                  SKU
-                </th>
-                <th scope="col" className="pb-2 text-right font-medium">
-                  Requested
-                </th>
-                <th scope="col" className="w-28 pb-2 pl-2 font-medium">
-                  Delivered
-                </th>
-                <th scope="col" className="pb-2 pl-2 font-medium">
-                  Remarks
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={r.sku}>
-                  <td className="py-1 font-mono text-[13px]">{r.sku}</td>
-                  <td className="py-1 text-right tabular-nums">{req.lines[i]!.quantity}</td>
-                  <td className="py-1 pl-2">
-                    <input
-                      type="number"
-                      min={0}
-                      aria-label={`${r.sku} delivered quantity`}
-                      value={r.delivered}
-                      onChange={(e) => set(i, 'delivered', e.target.value)}
-                      className={clsx(inputClasses, 'h-9')}
-                    />
-                  </td>
-                  <td className="py-1 pl-2">
-                    <input
-                      aria-label={`${r.sku} remarks`}
-                      value={r.remarks}
-                      onChange={(e) => set(i, 'remarks', e.target.value)}
-                      className={clsx(inputClasses, 'h-9')}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {errors.rows ? (
-            <p role="alert" className="mt-2 text-caption font-medium text-danger">
-              {errors.rows}
+          <TextField
+            label="POD number"
+            required
+            placeholder="e.g. POD-88130"
+            value={number}
+            onChange={(e) => setNumber(e.target.value)}
+            error={errors.number}
+          />
+          <TextField
+            label="Delivered on"
+            type="date"
+            required
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+          <TextField
+            label="Received by"
+            required
+            placeholder="Name / role of the signatory"
+            value={receivedBy}
+            onChange={(e) => setReceivedBy(e.target.value)}
+            error={errors.receivedBy}
+          />
+          {vendorOptions.length ? (
+            <SelectField
+              label="Delivered by"
+              options={vendorOptions}
+              value={vendorId}
+              onChange={(e) => setVendorId(e.target.value)}
+            />
+          ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:col-span-2">
+            <p className="text-body-s font-medium">Delivered quantities</p>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<FileSpreadsheet aria-hidden="true" />}
+              onClick={() => setImportOpen(true)}
+            >
+              Import POD from Excel
+            </Button>
+          </div>
+          {imported ? (
+            <p role="status" className="text-caption text-success sm:col-span-2">
+              {imported}. Lines not in the file are set to 0 delivered.
             </p>
           ) : null}
+          <div
+            className="overflow-x-auto sm:col-span-2"
+            tabIndex={0}
+            role="region"
+            aria-label="Delivered quantities per item"
+          >
+            <table className="w-full min-w-[480px] text-left text-body-s">
+              <caption className="sr-only">Delivered quantities per item</caption>
+              <thead>
+                <tr className="text-caption uppercase tracking-wide text-fg-muted">
+                  <th scope="col" className="pb-2 font-medium">
+                    SKU
+                  </th>
+                  <th scope="col" className="pb-2 text-right font-medium">
+                    Requested
+                  </th>
+                  <th scope="col" className="w-28 pb-2 pl-2 font-medium">
+                    Delivered
+                  </th>
+                  <th scope="col" className="pb-2 pl-2 font-medium">
+                    Remarks
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r.sku}>
+                    <td className="py-1 font-mono text-[13px]">{r.sku}</td>
+                    <td className="py-1 text-right tabular-nums">{r.requested}</td>
+                    <td className="py-1 pl-2">
+                      <input
+                        type="number"
+                        min={0}
+                        aria-label={`${r.sku} delivered quantity`}
+                        value={r.delivered}
+                        onChange={(e) => set(i, 'delivered', e.target.value)}
+                        className={clsx(inputClasses, 'h-9')}
+                      />
+                    </td>
+                    <td className="py-1 pl-2">
+                      <input
+                        aria-label={`${r.sku} remarks`}
+                        value={r.remarks}
+                        onChange={(e) => set(i, 'remarks', e.target.value)}
+                        className={clsx(inputClasses, 'h-9')}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {errors.rows ? (
+              <p role="alert" className="mt-2 text-caption font-medium text-danger">
+                {errors.rows}
+              </p>
+            ) : null}
+          </div>
         </div>
-      </div>
-    </Dialog>
+      </Dialog>
+      <SpreadsheetImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import POD"
+        fields={POD_FIELDS}
+        templateKey={`POD:${vendorId || 'unknown'}`}
+        partyName={vendorName}
+        onImport={applyImport}
+      />
+    </>
   );
 }
 
@@ -1134,41 +1836,177 @@ function PodUploadDialog({
 // Purchase invoices drafted at completion
 // ---------------------------------------------------------------------------------------------
 
-export function PurchaseInvoicesCard({ wo }: { wo: WorkOrderDetail }) {
+/** Vendor purchase orders (issued at assignment) and the vendor invoices recorded against them. */
+export function PurchasingCard({ wo }: { wo: WorkOrderDetail }) {
   return (
     <Card>
-      <CardHeader title="Purchase invoices" description="Vendor bills for this job." />
+      <CardHeader
+        title="Purchase orders"
+        description="Issued to vendors at assignment; vendor invoices are matched to them."
+      />
       <CardBody>
-        {wo.purchaseInvoices.length === 0 ? (
+        {wo.purchaseOrders.length === 0 ? (
           <p className="text-body-s text-fg-muted">
-            {wo.status === 'Completed'
-              ? 'No vendor to bill on this job.'
-              : 'Drafted automatically for each assigned vendor when you mark the job completed.'}
+            No purchase order yet. Assigning a vendor issues a PO before the work starts.
           </p>
         ) : (
           <ul className="space-y-2">
-            {wo.purchaseInvoices.map((b) => (
-              <li key={b.id}>
-                <Link
-                  to="/vendor-bills/$id"
-                  params={{ id: b.id }}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle px-3 py-2.5 hover:bg-canvas"
-                >
-                  <span className="min-w-0">
-                    <DocRef>{b.number}</DocRef>
-                    <span className="block truncate text-caption text-fg-muted">{b.vendorName}</span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <Money amount={b.amount + b.vat} className="text-body-s font-medium" />
-                    <StatusBadge status={b.status} />
-                    <ChevronRight aria-hidden="true" className="size-4 text-fg-muted" />
-                  </span>
-                </Link>
-              </li>
-            ))}
+            {wo.purchaseOrders.map((po) => {
+              const bill = po.vendorBillId
+                ? wo.purchaseInvoices.find((b) => b.id === po.vendorBillId)
+                : undefined;
+              return (
+                <li key={po.id} className="rounded-lg border border-border-subtle">
+                  <Link
+                    to="/purchase-orders/$id"
+                    params={{ id: po.id }}
+                    className="flex items-center justify-between gap-3 rounded-t-lg px-3 py-2.5 hover:bg-canvas"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <DocRef>{po.number}</DocRef>
+                        <StatusBadge status={po.status} />
+                      </span>
+                      <span className="mt-0.5 block text-caption text-fg-muted">
+                        {po.vendorName} · {po.serviceName}
+                      </span>
+                      <Money amount={po.amount} className="mt-0.5 block text-body-s font-medium" />
+                    </span>
+                    <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
+                  </Link>
+                  <div className="flex items-center justify-between gap-2 border-t border-border-subtle px-3 py-2 text-caption">
+                    {bill ? (
+                      <Link
+                        to="/vendor-bills/$id"
+                        params={{ id: bill.id }}
+                        className="text-fg-secondary hover:text-brand"
+                      >
+                        Vendor invoice <span className="font-mono font-medium text-brand">{bill.number}</span>
+                      </Link>
+                    ) : po.status === 'Cancelled' ? (
+                      <span className="text-fg-muted">Cancelled</span>
+                    ) : po.status === 'Completed' || po.status === 'Accepted' ? (
+                      <Link
+                        to="/vendor-bills/new"
+                        search={{ purchaseOrderId: po.id }}
+                        className="font-medium text-brand hover:underline"
+                      >
+                        Record vendor invoice
+                      </Link>
+                    ) : (
+                      <span className="text-fg-muted">Awaiting vendor acceptance</span>
+                    )}
+                    {bill ? <StatusBadge status={bill.status} /> : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </CardBody>
     </Card>
+  );
+}
+
+/** Aenix's own Goods Receipt Note to the customer — owner's AEN061 layout. */
+function CustomerGrnDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound; onClose: () => void }) {
+  const company = useProtoDb((db) => db.company);
+  const grn = ib.grn!;
+  const lines = grn.lines
+    .map((g) => {
+      const pl = ib.packingList.lines.find((l) => l.sku === g.sku);
+      return {
+        batch: g.batch ?? pl?.batch ?? ib.reference,
+        barcode: pl?.barcode ?? g.sku,
+        description: pl?.description ?? g.sku,
+        qty: g.receivedQty - g.damagedQty,
+        cbm: g.cbm ?? pl?.cbm,
+      };
+    })
+    .filter((l) => l.qty > 0);
+  const totalQty = lines.reduce((s, l) => s + l.qty, 0);
+  const totalCbm = Math.round(lines.reduce((s, l) => s + (l.cbm ?? 0), 0) * 10000) / 10000;
+  const cell = 'border border-[#1a1a1a] px-2 py-1';
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      size="lg"
+      title={`Customer GRN ${grn.customerGrnNumber ?? ''}`}
+      description="Preview of the document sent to the customer. The PDF and stamp come from the AENIX backend."
+    >
+      <article aria-label="Goods receipt note" className="bg-white px-6 py-5 text-[12px] text-[#1a1a1a]">
+        <p className="text-caption">{company.website}</p>
+        <div aria-hidden="true" className="mt-2 h-2 bg-[#9a2119]" />
+        <header className="flex flex-wrap items-start justify-between gap-4 pt-5">
+          <div>
+            <Logo height={40} />
+            <p className="mt-1 text-[10px] font-semibold">{company.tagline}</p>
+          </div>
+          <div className="max-w-xs text-[11px] leading-[1.35]">
+            <p className="text-[13px] font-semibold text-[#9a2119]">{company.legalName}</p>
+            {company.registeredAddress.map((l) => (
+              <p key={l}>{l}</p>
+            ))}
+            <p>{company.phone}</p>
+          </div>
+        </header>
+        <div className="mt-8 flex flex-wrap justify-between gap-4">
+          <div>
+            <p className="font-semibold">To</p>
+            <p className="font-semibold">{wo.customerName}</p>
+          </div>
+          <dl className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 text-right">
+            <dt className="font-semibold">GRN No:</dt>
+            <dd>{grn.customerGrnNumber}</dd>
+            <dt className="font-semibold">Inbound Date:</dt>
+            <dd>{formatDate(grn.receivedAt)}</dd>
+            <dt className="font-semibold">Location:</dt>
+            <dd>{ib.location ?? wo.origin}</dd>
+            {ib.containerNo ? (
+              <>
+                <dt className="font-semibold">Container:</dt>
+                <dd>{ib.containerNo}</dd>
+              </>
+            ) : null}
+          </dl>
+        </div>
+        <h3 className="my-4 text-center font-semibold text-[#9a2119] underline">Goods Receipt Note</h3>
+        <div className="overflow-x-auto" role="region" aria-label="GRN lines" tabIndex={0}>
+          <table className="w-full min-w-[560px] border-collapse">
+            <thead>
+              <tr>
+                {['Batch No', 'Barcode', 'Description', 'Qty Box', 'Volume (CBM)'].map((h) => (
+                  <th key={h} scope="col" className={`${cell} text-center font-semibold`}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.barcode}>
+                  <td className={cell}>{l.batch}</td>
+                  <td className={cell}>{l.barcode}</td>
+                  <td className={cell}>{l.description}</td>
+                  <td className={`${cell} text-center tabular-nums`}>{l.qty}</td>
+                  <td className={`${cell} text-center tabular-nums`}>{l.cbm ?? '—'}</td>
+                </tr>
+              ))}
+              <tr>
+                <td className={`${cell} text-center font-semibold`} colSpan={3}>
+                  Total CBM
+                </td>
+                <td className={`${cell} text-center font-semibold tabular-nums`}>{totalQty}</td>
+                <td className={`${cell} text-center font-semibold tabular-nums`}>{totalCbm || '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-10 text-center text-[11px]">
+          This is a system-generated document and does not require a signature.
+        </p>
+      </article>
+    </Dialog>
   );
 }

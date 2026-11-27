@@ -1,3 +1,4 @@
+import type { StorageBasis } from '@/domain/types';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { CalendarPlus, Receipt } from 'lucide-react';
 import { useState } from 'react';
@@ -15,6 +16,7 @@ import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatMoney, formatNumber } from '@/shared/utils/format';
 import {
+  basisUom,
   daysInMonth,
   monthLabel,
   storageBillingApi,
@@ -59,7 +61,17 @@ export function StorageBillingPage() {
         </div>
       ),
     },
-    { key: 'pd', header: 'Pallet-days', align: 'right', cell: (r) => formatNumber(r.palletDays) },
+    {
+      key: 'pd',
+      header: 'Quantity',
+      align: 'right',
+      cell: (r) => (
+        <span className="whitespace-nowrap">
+          {formatNumber(r.palletDays)}{' '}
+          <span className="text-caption text-fg-muted">{basisUom[r.basis ?? 'Pallet-day']}</span>
+        </span>
+      ),
+    },
     {
       key: 'rate',
       header: 'Rate',
@@ -122,7 +134,7 @@ export function StorageBillingPage() {
     <div>
       <PageHeader
         title="Storage billing"
-        description="Monthly pallet-day charges for customer stock at JAFZA WH-1 — billed separately from transport jobs."
+        description="Periodic storage charges — by floor area (sq.ft), pallet-days or CBM-days — billed separately from transport jobs."
         actions={
           <Button icon={<CalendarPlus aria-hidden="true" />} onClick={() => setGenerateOpen(true)}>
             Generate run
@@ -164,7 +176,7 @@ export function StorageBillingPage() {
         open={generateOpen}
         onClose={() => setGenerateOpen(false)}
         title="Generate storage run"
-        description="One run per customer per month. Pallet-days are suggested from current stock and can be edited."
+        description="One run per customer per month. Choose how storage is charged; pallet-days are suggested from current stock."
       >
         {generateOpen ? <GenerateRunForm onDone={() => setGenerateOpen(false)} /> : null}
       </Dialog>
@@ -180,12 +192,16 @@ function GenerateRunForm({ onDone }: { onDone: () => void }) {
   const [month, setMonth] = useState('2026-11');
   const [rate, setRate] = useState('3.5');
   const [palletDays, setPalletDays] = useState('');
+  const [basis, setBasis] = useState<StorageBasis>('Pallet-day');
+  const unit = basisUom[basis];
   const [errors, setErrors] = useState<Record<string, string>>({});
   const suggested =
     customerId && /^\d{4}-\d{2}$/.test(month)
       ? storageBillingApi.suggestPalletDays(customerId, month)
       : undefined;
-  const effectivePd = palletDays === '' ? (suggested ?? 0) : Number(palletDays);
+  // Only pallet-days can be suggested from stock; area and CBM are entered.
+  const effectivePd =
+    palletDays === '' ? (basis === 'Pallet-day' ? (suggested ?? 0) : 0) : Number(palletDays);
   const amount = effectivePd * (Number(rate) || 0);
 
   const submit = () => {
@@ -193,11 +209,17 @@ function GenerateRunForm({ onDone }: { onDone: () => void }) {
     if (!customerId) e.customerId = 'Choose a customer';
     if (!/^\d{4}-\d{2}$/.test(month)) e.month = 'Choose a month';
     if (!(Number(rate) > 0)) e.rate = 'Enter a rate above 0';
-    if (!(effectivePd > 0)) e.palletDays = 'Pallet-days must be above 0 — this customer has no stock';
+    if (!(effectivePd > 0)) e.palletDays = `Enter the ${unit.toLowerCase()} quantity (above 0)`;
     setErrors(e);
     if (Object.keys(e).length) return;
     generate.mutate(
-      { customerId, month, ratePerPalletDay: Number(rate), palletDays: Math.round(effectivePd) },
+      {
+        customerId,
+        month,
+        basis,
+        ratePerPalletDay: Number(rate),
+        palletDays: Math.round(effectivePd * 100) / 100,
+      },
       {
         onSuccess: (run) => {
           toast({ title: `${run.number} generated`, body: 'Create the invoice when the period is closed.' });
@@ -234,8 +256,22 @@ function GenerateRunForm({ onDone }: { onDone: () => void }) {
             setPalletDays('');
           }}
         />
+        <SelectField
+          label="Charging basis"
+          required
+          options={(['Sq.ft per period', 'Pallet-day', 'CBM-day'] as StorageBasis[]).map((b) => ({
+            value: b,
+            label: b,
+          }))}
+          value={basis}
+          hint={basis === 'Sq.ft per period' ? 'Dry storage by floor area for the whole period' : undefined}
+          onChange={(e) => {
+            setBasis(e.target.value as StorageBasis);
+            setPalletDays('');
+          }}
+        />
         <TextField
-          label="Rate per pallet-day (AED)"
+          label={`Rate per ${unit.toLowerCase()} (AED)`}
           type="number"
           step="0.01"
           required
@@ -245,14 +281,20 @@ function GenerateRunForm({ onDone }: { onDone: () => void }) {
         />
       </div>
       <TextField
-        label="Pallet-days"
+        label={
+          basis === 'Sq.ft per period' ? 'Area (sq.ft)' : basis === 'CBM-day' ? 'CBM-days' : 'Pallet-days'
+        }
         type="number"
         required
         value={palletDays}
-        placeholder={suggested !== undefined ? String(suggested) : 'Choose a customer first'}
+        placeholder={
+          basis === 'Pallet-day' && suggested !== undefined
+            ? String(suggested)
+            : `e.g. ${basis === 'Sq.ft per period' ? '2600' : '120'}`
+        }
         error={errors.palletDays}
         hint={
-          suggested !== undefined
+          basis === 'Pallet-day' && suggested !== undefined
             ? `Suggested ${formatNumber(suggested)} from current pallets × days. Leave empty to use it.`
             : undefined
         }

@@ -23,11 +23,15 @@ import type {
   VendorRate,
   WorkOrder,
   WorkOrderStatus,
+  LedgerAccount,
+  PurchaseOrder,
+  VendorPayment,
   Milestone,
   SalesOrder,
+  CompanyProfile,
   ServiceCategory,
 } from '@/domain/types';
-import { milestoneLabels } from '@/domain/workflow';
+import { categoriesFromLines, milestoneLabels, primaryCategory } from '@/domain/workflow';
 import { invoiceTotals } from '@/domain/calc';
 
 /** Fixed "today" so the prototype looks the same for every reviewer. */
@@ -73,6 +77,7 @@ function c(
     city,
     country,
     trnMasked: `1000•••••••${String(100 + n * 7).slice(-3)}`,
+    postalAddress: `P.O. Box ${30000 + n * 1117}, ${city}, ${country}`,
     contactName,
     contactEmail: `${contactName.split(' ').slice(-1)[0]!.toLowerCase()}@${slug}.example`,
     contactPhone: `+971 5• ••• ${String(1000 + n * 37).slice(-4)}`,
@@ -80,6 +85,7 @@ function c(
     paymentTermsDays,
     status,
     createdAt: `2026-0${(n % 9) + 1}-1${n % 9}`,
+    ledgerAccountId: `la-cus-${n}`,
   };
 }
 
@@ -115,6 +121,7 @@ function v(
     rating,
     paymentTermsDays: 30,
     status: 'Active',
+    ledgerAccountId: `la-ven-${n}`,
   };
 }
 
@@ -129,6 +136,8 @@ export const services: Service[] = [
   s(8, 'Handling in / out', 'Warehouse', 'Pallet', 'Receiving, put-away and dispatch handling'),
   s(9, 'Last-mile delivery', 'Road', 'Drop', 'Urban delivery within emirate'),
   s(10, 'Cargo insurance', 'Customs', 'Shipment', 'All-risk cover on declared value'),
+  s(11, 'Dry storage', 'Warehouse', 'Sq.ft', 'Dry storage charged by floor area per period'),
+  s(12, '3 Ton forklift / handling', 'Warehouse', 'Hour', 'Forklift and labour charged by the hour'),
 ];
 
 function s(n: number, name: string, mode: Service['mode'], unit: string, description: string): Service {
@@ -148,6 +157,8 @@ export const vendorRates: VendorRate[] = [
   r(10, 'ven-7', 'svc-7', 'JAFZA', 'JAFZA', 'Pallet-day', 2.2),
   r(11, 'ven-7', 'svc-8', 'JAFZA', 'JAFZA', 'Pallet', 12),
   r(12, 'ven-2', 'svc-9', 'Dubai', 'Dubai', 'Drop', 85),
+  r(13, 'ven-7', 'svc-11', 'JAFZA', 'JAFZA', 'Sq.ft', 4.2),
+  r(14, 'ven-7', 'svc-12', 'JAFZA', 'JAFZA', 'Hour', 75),
 ];
 
 function r(
@@ -511,6 +522,7 @@ for (const f of flows) {
     number: `ENQ-${f.n}`,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     mode: lane.mode,
     serviceIds: [...new Set(lane.lines().map((l) => l.serviceId))],
     origin: lane.origin,
@@ -532,6 +544,7 @@ for (const f of flows) {
     enquiryId,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     mode: lane.mode,
     origin: lane.origin,
     destination: lane.destination,
@@ -554,6 +567,7 @@ for (const f of flows) {
     number: `SO-${soSeq}`,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     mode: lane.mode,
     enquiryId,
     quotationId,
@@ -572,6 +586,7 @@ for (const f of flows) {
     number: `JOB-${woSeq}`,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     salesOrderId: soId,
     source: { type: 'Sales order', refId: soId },
     mode: lane.mode,
@@ -590,6 +605,7 @@ for (const f of flows) {
     })),
     lines: woLines,
     hasWarehouse: !!f.wo.warehouse,
+    inbounds: [],
     customerRequests: [],
     createdAt: dt(f.day + 1),
     eta: ['Completed', 'Delivered'].includes(f.wo.status)
@@ -603,13 +619,16 @@ for (const f of flows) {
     wo.invoiceId = invId;
     const inv: Invoice = {
       id: invId,
-      number: `INV-${invSeq}`,
+      number: `AEN0${String(invSeq).slice(-2)}`,
       customerId: wo.customerId,
       workOrderId: woId,
+      salesOrderIds: [soId],
       issueDate: d(Math.min(f.day + 2, 23)),
       dueDate: f.inv.status === 'Overdue' ? d(15) : addDays(d(Math.min(f.day + 2, 23)), 30),
       lines: woLines.map((l) => ({
         id: `${l.id}-inv`,
+        salesOrderId: soId,
+        uom: l.unit,
         description: l.description,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
@@ -638,10 +657,12 @@ workOrders.push({
   status: 'Draft',
   priority: 'High',
   serviceCategory: 'Transport',
+  serviceCategories: ['Transport'],
   milestones: milestones('Road', 'Draft', 23),
   vendorAssignments: [],
   lines: [line('svc-1', 'FTL JAFZA → Dubai Silicon Oasis', 1, 'Truck', 1100, 700)],
   hasWarehouse: true,
+  inbounds: [],
   customerRequests: [],
   createdAt: dt(23, 10),
   eta: d(26),
@@ -662,6 +683,7 @@ enquiries.push(
     number: 'ENQ-1085',
     customerId: 'cus-5',
     serviceCategory: 'Warehouse',
+    serviceCategories: ['Warehouse'],
     serviceIds: ['svc-7', 'svc-8'],
     origin: 'JAFZA WH-1',
     destination: '',
@@ -677,6 +699,7 @@ enquiries.push(
     number: 'ENQ-1086',
     customerId: 'cus-6',
     serviceCategory: 'Service',
+    serviceCategories: ['Service'],
     serviceIds: ['svc-6'],
     origin: 'Jebel Ali Port',
     destination: '',
@@ -695,6 +718,7 @@ salesOrders.push({
   number: 'SO-5110',
   customerId: 'cus-3',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   customerPoRef: 'HRG-PO-77812',
   orderDate: d(15),
   origin: 'JAFZA WH-1',
@@ -713,6 +737,7 @@ workOrders.push({
   number: 'JOB-2052',
   customerId: 'cus-3',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   salesOrderId: 'so-5110',
   source: { type: 'Sales order', refId: 'so-5110' },
   origin: 'JAFZA WH-1',
@@ -731,29 +756,55 @@ workOrders.push({
     line('svc-8', 'Handling out', 18, 'Pallet', 18, 12),
   ],
   hasWarehouse: true,
-  packingList: {
-    number: 'PL-2052',
-    status: 'Sent to warehouse',
-    sentAt: dt(16, 10),
-    lines: [
-      { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 160, uom: 'Pcs' },
-      { sku: 'HRG-COAT-L', description: 'Winter coats — L', quantity: 140, uom: 'Pcs' },
-      { sku: 'HRG-SCRF-01', description: 'Wool scarves', quantity: 220, uom: 'Pcs' },
-      { sku: 'HRG-BOOT-42', description: 'Boots size 42', quantity: 120, uom: 'Pairs' },
-    ],
-  },
-  grn: {
-    number: 'GRN-5530',
-    receivedAt: dt(18, 14),
-    attachment: att('GRN-5530_signed.pdf', 18, 15, 'Thomas Reid'),
-    lines: [
-      { sku: 'HRG-COAT-M', receivedQty: 160, damagedQty: 0 },
-      { sku: 'HRG-COAT-L', receivedQty: 132, damagedQty: 0, remarks: '8 pcs missing from carton 14' },
-      { sku: 'HRG-SCRF-01', receivedQty: 220, damagedQty: 6, remarks: 'Water damage on 6 pcs' },
-      { sku: 'HRG-BOOT-42', receivedQty: 120, damagedQty: 0 },
-    ],
-    status: 'Variance raised',
-  },
+  inbounds: [
+    {
+      id: 'ib-2052-1',
+      number: 'IN-2052-01',
+      reference: 'ASN / container — first consignment',
+      expectedAt: d(16),
+      packingList: {
+        number: 'PL-2052',
+        status: 'Sent to warehouse',
+        sentAt: dt(16, 10),
+        lines: [
+          { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 160, uom: 'Pcs' },
+          { sku: 'HRG-COAT-L', description: 'Winter coats — L', quantity: 140, uom: 'Pcs' },
+          { sku: 'HRG-SCRF-01', description: 'Wool scarves', quantity: 220, uom: 'Pcs' },
+          { sku: 'HRG-BOOT-42', description: 'Boots size 42', quantity: 120, uom: 'Pairs' },
+        ],
+      },
+      grn: {
+        number: 'GRN-5530',
+        receivedAt: dt(18, 14),
+        attachment: att('GRN-5530_signed.pdf', 18, 15, 'Thomas Reid'),
+        lines: [
+          { sku: 'HRG-COAT-M', receivedQty: 160, damagedQty: 0 },
+          { sku: 'HRG-COAT-L', receivedQty: 132, damagedQty: 0, remarks: '8 pcs missing from carton 14' },
+          { sku: 'HRG-SCRF-01', receivedQty: 220, damagedQty: 6, remarks: 'Water damage on 6 pcs' },
+          { sku: 'HRG-BOOT-42', receivedQty: 120, damagedQty: 0 },
+        ],
+        status: 'Variance raised',
+      },
+    },
+    {
+      id: 'ib-2052-2',
+      number: 'IN-2052-02',
+      reference: 'Container TGHU 551023-7 — second consignment',
+      expectedAt: d(28),
+      packingList: {
+        number: 'PL-2052-02',
+        status: 'Sent to warehouse',
+        sentAt: dt(23, 11),
+        source: 'Customer portal',
+        attachment: att('Horizon_ASN_Nov-W4.xlsx', 23, 11, 'Customer portal — Daniel Brooks', 34),
+        lines: [
+          { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 80, uom: 'Pcs' },
+          { sku: 'HRG-GLOV-01', description: 'Leather gloves', quantity: 300, uom: 'Pairs' },
+          { sku: 'HRG-BOOT-42', description: 'Boots size 42', quantity: 60, uom: 'Pairs' },
+        ],
+      },
+    },
+  ],
   customerRequests: [
     {
       id: 'cr-0301',
@@ -779,6 +830,7 @@ salesOrders.push({
   number: 'SO-5111',
   customerId: 'cus-7',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   customerPoRef: 'SKE-4471',
   orderDate: d(9),
   origin: 'JAFZA WH-1',
@@ -796,6 +848,7 @@ workOrders.push({
   number: 'JOB-2053',
   customerId: 'cus-7',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   salesOrderId: 'so-5111',
   source: { type: 'Sales order', refId: 'so-5111' },
   origin: 'JAFZA WH-1',
@@ -813,25 +866,33 @@ workOrders.push({
     line('svc-9', 'Last-mile delivery', 4, 'Drop', 120, 85),
   ],
   hasWarehouse: true,
-  packingList: {
-    number: 'PL-2053',
-    status: 'Sent to warehouse',
-    sentAt: dt(9, 11),
-    lines: [
-      { sku: 'SKE-MON-24', description: 'Monitors 24"', quantity: 120, uom: 'Unit' },
-      { sku: 'SKE-DOCK-01', description: 'Docking stations', quantity: 180, uom: 'Unit' },
-    ],
-  },
-  grn: {
-    number: 'GRN-5524',
-    receivedAt: dt(10, 12),
-    attachment: att('GRN-5524.pdf', 10, 13, 'Thomas Reid', 180),
-    lines: [
-      { sku: 'SKE-MON-24', receivedQty: 120, damagedQty: 0 },
-      { sku: 'SKE-DOCK-01', receivedQty: 180, damagedQty: 0 },
-    ],
-    status: 'Verified',
-  },
+  inbounds: [
+    {
+      id: 'ib-2053-1',
+      number: 'IN-2053-01',
+      reference: 'ASN / container — first consignment',
+      expectedAt: d(10),
+      packingList: {
+        number: 'PL-2053',
+        status: 'Sent to warehouse',
+        sentAt: dt(9, 11),
+        lines: [
+          { sku: 'SKE-MON-24', description: 'Monitors 24"', quantity: 120, uom: 'Unit' },
+          { sku: 'SKE-DOCK-01', description: 'Docking stations', quantity: 180, uom: 'Unit' },
+        ],
+      },
+      grn: {
+        number: 'GRN-5524',
+        receivedAt: dt(10, 12),
+        attachment: att('GRN-5524.pdf', 10, 13, 'Thomas Reid', 180),
+        lines: [
+          { sku: 'SKE-MON-24', receivedQty: 120, damagedQty: 0 },
+          { sku: 'SKE-DOCK-01', receivedQty: 180, damagedQty: 0 },
+        ],
+        status: 'Verified',
+      },
+    },
+  ],
   customerRequests: [
     {
       id: 'cr-0297',
@@ -887,6 +948,7 @@ salesOrders.push({
   number: 'SO-5112',
   customerId: 'cus-4',
   serviceCategory: 'Service',
+  serviceCategories: ['Service'],
   customerPoRef: 'CMS-PO-2290',
   orderDate: d(19),
   origin: 'DXB Cargo Village',
@@ -901,6 +963,7 @@ workOrders.push({
   number: 'JOB-2054',
   customerId: 'cus-4',
   serviceCategory: 'Service',
+  serviceCategories: ['Service'],
   salesOrderId: 'so-5112',
   source: { type: 'Sales order', refId: 'so-5112' },
   origin: 'DXB Cargo Village',
@@ -914,6 +977,7 @@ workOrders.push({
   ],
   lines: [line('svc-6', 'Import customs clearance — medical devices', 1, 'Declaration', 650, 350)],
   hasWarehouse: false,
+  inbounds: [],
   customerRequests: [],
   purchaseInvoiceIds: ['bill-2054-0'],
   completedAt: dt(21, 12),
@@ -1148,6 +1212,17 @@ export const storageRuns: StorageBillingRun[] = [
     status: 'Draft',
   },
   {
+    id: 'sbr-5',
+    number: 'SBR-2026-11-06',
+    customerId: 'cus-6',
+    periodFrom: '2026-11-01',
+    periodTo: '2026-11-30',
+    basis: 'Sq.ft per period',
+    palletDays: 2600,
+    ratePerPalletDay: 5.5,
+    status: 'Draft',
+  },
+  {
     id: 'sbr-4',
     number: 'SBR-2026-11-07',
     customerId: 'cus-7',
@@ -1162,7 +1237,7 @@ export const storageRuns: StorageBillingRun[] = [
 invoices.push(
   {
     id: 'inv-3021',
-    number: 'INV-3021',
+    number: 'AEN021',
     customerId: 'cus-3',
     storageRunId: 'sbr-1',
     issueDate: '2026-11-01',
@@ -1170,7 +1245,8 @@ invoices.push(
     lines: [
       {
         id: 'il-s1',
-        description: 'Storage Oct 2026 — 1,426 pallet-days',
+        uom: 'Pallet-day',
+        description: 'Storage (1-Oct-26 to 31-Oct-26) — pallet-days',
         quantity: 1426,
         unitPrice: 3.5,
         vatRate: 0.05,
@@ -1181,7 +1257,7 @@ invoices.push(
   },
   {
     id: 'inv-3020',
-    number: 'INV-3020',
+    number: 'AEN020',
     customerId: 'cus-6',
     storageRunId: 'sbr-2',
     issueDate: '2026-11-01',
@@ -1189,7 +1265,8 @@ invoices.push(
     lines: [
       {
         id: 'il-s2',
-        description: 'Storage Oct 2026 — 682 pallet-days',
+        uom: 'Pallet-day',
+        description: 'Storage (1-Oct-26 to 31-Oct-26) — pallet-days',
         quantity: 682,
         unitPrice: 3.2,
         vatRate: 0.05,
@@ -1390,7 +1467,7 @@ export const notifications: AppNotification[] = [
     id: 'n2',
     at: dt(22, 17),
     title: 'Invoice overdue',
-    body: 'INV-3024 · Skyline Electronics FZE is 8 days overdue',
+    body: 'AEN024 · Skyline Electronics FZE is 8 days overdue',
     read: false,
     href: '/invoices/inv-3024',
   },
@@ -1483,3 +1560,212 @@ export const staffUsers: {
 
 /** Prefilled prototype sign-in identifier (login page). */
 export const prototypeLoginHint: string = 'aisha.khan@aenix.example';
+
+// ---------- FLOW-002: industry-standard order-to-cash (owner decision 2026-11-27) ----------
+
+// 1) Multi-service: every order/job lists ALL service types from its lines (one order can mix
+//    transport, warehouse and other services). The primary type drives icons/labels.
+{
+  const modeOf = (serviceId: string) => services.find((x) => x.id === serviceId)?.mode;
+  for (const so of salesOrders) {
+    so.serviceCategories = categoriesFromLines(so.lines, modeOf, [so.serviceCategory]);
+    so.serviceCategory = primaryCategory(so.serviceCategories);
+  }
+  for (const q of quotations) {
+    q.serviceCategories = categoriesFromLines(q.lines, modeOf, [q.serviceCategory]);
+    q.serviceCategory = primaryCategory(q.serviceCategories);
+  }
+  for (const e of enquiries) {
+    e.serviceCategories = categoriesFromLines(
+      e.serviceIds.map((serviceId) => ({ serviceId })),
+      modeOf,
+      [e.serviceCategory],
+    );
+    e.serviceCategory = primaryCategory(e.serviceCategories);
+  }
+  for (const wo of workOrders) {
+    const extra = [
+      wo.serviceCategory,
+      ...(wo.hasWarehouse || wo.inbounds.length ? (['Warehouse'] as const) : []),
+    ];
+    wo.serviceCategories = categoriesFromLines(wo.lines, modeOf, extra);
+    wo.serviceCategory = primaryCategory(wo.serviceCategories);
+  }
+}
+
+// 2) Vendor purchase orders — issued when the vendor is assigned (before the work).
+export const purchaseOrders: PurchaseOrder[] = [];
+{
+  let poSeq = 6100;
+  for (const wo of workOrders) {
+    for (const va of wo.vendorAssignments) {
+      poSeq += 1;
+      const bill = vendorBills.find(
+        (b) => b.workOrderId === wo.id && b.vendorId === va.vendorId && !b.purchaseOrderId,
+      );
+      const po: PurchaseOrder = {
+        id: `po-${poSeq}`,
+        number: `PO-${poSeq}`,
+        vendorId: va.vendorId,
+        workOrderId: wo.id,
+        salesOrderId: wo.salesOrderId,
+        serviceId: va.serviceId,
+        description: services.find((x) => x.id === va.serviceId)?.name ?? 'Service',
+        amount: va.agreedCost,
+        vatRate: 0.05,
+        issuedAt: wo.createdAt,
+        status: bill
+          ? 'Billed'
+          : va.status === 'Completed'
+            ? 'Completed'
+            : va.status === 'Accepted'
+              ? 'Accepted'
+              : 'Issued',
+        vendorBillId: bill?.id,
+      };
+      if (bill) bill.purchaseOrderId = po.id;
+      va.purchaseOrderId = po.id;
+      purchaseOrders.push(po);
+    }
+  }
+}
+
+// 3) A customer advance received against a sales order (no invoice yet).
+collections.push({
+  id: 'rc-adv-1',
+  number: 'RCPT-4422',
+  customerId: 'cus-3',
+  date: '2026-11-17',
+  method: 'Bank transfer',
+  amount: 1000,
+  reference: 'TRX991207 — advance for SO-5110',
+  allocations: [{ salesOrderId: 'so-5110', amount: 1000 }],
+  status: 'Advance',
+});
+
+// 4) Payment vouchers for vendor bills that are (partly) paid.
+export const vendorPayments: VendorPayment[] = vendorBills
+  .filter((b) => b.paid > 0)
+  .map((b, i) => ({
+    id: `pv-${i + 1}`,
+    number: `PV-${3300 + i}`,
+    vendorId: b.vendorId,
+    date: addDays(b.billDate, 10 + i),
+    method: 'Bank transfer' as const,
+    amount: b.paid,
+    reference: `TT${770100 + i * 13}`,
+    allocations: [{ billId: b.id, amount: b.paid }],
+    status: 'Posted' as const,
+  }));
+
+// 5) Chart of accounts (illustrative; pending accountant sign-off). Customers/vendors get
+//    automatic sub-ledgers under Accounts receivable / payable.
+const grp = (
+  id: string,
+  code: string,
+  name: string,
+  group: LedgerAccount['group'],
+  parentId?: string,
+): LedgerAccount => ({
+  id,
+  code,
+  name,
+  group,
+  kind: 'Group',
+  parentId,
+  system: true,
+  active: true,
+});
+const led = (
+  id: string,
+  code: string,
+  name: string,
+  group: LedgerAccount['group'],
+  parentId: string,
+  system = true,
+): LedgerAccount => ({
+  id,
+  code,
+  name,
+  group,
+  kind: 'Ledger',
+  parentId,
+  system,
+  active: true,
+});
+export const ledgerAccounts: LedgerAccount[] = [
+  grp('g-assets', '1000', 'Assets', 'Assets'),
+  grp('g-cash', '1100', 'Cash and bank', 'Assets', 'g-assets'),
+  led('la-1110', '1110', 'Bank — current account', 'Assets', 'g-cash'),
+  led('la-1120', '1120', 'Petty cash', 'Assets', 'g-cash', false),
+  led('la-1130', '1130', 'PDC received (cheques in hand)', 'Assets', 'g-cash'),
+  grp('g-ar', '1200', 'Accounts receivable', 'Assets', 'g-assets'),
+  led('la-1300', '1300', 'VAT input recoverable', 'Assets', 'g-assets'),
+  grp('g-liab', '2000', 'Liabilities', 'Liabilities'),
+  grp('g-ap', '2100', 'Accounts payable', 'Liabilities', 'g-liab'),
+  led('la-2200', '2200', 'VAT output payable', 'Liabilities', 'g-liab'),
+  led('la-2300', '2300', 'Customer advances', 'Liabilities', 'g-liab'),
+  led('la-2400', '2400', 'Accrued job costs', 'Liabilities', 'g-liab'),
+  grp('g-eq', '3000', 'Equity', 'Equity'),
+  led('la-3100', '3100', 'Share capital', 'Equity', 'g-eq'),
+  grp('g-inc', '4000', 'Income', 'Income'),
+  led('la-4100', '4100', 'Freight revenue', 'Income', 'g-inc'),
+  led('la-4200', '4200', 'Storage & handling revenue', 'Income', 'g-inc'),
+  led('la-4300', '4300', 'Customs & other services revenue', 'Income', 'g-inc'),
+  grp('g-exp', '5000', 'Expenses', 'Expenses'),
+  led('la-5100', '5100', 'Direct job costs — subcontracted', 'Expenses', 'g-exp'),
+  led('la-6100', '6100', 'Office rent', 'Expenses', 'g-exp', false),
+  led('la-6200', '6200', 'Salaries', 'Expenses', 'g-exp', false),
+  ...customers.map((c, i): LedgerAccount => ({
+    id: c.ledgerAccountId,
+    code: `1200-${String(i + 1).padStart(3, '0')}`,
+    name: c.name,
+    group: 'Assets',
+    kind: 'Ledger',
+    parentId: 'g-ar',
+    party: { type: 'Customer', id: c.id },
+    system: true,
+    active: true,
+  })),
+  ...vendors.map((v, i): LedgerAccount => ({
+    id: v.ledgerAccountId,
+    code: `2100-${String(i + 1).padStart(3, '0')}`,
+    name: v.name,
+    group: 'Liabilities',
+    kind: 'Ledger',
+    parentId: 'g-ap',
+    party: { type: 'Vendor', id: v.id },
+    system: true,
+    active: true,
+  })),
+];
+
+/**
+ * Company profile used on tax invoices and GRNs (from the owner's documents, 2026-11-27).
+ * Bank details are PLACEHOLDERS in the prototype — real values are configured in Settings
+ * and are never committed to a public repository.
+ */
+export const company: CompanyProfile = {
+  legalName: 'Aenix LLC',
+  tagline: 'The Network Behind Your Logistics',
+  website: 'www.aenix.ae',
+  trn: '105399983300003',
+  officeAddress: [
+    'Office no. R01, GBH Business Center,',
+    'Al Rasheed Rd, Al Muteena,',
+    'Deira, Dubai, United Arab Emirates',
+  ],
+  registeredAddress: ['Sharjah Media City (Shams), Al Messaned, Al Bataeh,', 'Sharjah, United Arab Emirates'],
+  phone: '+971 4 397 5844',
+  email: 'info@aenix.ae',
+  licenseNo: '2644224.01',
+  bank: {
+    bankName: 'Bank name (set in Settings)',
+    accountName: 'AENIX LLC',
+    accountNumber: '•••• •••• ••••',
+    iban: 'AE•• •••• •••• •••• •••• •••',
+    swift: '••••••••',
+  },
+  invoicePrefix: 'AEN',
+  grnPrefix: 'GRN',
+};

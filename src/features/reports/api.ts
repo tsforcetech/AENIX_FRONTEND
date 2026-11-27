@@ -1,3 +1,4 @@
+import { customerBalance } from '@/domain/balances';
 import { useQuery } from '@tanstack/react-query';
 import { daysBetween, invoiceTotals, workOrderFinancials } from '@/domain/calc';
 import { monthlyRevenue, PROTO_TODAY } from '@/prototype/seed';
@@ -23,6 +24,20 @@ export interface ReportsData {
   }[];
   jobsByType: { group: ServiceCategory; kind: string; jobs: number; revenue: number; marginPct: number }[];
   ageing: { bucket: string; amount: number; count: number }[];
+  /** Exact position per customer from the shared balance model (`customerBalance`). */
+  customerBalances: {
+    id: string;
+    code: string;
+    name: string;
+    ledgerCode: string;
+    invoiced: number;
+    received: number;
+    advances: number;
+    outstanding: number;
+    notYetInvoiced: number;
+    pdcPending: number;
+    balance: number;
+  }[];
 }
 
 function build(): ReportsData {
@@ -117,6 +132,26 @@ function build(): ReportsData {
     lanes,
     jobsByType,
     ageing: buckets.map((b) => ({ ...b, amount: Math.round(b.amount * 100) / 100 })),
+    customerBalances: db.customers.map((c) => {
+      const b = customerBalance(c.id, {
+        salesOrders: db.salesOrders,
+        invoices: db.invoices,
+        collections: db.collections,
+      });
+      return {
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        ledgerCode: db.ledgerAccounts.find((a) => a.id === c.ledgerAccountId)?.code ?? '—',
+        invoiced: b.invoiced,
+        received: b.received,
+        advances: b.advances + b.unallocated,
+        outstanding: b.outstanding,
+        notYetInvoiced: b.notYetInvoiced,
+        pdcPending: b.pdcPending,
+        balance: b.balance,
+      };
+    }),
   };
 }
 

@@ -33,10 +33,14 @@ export interface Customer {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
+  /** Postal address line printed on invoices, e.g. "P.O. Box 31076, Sharjah, United Arab Emirates". */
+  postalAddress?: string;
   creditLimit: number;
   paymentTermsDays: number;
   status: 'Active' | 'On hold' | 'Inactive';
   createdAt: IsoDate;
+  /** Sub-ledger under Accounts receivable, created automatically with the customer. */
+  ledgerAccountId: Id;
 }
 
 export type VendorCategory = 'Transporter' | 'Shipping line' | 'Airline' | 'Customs broker' | 'Warehouse';
@@ -53,6 +57,8 @@ export interface Vendor {
   rating: 1 | 2 | 3 | 4 | 5;
   paymentTermsDays: number;
   status: 'Active' | 'On hold' | 'Inactive';
+  /** Sub-ledger under Accounts payable, created automatically with the vendor. */
+  ledgerAccountId: Id;
 }
 
 export interface Service {
@@ -91,7 +97,10 @@ export interface Enquiry {
   id: Id;
   number: string;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   /** Transport only. */
   mode?: TransportMode;
   serviceIds: Id[];
@@ -124,7 +133,10 @@ export interface Quotation {
   version: number;
   enquiryId?: Id;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   /** Transport only. */
   mode?: TransportMode;
   origin: string;
@@ -149,7 +161,10 @@ export interface SalesOrder {
   id: Id;
   number: string;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   mode?: TransportMode;
   enquiryId?: Id;
   quotationId?: Id;
@@ -196,6 +211,8 @@ export interface VendorAssignment {
   serviceId: Id;
   agreedCost: number;
   status: 'Requested' | 'Accepted' | 'Completed';
+  /** Purchase order issued to the vendor when assigned (industry standard: PO before the work). */
+  purchaseOrderId?: Id;
 }
 
 /** Work Order IS the Job (AENIX business rule). */
@@ -203,7 +220,10 @@ export interface WorkOrder {
   id: Id;
   number: string;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   salesOrderId?: Id;
   source: { type: 'Sales order' | 'Quotation' | 'Contract' | 'Direct'; refId?: Id };
   /** Transport only. */
@@ -218,10 +238,12 @@ export interface WorkOrder {
   lines: PriceLine[];
   hasWarehouse: boolean;
   invoiceId?: Id;
-  /** Warehouse inbound: product list sent to the warehouse team, and the GRN they return. */
-  packingList?: PackingList;
-  grn?: Grn;
-  /** Customer out / delivery requests, each closed by a vendor or warehouse POD. */
+  /**
+   * Warehouse inbound receipts. Goods are stored over time, so a job can have MANY inbounds,
+   * each with its own product list (PL / ASN) and the GRN the warehouse returns.
+   */
+  inbounds: Inbound[];
+  /** Customer out-bond / release requests (MANY over time), each closed by a vendor or warehouse POD. */
   customerRequests: CustomerRequest[];
   /** Purchase invoices (vendor bills) drafted when the job is completed. */
   purchaseInvoiceIds?: Id[];
@@ -237,6 +259,13 @@ export interface DocLine {
   description: string;
   quantity: number;
   uom: string;
+  /** Optional detail carried on warehouse documents (vendor GRN / customer GRN / ASN). */
+  barcode?: string;
+  batch?: string;
+  productionDate?: IsoDate;
+  expiryDate?: IsoDate;
+  /** Volume of the line in cubic metres (item cube × quantity). */
+  cbm?: number;
 }
 
 /** Uploaded document metadata (the file itself is stored by the backend; prototype keeps the name only). */
@@ -247,12 +276,35 @@ export interface Attachment {
   uploadedBy: string;
 }
 
-/** Product list (PL) sent to the warehouse team so they know what to expect. */
+/** Product list (PL / ASN) sent to the warehouse team so they know what to expect. */
 export interface PackingList {
   number: string;
   status: 'Draft' | 'Sent to warehouse';
   sentAt?: IsoDateTime;
   lines: DocLine[];
+  /** Original file (e.g. the customer's Excel) when the lines were imported. */
+  attachment?: Attachment;
+  source?: 'Staff' | 'Customer portal' | 'Excel import';
+}
+
+/** One inbound receipt: a consignment arriving at the warehouse (PL → GRN → check). */
+export interface Inbound {
+  id: Id;
+  number: string;
+  /** Customer reference: ASN, container, AWB or truck number. */
+  reference: string;
+  expectedAt: IsoDate;
+  /** Shipment header as on the vendor's Received Goods Report. */
+  asnNo?: string;
+  boeNo?: string;
+  containerNo?: string;
+  sealNo?: string;
+  blNo?: string;
+  supplierName?: string;
+  /** Warehouse location, e.g. "Dubai Industrial City". */
+  location?: string;
+  packingList: PackingList;
+  grn?: Grn;
 }
 
 /** Goods received note returned by the warehouse team and uploaded against the job. */
@@ -260,8 +312,23 @@ export interface Grn {
   number: string;
   receivedAt: IsoDateTime;
   attachment?: Attachment;
-  lines: { sku: string; receivedQty: number; damagedQty: number; remarks?: string }[];
+  lines: {
+    sku: string;
+    receivedQty: number;
+    damagedQty: number;
+    remarks?: string;
+    batch?: string;
+    productionDate?: IsoDate;
+    expiryDate?: IsoDate;
+    cbm?: number;
+  }[];
   status: 'Uploaded' | 'Verified' | 'Variance raised';
+  /** Vendor warehouse receiving times (as on the vendor's Received Goods Report). */
+  receivingStart?: IsoDateTime;
+  receivingEnd?: IsoDateTime;
+  /** Customer-facing GRN issued by Aenix from this receipt (e.g. AEN061 layout). */
+  customerGrnNumber?: string;
+  customerGrnIssuedAt?: IsoDateTime;
 }
 
 /** Proof of delivery returned by the vendor / warehouse for a customer request. */
@@ -315,13 +382,20 @@ export interface StockMovement {
   reference: string;
 }
 
+/** How storage is charged: area per period (dry storage by sq.ft), pallet-days or CBM-days. */
+export type StorageBasis = 'Sq.ft per period' | 'Pallet-day' | 'CBM-day';
+
 export interface StorageBillingRun {
   id: Id;
   number: string;
   customerId: Id;
   periodFrom: IsoDate;
   periodTo: IsoDate;
+  /** Charging basis; defaults to Pallet-day for older runs. */
+  basis?: StorageBasis;
+  /** Quantity in basis units (sq.ft, pallet-days or CBM-days). Name kept for compatibility. */
   palletDays: number;
+  /** Rate per basis unit. Name kept for compatibility. */
   ratePerPalletDay: number;
   status: 'Draft' | 'Invoiced';
   invoiceId?: Id;
@@ -332,6 +406,10 @@ export type InvoiceStatus = 'Draft' | 'Posted' | 'Partially paid' | 'Paid' | 'Ov
 
 export interface InvoiceLine {
   id: Id;
+  /** Unit of measure shown on the tax invoice (e.g. Sq.ft, Hour, Truck). */
+  uom?: string;
+  /** Sales order this line bills (one invoice can cover several sales orders of the same customer). */
+  salesOrderId?: Id;
   description: string;
   quantity: number;
   unitPrice: number;
@@ -344,6 +422,8 @@ export interface Invoice {
   customerId: Id;
   workOrderId?: Id;
   storageRunId?: Id;
+  /** Sales orders billed by this invoice. */
+  salesOrderIds?: Id[];
   issueDate: IsoDate;
   dueDate: IsoDate;
   lines: InvoiceLine[];
@@ -359,6 +439,8 @@ export interface VendorBill {
   vendorRef: string;
   vendorId: Id;
   workOrderId?: Id;
+  /** Purchase order this vendor invoice is matched to (3-way match: PO vs GRN/POD vs invoice). */
+  purchaseOrderId?: Id;
   billDate: IsoDate;
   dueDate: IsoDate;
   amount: number;
@@ -378,19 +460,73 @@ export interface Collection {
   amount: number;
   reference: string;
   chequeDate?: IsoDate;
-  allocations: { invoiceId: Id; amount: number }[];
-  status: 'Unallocated' | 'Allocated' | 'PDC pending' | 'Bounced';
+  /** Allocated to an invoice, or held as an advance against a sales order. */
+  allocations: { invoiceId?: Id; salesOrderId?: Id; amount: number }[];
+  status: 'Unallocated' | 'Allocated' | 'Advance' | 'PDC pending' | 'Bounced';
 }
 
 export interface JournalEntry {
   id: Id;
   number: string;
   date: IsoDate;
-  source: 'Invoice' | 'Vendor bill' | 'Collection' | 'Manual' | 'Storage billing';
+  source: 'Invoice' | 'Vendor bill' | 'Collection' | 'Payment' | 'Manual' | 'Storage billing';
   reference: string;
   memo: string;
   lines: { account: string; debit: number; credit: number }[];
   status: 'Posted' | 'Reversed';
+}
+
+// ---------- Procurement & payables ----------
+export type PurchaseOrderStatus = 'Draft' | 'Issued' | 'Accepted' | 'Completed' | 'Billed' | 'Cancelled';
+
+/** Vendor purchase order, issued per vendor assignment on a job BEFORE the work starts. */
+export interface PurchaseOrder {
+  id: Id;
+  number: string;
+  vendorId: Id;
+  workOrderId: Id;
+  salesOrderId?: Id;
+  serviceId: Id;
+  description: string;
+  amount: number;
+  vatRate: number;
+  issuedAt: IsoDateTime;
+  status: PurchaseOrderStatus;
+  vendorBillId?: Id;
+}
+
+/** Payment voucher: money paid to a vendor, allocated to purchase invoices (bills). */
+export interface VendorPayment {
+  id: Id;
+  number: string;
+  vendorId: Id;
+  date: IsoDate;
+  method: PaymentMethod;
+  amount: number;
+  reference: string;
+  chequeDate?: IsoDate;
+  allocations: { billId: Id; amount: number }[];
+  status: 'Posted' | 'PDC issued' | 'Cancelled';
+}
+
+// ---------- Chart of accounts ----------
+export type AccountGroup = 'Assets' | 'Liabilities' | 'Equity' | 'Income' | 'Expenses';
+
+/**
+ * Ledger account. Groups organise the chart; ledgers take postings. Customer and vendor
+ * sub-ledgers sit under the Accounts receivable / payable control accounts and are created
+ * automatically with the party. Pending accountant sign-off (Phase 8).
+ */
+export interface LedgerAccount {
+  id: Id;
+  code: string;
+  name: string;
+  group: AccountGroup;
+  kind: 'Group' | 'Ledger';
+  parentId?: Id;
+  party?: { type: 'Customer' | 'Vendor'; id: Id };
+  system: boolean;
+  active: boolean;
 }
 
 // ---------- Cross-cutting ----------
@@ -407,7 +543,10 @@ export interface ActivityEvent {
     | 'Warehouse'
     | 'Invoice'
     | 'Collection'
-    | 'Vendor bill';
+    | 'Vendor bill'
+    | 'Purchase order'
+    | 'Payment'
+    | 'Ledger';
   entityId: Id;
   entityRef: string;
   action: string;
@@ -420,4 +559,22 @@ export interface AppNotification {
   body: string;
   read: boolean;
   href?: string;
+}
+
+// ---------- Company profile (document header / footer) ----------
+export interface CompanyProfile {
+  legalName: string;
+  tagline: string;
+  website: string;
+  trn: string;
+  /** Office address printed on tax invoices. */
+  officeAddress: string[];
+  /** Registered address (used on warehouse documents such as GRNs). */
+  registeredAddress: string[];
+  phone: string;
+  email: string;
+  licenseNo: string;
+  bank: { bankName: string; accountName: string; accountNumber: string; iban: string; swift: string };
+  invoicePrefix: string;
+  grnPrefix: string;
 }

@@ -31,3 +31,44 @@ Append-only. Each entry: date, work package, branch/PR/SHAs, what changed, tests
   - Portals and reports handle the new types.
 - **Tests (local):** format, lint, typecheck clean; unit 23/23; build ok; e2e 52 passed, 2 skipped (mobile-only skips), including a crawl of all screens incl. `/sales-orders/*`, `/work-orders/wo-2052…2054` with 0 WCAG 2.1 AA violations.
 - **Next gate:** owner review of the PR and the refreshed preview; DOBIS change request for Sales Order + GRN/POD (API-DEP-16…19); answers to the open questions in `docs/BUSINESS-FLOW.md`.
+
+### 2026-11-27 — FLOW-002 industry-standard order-to-cash
+
+- **Instruction:** the Project Owner chose the **industry-standard flow** and added two requirements: **one customer invoice can bill several sales orders**, and **receipts can be taken against sales orders**, with the customer's **exact balance** always known.
+- **Branch:** `feature/fe-flow-002-standard-order-to-cash`. Spec: [`docs/BUSINESS-FLOW.md`](../BUSINESS-FLOW.md). Backend copy: AENIX PR [#7](https://github.com/tsforcetech/AENIX/pull/7) (`docs/workflows/ORDER-TO-CASH-FLOW.md`).
+- **Delivered:**
+  - **Orders:** multi-service quotes, orders and jobs (transport + warehouse + other services); Quotation → "Convert to sales order" → confirmed SO → "Create job". Jobs are the work orders.
+  - **Vendor side:** a vendor **PO is issued at assignment**; the Purchase orders module has a 3-way match; vendor invoices are recorded against the PO; job completion no longer drafts bills.
+  - **Customer invoicing:** a **new customer invoice can combine several sales orders**.
+  - **Receipts and payments:** **receipts** against invoices or as **SO advances** (apply advance later); **payment vouchers** to vendors.
+  - **Ledgers and balances:** **chart of accounts** (create ledger accounts; automatic customer and vendor sub-ledgers); **exact customer balance** overall and per sales order; customers list and reports show balances.
+  - **Portals:** customer portal PL upload; vendor portal PO acceptance and POD upload.
+  - **Home:** new attention items.
+- **Process note:** three of the four helpers hit a usage limit in their final checks. The orchestrating session reviewed their diffs (scope and safety scan), ran lint, Prettier and typecheck, committed them, and fixed the integration issues found by the e2e crawl: keyboard-focusable scroll regions, and a link-in-text contrast issue.
+- **Tests (local):** format, lint, typecheck clean; unit 25/25; build ok; e2e **61 passed**, 2 skipped (desktop-only shortcuts on mobile), incl. a crawl of every screen with 0 WCAG 2.1 AA violations; production bundle has no sample data and denies by default.
+- **Next gate:** owner review; DOBIS change request; accountant sign-off on the chart of accounts and postings; Antigravity contracts for API-DEP-16…26.
+
+### 2026-11-27 — UX and document alignment (on PR #3)
+
+- **Owner requests:**
+  - an enquiry Kanban board;
+  - easy, keyboard-friendly quotation and sales-order entry;
+  - PL/GRN/POD arrive as Excel, so import them with column mapping;
+  - in/out are repeated (many inbounds and outbounds per warehouse job);
+  - align with the uploaded RHS GRN, Aenix customer GRN (AEN061) and tax invoice (AEN078) formats.
+- **Delivered:**
+  - **Enquiries:** Kanban (drag-and-drop plus keyboard, Won/Lost rules).
+  - **Entry screens:**
+    - a type-ahead customer/service combobox;
+    - a keyboard-first price grid (Enter, arrows, Ctrl+Del, Alt+N) with rate-card suggestions;
+    - Ctrl+S / Ctrl+Enter, a sticky totals bar, and `?` help.
+  - **Excel/CSV import** with remembered per-party mapping (RHS and Aenix headers auto-map); `read-excel-file` pinned at 9.3.14 and lazy-loaded.
+  - **Warehouse jobs:** many inbounds and outbounds per job, running stock per SKU, release guard, and the inbound shipment header (ASN/BOE/container/seal/BL).
+  - **Documents:** customer GRN document (AEN061 layout); tax invoice in the AEN078 layout with AEN numbering.
+  - **Storage billing** by sq.ft / pallet-day / CBM-day, with an hourly handling service.
+  - **Settings → Company:** company profile incl. bank details. Bank values are placeholders in source.
+- **Tests (local):** format/lint/typecheck clean; unit 33/33; build ok; e2e 61 passed, 2 skipped (crawl incl. Kanban, 0 WCAG 2.1 AA violations).
+- **Open:**
+  - owner to confirm bank details stay out of the public demo, and which address goes on invoices vs GRNs;
+  - FEFO/batch stock tracking;
+  - server-side PDF and stamp.

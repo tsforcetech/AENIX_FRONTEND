@@ -1,7 +1,7 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { Ban, Check, CheckCircle2, Plus } from 'lucide-react';
-import { jobKindLabel } from '@/domain/workflow';
+import { Ban, Check, CheckCircle2, Plus, Receipt, Wallet } from 'lucide-react';
+import { servicesLabel } from '@/domain/workflow';
 import { totals } from '@/features/quotations/api';
 import { QuotationTotals } from '@/features/quotations/QuotationTotals';
 import { lookupName } from '@/shared/data/lookups';
@@ -9,14 +9,20 @@ import { StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
-import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
-import { formatDate } from '@/shared/utils/format';
+import { formatDate, formatMoney } from '@/shared/utils/format';
 import { useSalesOrder, useSetSalesOrderStatus, type SalesOrderDetail } from './api';
-import { locationLabel, locationText } from './commercial-ui';
+import {
+  locationLabel,
+  locationTextMulti,
+  ServiceIcons,
+  ServiceTypePills,
+  siteFromNotes,
+  withoutSiteLines,
+} from './commercial-ui';
 
 const route = getRouteApi('/_app/sales-orders/$id');
 
@@ -38,6 +44,10 @@ export function SalesOrderDetailPage() {
 
   const t = totals(so.lines);
   const canCreateWo = so.status === 'Confirmed' || so.status === 'In progress';
+  const transport = so.serviceCategories.includes('Transport');
+  const warehouseSite = transport ? siteFromNotes(so.notes, 'Warehouse') : undefined;
+  const serviceLocation = siteFromNotes(so.notes, 'Service');
+  const notes = withoutSiteLines(so.notes);
   const change = (status: 'Confirmed' | 'Cancelled' | 'Completed', msg: string) =>
     setStatus.mutate({ id: so.id, status }, { onSuccess: () => toast({ title: `${so.number} ${msg}` }) });
 
@@ -87,7 +97,7 @@ export function SalesOrderDetailPage() {
                 search={{ salesOrderId: so.id }}
                 icon={<Plus aria-hidden="true" />}
               >
-                Create work order
+                Create job
               </ButtonLink>
             ) : null}
           </>
@@ -102,13 +112,13 @@ export function SalesOrderDetailPage() {
             <CardHeader title="Order summary" />
             <CardBody>
               <div className="mb-6 flex items-center gap-4 rounded-xl bg-canvas p-4">
-                <span className="grid size-11 place-items-center rounded-xl bg-surface text-fg-secondary shadow-card">
-                  <JobKindIcon category={so.serviceCategory} mode={so.mode} className="size-5" />
+                <span className="grid h-11 min-w-11 place-items-center rounded-xl bg-surface px-2 text-fg-secondary shadow-card">
+                  <ServiceIcons categories={so.serviceCategories} mode={so.mode} className="size-5" />
                 </span>
                 <div className="min-w-0">
-                  <p className="text-caption text-fg-muted">{jobKindLabel(so.serviceCategory, so.mode)}</p>
+                  <p className="text-caption text-fg-muted">{servicesLabel(so.serviceCategories, so.mode)}</p>
                   <p className="font-semibold">
-                    {locationText(so.serviceCategory, so.origin, so.destination)}
+                    {locationTextMulti(so.serviceCategories, so.origin, so.destination)}
                   </p>
                 </div>
               </div>
@@ -132,11 +142,18 @@ export function SalesOrderDetailPage() {
                     value: <span className="font-mono text-[13px]">{so.customerPoRef}</span>,
                   },
                   { label: 'Order date', value: formatDate(so.orderDate) },
-                  { label: 'Service type', value: jobKindLabel(so.serviceCategory, so.mode) },
                   {
-                    label: locationLabel(so.serviceCategory),
-                    value: locationText(so.serviceCategory, so.origin, so.destination),
+                    label: 'Services included',
+                    value: <ServiceTypePills categories={so.serviceCategories} mode={so.mode} />,
                   },
+                  {
+                    label: transport
+                      ? 'Route'
+                      : locationLabel(so.serviceCategories.includes('Warehouse') ? 'Warehouse' : 'Service'),
+                    value: locationTextMulti(so.serviceCategories, so.origin, so.destination),
+                  },
+                  ...(warehouseSite ? [{ label: 'Warehouse / site', value: warehouseSite }] : []),
+                  ...(serviceLocation ? [{ label: 'Service location', value: serviceLocation }] : []),
                   { label: 'Owner', value: so.owner },
                   {
                     label: 'Enquiry',
@@ -179,9 +196,9 @@ export function SalesOrderDetailPage() {
                   },
                 ]}
               />
-              {so.notes ? (
+              {notes ? (
                 <p className="mt-5 whitespace-pre-wrap rounded-lg bg-canvas p-3 text-body-s text-fg-secondary">
-                  {so.notes}
+                  {notes}
                 </p>
               ) : null}
             </CardBody>
@@ -245,15 +262,15 @@ export function SalesOrderDetailPage() {
 
         <div className="space-y-6">
           <Card>
-            <CardHeader title="Work orders" description="Jobs running this order" />
+            <CardHeader title="Jobs" description="Work orders running this sales order" />
             <CardBody>
               {so.workOrders.length === 0 ? (
                 <p className="text-body-s text-fg-muted">
                   {canCreateWo
-                    ? 'No work order yet. Create one to start the job.'
+                    ? 'No job yet. Create one to start the work.'
                     : so.status === 'Draft'
-                      ? 'Confirm the sales order to create work orders.'
-                      : 'No work orders.'}
+                      ? 'Confirm the sales order to create jobs.'
+                      : 'No jobs.'}
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -266,11 +283,7 @@ export function SalesOrderDetailPage() {
                       >
                         <span className="flex items-center justify-between gap-2">
                           <span className="flex items-center gap-2">
-                            <JobKindIcon
-                              category={w.serviceCategory}
-                              mode={w.mode}
-                              className="size-4 text-fg-muted"
-                            />
+                            <ServiceIcons categories={w.serviceCategories} mode={w.mode} />
                             <DocRef>{w.number}</DocRef>
                           </span>
                           <StatusBadge status={w.status} />
@@ -299,40 +312,167 @@ export function SalesOrderDetailPage() {
               )}
             </CardBody>
           </Card>
-          <Card>
-            <CardHeader title="Value" />
-            <CardBody>
-              <p className="text-[26px] font-semibold tabular-nums tracking-tight">
-                <Money amount={t.total} />
-              </p>
-              <p className="mt-1 text-caption text-fg-muted">incl. VAT · margin {t.marginPct}%</p>
-            </CardBody>
-          </Card>
+          <BillingCard so={so} margin={t.marginPct} />
         </div>
       </div>
     </div>
   );
 }
 
-/** Enquiry → Quotation → Sales order → Work order → Job completed → Invoiced. */
+/** Billing & balance for this order: what is invoiced, received (incl. advances) and still due. */
+function BillingCard({ so, margin }: { so: SalesOrderDetail; margin: number }) {
+  const b = so.billing;
+  const open = so.status !== 'Draft' && so.status !== 'Cancelled';
+  const rows: { label: string; value: number; tone?: string; hint?: string }[] = [
+    { label: 'Order value', value: b.orderValue, hint: `incl. VAT · margin ${margin}%` },
+    { label: 'Invoiced', value: b.invoiced },
+    {
+      label: 'Not yet invoiced',
+      value: b.notInvoiced,
+      tone: b.notInvoiced > 0.005 ? 'text-warning' : undefined,
+    },
+    {
+      label: 'Received',
+      value: b.received,
+      hint: b.advance > 0 ? `incl. ${formatMoney(b.advance)} advance` : undefined,
+    },
+  ];
+  return (
+    <Card>
+      <CardHeader title="Billing & balance" description="AED incl. VAT · from the customer ledger" />
+      <CardBody className="space-y-4">
+        <dl className="space-y-2.5 text-body-s">
+          {rows.map((r) => (
+            <div key={r.label} className="flex items-start justify-between gap-3">
+              <dt className="text-fg-secondary">
+                {r.label}
+                {r.hint ? <span className="block text-caption text-fg-muted">{r.hint}</span> : null}
+              </dt>
+              <dd className={clsx('tabular-nums', r.tone)}>
+                <Money amount={r.value} />
+              </dd>
+            </div>
+          ))}
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-surface-inverse px-3 py-2.5 text-fg-inverse">
+            <dt className="font-semibold">{b.balance < -0.005 ? 'Advance held' : 'Balance due'}</dt>
+            <dd className="text-[17px] font-semibold tabular-nums">
+              <Money amount={Math.abs(b.balance)} />
+            </dd>
+          </div>
+        </dl>
+        {open ? (
+          <div className="grid gap-2">
+            {b.notInvoiced > 0.005 ? (
+              <ButtonLink
+                to="/invoices/new"
+                search={{ customerId: so.customerId, salesOrderId: so.id }}
+                icon={<Receipt aria-hidden="true" />}
+                className="w-full"
+              >
+                Create invoice
+              </ButtonLink>
+            ) : null}
+            <ButtonLink
+              to="/collections/new"
+              search={{ customerId: so.customerId, salesOrderId: so.id }}
+              variant="secondary"
+              icon={<Wallet aria-hidden="true" />}
+              className="w-full"
+            >
+              {b.invoiced > 0 ? 'Receive payment' : 'Receive advance'}
+            </ButtonLink>
+          </div>
+        ) : null}
+
+        <div>
+          <h3 className="mb-2 text-caption font-medium uppercase tracking-wide text-fg-muted">Invoices</h3>
+          {so.invoices.length === 0 ? (
+            <p className="text-body-s text-fg-muted">Not invoiced yet.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {so.invoices.map((i) => (
+                <li key={i.id}>
+                  <Link
+                    to="/invoices/$id"
+                    params={{ id: i.id }}
+                    className="flex items-start justify-between gap-2 rounded-lg border border-border-subtle px-3 py-2 hover:bg-canvas"
+                  >
+                    <span className="min-w-0">
+                      <DocRef>{i.number}</DocRef>
+                      <span className="block text-caption text-fg-muted">
+                        {formatDate(i.issueDate)}
+                        {i.otherOrders.length ? ` · also ${i.otherOrders.join(', ')}` : ''}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <StatusBadge status={i.status} />
+                      <span className="mt-1 block text-caption tabular-nums text-fg-muted">
+                        {i.outstanding > 0.005 ? `${formatMoney(i.outstanding)} open` : 'Settled'}
+                      </span>
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div>
+          <h3 className="mb-2 text-caption font-medium uppercase tracking-wide text-fg-muted">Receipts</h3>
+          {so.receipts.length === 0 ? (
+            <p className="text-body-s text-fg-muted">No payment received yet.</p>
+          ) : (
+            <ul className="divide-y divide-border-subtle text-body-s">
+              {so.receipts.map((r) => (
+                <li key={r.id} className="flex items-start justify-between gap-2 py-2">
+                  <span className="min-w-0">
+                    <DocRef>{r.number}</DocRef>
+                    <span className="block text-caption text-fg-muted">
+                      {formatDate(r.date)} · {r.method} · {r.appliedTo}
+                    </span>
+                  </span>
+                  <Money amount={r.amount} className="shrink-0 font-medium" />
+                </li>
+              ))}
+            </ul>
+          )}
+          {so.invoices.some((i) => i.otherOrders.length) ? (
+            <p className="mt-2 text-caption text-fg-muted">
+              Receipts on invoices that bill several orders are shared across them in proportion to each
+              order’s lines.
+            </p>
+          ) : null}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+/** Enquiry → Quotation → Sales order → Job(s) → Completed → Invoiced → Paid. */
 function FlowTracker({ so }: { so: SalesOrderDetail }) {
   const anyWo = so.workOrders.length > 0;
   const allDone = anyWo && so.workOrders.every((w) => w.status === 'Completed');
-  const invoiced = anyWo && so.workOrders.every((w) => !!w.invoiceId);
+  const b = so.billing;
+  const fullyInvoiced = b.invoiced > 0.005 && b.notInvoiced <= 0.005;
+  const paid = fullyInvoiced && b.balance <= 0.005;
   const steps = [
     { label: 'Enquiry', state: so.enquiryId ? 'done' : 'skipped' },
-    { label: 'Quotation', state: so.quotationId ? 'done' : so.contractId ? 'skipped' : 'skipped' },
+    { label: 'Quotation', state: so.quotationId ? 'done' : 'skipped' },
     {
       label: 'Sales order',
       state: so.status === 'Draft' ? 'current' : so.status === 'Cancelled' ? 'skipped' : 'done',
     },
-    { label: 'Work order', state: anyWo ? 'done' : so.status === 'Draft' ? 'pending' : 'current' },
-    { label: 'Job completed', state: allDone ? 'done' : anyWo ? 'current' : 'pending' },
-    { label: 'Invoiced', state: invoiced ? 'done' : allDone ? 'current' : 'pending' },
+    { label: 'Job(s)', state: anyWo ? 'done' : so.status === 'Draft' ? 'pending' : 'current' },
+    { label: 'Completed', state: allDone ? 'done' : anyWo ? 'current' : 'pending' },
+    {
+      label: 'Invoiced',
+      state: fullyInvoiced ? 'done' : b.invoiced > 0.005 || allDone ? 'current' : 'pending',
+    },
+    { label: 'Paid', state: paid ? 'done' : b.received > 0.005 || fullyInvoiced ? 'current' : 'pending' },
   ] as const;
   return (
     <nav aria-label="Order flow" className="mb-6 overflow-x-auto">
-      <ol className="flex min-w-[640px] items-center gap-2 rounded-xl border border-border-subtle bg-surface p-3 shadow-card">
+      <ol className="flex min-w-[760px] items-center gap-2 rounded-xl border border-border-subtle bg-surface p-3 shadow-card">
         {steps.map((s, i) => (
           <li key={s.label} className="flex flex-1 items-center gap-2">
             <span

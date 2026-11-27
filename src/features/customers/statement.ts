@@ -1,5 +1,5 @@
 import { invoiceTotals } from '@/domain/calc';
-import type { Collection, Invoice } from '@/domain/types';
+import type { Collection, Invoice, SalesOrder } from '@/domain/types';
 import { formatDate } from '@/shared/utils/format';
 
 /** Statement-of-account line (public helper of the customers feature; also used by the customer portal). */
@@ -16,7 +16,12 @@ export interface StatementLine {
 }
 
 /** Chronological invoices (debit) and receipts (credit) with running balance. Prototype maths only. */
-export function buildStatement(invoices: Invoice[], collections: Collection[]): StatementLine[] {
+export function buildStatement(
+  invoices: Invoice[],
+  collections: Collection[],
+  salesOrders: SalesOrder[] = [],
+): StatementLine[] {
+  const soNumber = (id?: string) => salesOrders.find((o) => o.id === id)?.number;
   const entries = [
     ...invoices
       .filter((i) => i.status !== 'Draft' && i.status !== 'Cancelled')
@@ -38,7 +43,13 @@ export function buildStatement(invoices: Invoice[], collections: Collection[]): 
         type: 'Receipt' as const,
         reference: c.number,
         refId: c.id,
-        description: `${c.method} · ${c.reference}`,
+        description:
+          c.status === 'Advance'
+            ? `Advance${(() => {
+                const so = c.allocations.map((a) => soNumber(a.salesOrderId)).filter(Boolean);
+                return so.length ? ` on ${so.join(', ')}` : '';
+              })()} · ${c.method}`
+            : `${c.method} · ${c.reference}`,
         debit: 0,
         credit: c.amount,
       })),

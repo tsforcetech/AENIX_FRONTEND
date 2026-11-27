@@ -1,4 +1,4 @@
-import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
+import { getRouteApi, Link } from '@tanstack/react-router';
 import clsx from 'clsx';
 import {
   AlertTriangle,
@@ -13,13 +13,13 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { Badge, StatusBadge } from '@/shared/ui/Badge';
-import { Button } from '@/shared/ui/Button';
+import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { Dialog } from '@/shared/ui/Dialog';
 import { TextareaField } from '@/shared/ui/Field';
 import { JobKindIcon } from '@/shared/ui/ModeIcon';
-import { jobKindLabel } from '@/domain/workflow';
+import { servicesLabel } from '@/domain/workflow';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
@@ -30,12 +30,11 @@ import {
   canComplete,
   docFlags,
   useCompleteWorkOrder,
-  useCreateJobInvoice,
   useWorkOrder,
   useWorkOrderAction,
   type WorkOrderDetail,
 } from './api';
-import { CustomerRequestsCard, InboundCard, PurchaseInvoicesCard } from './JobDocuments';
+import { CustomerRequestsCard, InboundCard, JobStockCard, PurchasingCard } from './JobDocuments';
 import { AssignVendorDialog } from './AssignVendorDialog';
 import { SourceBadge } from './SourceBadge';
 
@@ -45,9 +44,7 @@ export function WorkOrderDetailPage() {
   const { id } = route.useParams();
   const { data: wo, isLoading, error } = useWorkOrder(id);
   const action = useWorkOrderAction();
-  const createInvoice = useCreateJobInvoice();
   const toast = useToast();
-  const navigate = useNavigate();
   const [cancelOpen, setCancelOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string>();
@@ -59,11 +56,11 @@ export function WorkOrderDetailPage() {
     return (
       <StatusMessage
         kind="error"
-        title="Work order not found"
+        title="Job not found"
         description="It may have been removed or you may not have access."
       />
     );
-  if (isLoading || !wo) return <StatusMessage kind="loading" title="Loading work order…" />;
+  if (isLoading || !wo) return <StatusMessage kind="loading" title="Loading job…" />;
 
   const running = ['Confirmed', 'In progress', 'In transit'].includes(wo.status);
   const canInvoice = (wo.status === 'Delivered' || wo.status === 'Completed') && !wo.invoiceId;
@@ -90,7 +87,7 @@ export function WorkOrderDetailPage() {
   return (
     <div>
       <PageHeader
-        crumbs={[{ label: 'Work orders', to: '/work-orders' }, { label: wo.number }]}
+        crumbs={[{ label: 'Jobs', to: '/work-orders' }, { label: wo.number }]}
         title={wo.number}
         meta={
           <div className="flex items-center gap-2">
@@ -137,22 +134,14 @@ export function WorkOrderDetailPage() {
               </Button>
             ) : null}
             {canInvoice ? (
-              <Button
+              <ButtonLink
+                to="/invoices/new"
+                search={{ customerId: wo.customerId, salesOrderId: wo.salesOrderId }}
                 variant="brand"
                 icon={<Receipt aria-hidden="true" />}
-                busy={createInvoice.isPending}
-                onClick={() =>
-                  createInvoice.mutate(wo.id, {
-                    onSuccess: (inv) => {
-                      toast({ title: `${inv.number} drafted`, body: 'Review and post the invoice.' });
-                      void navigate({ to: '/invoices/$id', params: { id: inv.id } });
-                    },
-                    onError,
-                  })
-                }
               >
-                Create invoice
-              </Button>
+                Invoice customer
+              </ButtonLink>
             ) : null}
           </>
         }
@@ -165,7 +154,7 @@ export function WorkOrderDetailPage() {
           <Card>
             <CardHeader
               title="Vendor assignments"
-              description="Subcontracted services and agreed costs"
+              description="Assigning a vendor issues a purchase order before the work starts"
               actions={
                 wo.status !== 'Cancelled' && wo.status !== 'Completed' ? (
                   <Button
@@ -190,7 +179,22 @@ export function WorkOrderDetailPage() {
                     <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                       <div className="min-w-0">
                         <p className="font-medium">{a.vendorName}</p>
-                        <p className="text-caption text-fg-muted">{a.serviceName}</p>
+                        <p className="text-caption text-fg-muted">
+                          {a.serviceName}
+                          {a.purchaseOrderId && a.poNumber ? (
+                            <>
+                              {' · '}
+                              <Link
+                                to="/purchase-orders/$id"
+                                params={{ id: a.purchaseOrderId }}
+                                className="font-mono font-medium text-brand hover:underline"
+                              >
+                                {a.poNumber}
+                              </Link>{' '}
+                              {a.poStatus ? <span className="text-fg-muted">({a.poStatus})</span> : null}
+                            </>
+                          ) : null}
+                        </p>
                       </div>
                       <div className="flex items-center gap-3">
                         <Money amount={a.agreedCost} className="font-medium" />
@@ -203,8 +207,11 @@ export function WorkOrderDetailPage() {
             </CardBody>
           </Card>
 
-          {wo.serviceCategory === 'Warehouse' || wo.hasWarehouse || wo.packingList ? (
-            <InboundCard wo={wo} />
+          {wo.serviceCategories.includes('Warehouse') || wo.hasWarehouse || wo.inbounds.length ? (
+            <>
+              <JobStockCard wo={wo} />
+              <InboundCard wo={wo} />
+            </>
           ) : null}
 
           <CustomerRequestsCard wo={wo} />
@@ -254,9 +261,9 @@ export function WorkOrderDetailPage() {
           <Card>
             <CardHeader
               title={
-                wo.serviceCategory === 'Transport'
+                wo.serviceCategories.includes('Transport')
                   ? 'Cargo'
-                  : wo.serviceCategory === 'Warehouse'
+                  : wo.serviceCategories.includes('Warehouse')
                     ? 'Goods'
                     : 'Scope'
               }
@@ -265,7 +272,7 @@ export function WorkOrderDetailPage() {
               <DescriptionList
                 columns={3}
                 items={
-                  wo.serviceCategory === 'Service'
+                  wo.serviceCategories.length === 1 && wo.serviceCategory === 'Service'
                     ? [
                         { label: 'Scope of service', value: wo.cargo.description },
                         { label: 'Location', value: wo.origin },
@@ -284,8 +291,8 @@ export function WorkOrderDetailPage() {
                         },
                         { label: 'Volume', value: wo.cargo.volumeCbm ? `${wo.cargo.volumeCbm} cbm` : '—' },
                         {
-                          label: 'Warehouse handling',
-                          value: wo.hasWarehouse ? 'Yes — JAFZA WH-1' : 'No warehouse activity',
+                          label: 'Services',
+                          value: servicesLabel(wo.serviceCategories, wo.mode),
                         },
                       ]
                 }
@@ -342,7 +349,9 @@ export function WorkOrderDetailPage() {
 
           <FinancialsCard wo={wo} />
 
-          <PurchaseInvoicesCard wo={wo} />
+          {wo.status === 'Completed' ? <NextStepsCard wo={wo} /> : null}
+
+          <PurchasingCard wo={wo} />
 
           <Card>
             <CardHeader title="Billing" />
@@ -362,8 +371,8 @@ export function WorkOrderDetailPage() {
               ) : (
                 <p className="text-body-s text-fg-muted">
                   {canInvoice
-                    ? 'Ready to invoice.'
-                    : 'The customer invoice is created once the job is delivered or completed.'}
+                    ? 'Ready to invoice — one invoice can cover several sales orders of this customer.'
+                    : 'The customer is invoiced from the sales order once the job is delivered or completed.'}
                 </p>
               )}
               <Link
@@ -418,13 +427,13 @@ export function WorkOrderDetailPage() {
           onClose={() => setCompleteOpen(false)}
           onConfirm={() =>
             complete.mutate(wo.id, {
-              onSuccess: ({ drafted }) => {
+              onSuccess: ({ awaitingInvoice }) => {
                 setCompleteOpen(false);
                 toast({
                   title: `${wo.number} completed`,
-                  body: drafted.length
-                    ? `${drafted.length} purchase invoice${drafted.length === 1 ? '' : 's'} drafted: ${drafted.map((d) => d.number).join(', ')}`
-                    : 'No new purchase invoice was needed.',
+                  body: awaitingInvoice.length
+                    ? `${awaitingInvoice.length} PO${awaitingInvoice.length === 1 ? '' : 's'} now awaiting the vendor invoice: ${awaitingInvoice.map((p) => p.number).join(', ')}`
+                    : 'All vendor purchase orders are already invoiced.',
                 });
               },
               onError,
@@ -448,11 +457,14 @@ function CompleteDialog({
   onConfirm: () => void;
 }) {
   const flags = docFlags(wo);
-  const billed = new Set(wo.purchaseInvoices.map((b) => b.vendorName));
-  const toBill = [...new Set(wo.assignments.map((a) => a.vendorName))].filter((v) => !billed.has(v));
+  const toBill = wo.purchaseOrders.filter((p) => !p.vendorBillId && p.status !== 'Cancelled');
   const warnings = [
-    flags.grnVariance ? 'The GRN does not match the product list (variance unresolved).' : null,
-    flags.awaitingGrn ? 'The PL was sent but no GRN has been uploaded.' : null,
+    flags.grnVariance
+      ? `${flags.grnVariance} inbound GRN${flags.grnVariance === 1 ? '' : 's'} do not match the product list (variance unresolved).`
+      : null,
+    flags.awaitingGrn
+      ? `${flags.awaitingGrn} inbound${flags.awaitingGrn === 1 ? '' : 's'} sent to the warehouse with no GRN uploaded yet.`
+      : null,
     flags.awaitingPod ? `${flags.awaitingPod} customer request(s) have no POD yet.` : null,
     flags.podVariance ? `${flags.podVariance} POD(s) do not match the request.` : null,
   ].filter((w): w is string => !!w);
@@ -461,7 +473,7 @@ function CompleteDialog({
       open
       onClose={onClose}
       title={`Complete ${wo.number}?`}
-      description="Completing the job drafts a purchase invoice for each vendor that has not been billed yet."
+      description="Completing the job closes the vendor purchase orders for invoicing. Vendor invoices are then recorded against each PO, and the customer is invoiced."
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
@@ -491,16 +503,18 @@ function CompleteDialog({
           </p>
         )}
         <div>
-          <p className="font-medium">Purchase invoices to draft</p>
+          <p className="font-medium">Purchase orders that will await the vendor invoice</p>
           {toBill.length ? (
             <ul className="mt-1 list-disc pl-6 text-fg-secondary">
-              {toBill.map((v) => (
-                <li key={v}>{v}</li>
+              {toBill.map((p) => (
+                <li key={p.id}>
+                  <span className="font-mono">{p.number}</span> · {p.vendorName} · <Money amount={p.amount} />
+                </li>
               ))}
             </ul>
           ) : (
             <p className="mt-1 text-fg-muted">
-              None — every assigned vendor is already billed or none is assigned.
+              None — every PO is already invoiced or no vendor is assigned.
             </p>
           )}
         </div>
@@ -517,7 +531,7 @@ function JobHero({ wo }: { wo: WorkOrderDetail }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-caption text-white/70">
             <JobKindIcon category={wo.serviceCategory} mode={wo.mode} className="size-4" />
-            {jobKindLabel(wo.serviceCategory, wo.mode)}
+            {servicesLabel(wo.serviceCategories, wo.mode)}
             <span aria-hidden="true">·</span>
             <SourceBadge type={wo.source.type} refLabel={wo.sourceRef} />
           </div>
@@ -550,7 +564,7 @@ function JobHero({ wo }: { wo: WorkOrderDetail }) {
             </span>
             <div className="min-w-0">
               <p className="text-caption text-white/60">
-                {wo.serviceCategory === 'Warehouse' ? 'Warehouse / site' : 'Service location'}
+                {wo.serviceCategories.includes('Warehouse') ? 'Warehouse / site' : 'Service location'}
               </p>
               <p className="truncate text-[22px] font-semibold tracking-tight">{wo.origin}</p>
               {wo.destination ? (
@@ -708,6 +722,58 @@ function MovementsCard({ wo }: { wo: WorkOrderDetail }) {
             ))}
           </ul>
         )}
+      </CardBody>
+    </Card>
+  );
+}
+
+/** After completion: record vendor invoices against POs, then invoice the customer. */
+function NextStepsCard({ wo }: { wo: WorkOrderDetail }) {
+  const awaiting = wo.purchaseOrders.filter((p) => !p.vendorBillId && p.status !== 'Cancelled');
+  return (
+    <Card className="border-brand/30">
+      <CardHeader title="Next steps" description="Job completed — close the money side." />
+      <CardBody className="space-y-4 text-body-s">
+        <div>
+          <p className="font-medium">1. Record vendor invoices</p>
+          {awaiting.length ? (
+            <ul className="mt-1.5 space-y-1.5">
+              {awaiting.map((p) => (
+                <li key={p.id} className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-fg-secondary">
+                    <span className="font-mono">{p.number}</span> · {p.vendorName}
+                  </span>
+                  <Link
+                    to="/vendor-bills/new"
+                    search={{ purchaseOrderId: p.id }}
+                    className="shrink-0 text-caption font-medium text-brand hover:underline"
+                  >
+                    Record invoice
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-fg-muted">All purchase orders are invoiced.</p>
+          )}
+        </div>
+        <div>
+          <p className="font-medium">2. Invoice the customer</p>
+          {wo.invoiceId ? (
+            <p className="mt-1 text-fg-muted">Invoiced — {wo.invoiceNumber}.</p>
+          ) : (
+            <ButtonLink
+              to="/invoices/new"
+              search={{ customerId: wo.customerId, salesOrderId: wo.salesOrderId }}
+              size="sm"
+              variant="brand"
+              className="mt-1.5"
+              icon={<Receipt aria-hidden="true" />}
+            >
+              Invoice customer
+            </ButtonLink>
+          )}
+        </div>
       </CardBody>
     </Card>
   );

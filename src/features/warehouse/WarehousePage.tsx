@@ -28,7 +28,7 @@ import {
   type MovementRow,
   type StockRow,
 } from './api';
-import { InboundView, OutboundView } from './DocViews';
+import { CustomerStockView, InboundView, OutboundView } from './DocViews';
 import { useInbound, useOutbound } from './docs';
 import { MovementDialog, type MovementKind } from './MovementDialog';
 
@@ -165,14 +165,24 @@ export function WarehousePage() {
             value={view}
             onChange={(v) =>
               void navigate({
-                search: { view: v === 'movements' || v === 'inbound' || v === 'outbound' ? v : undefined },
+                search: {
+                  view:
+                    v === 'movements' || v === 'inbound' || v === 'outbound' || v === 'customers'
+                      ? v
+                      : undefined,
+                },
               })
             }
             items={[
               { value: 'stock', label: 'Stock on hand' },
+              { value: 'customers', label: 'Stock by customer' },
               { value: 'movements', label: 'Movements', count: k?.draftMovements || undefined },
-              { value: 'inbound', label: 'Inbound (PL → GRN)', count: inboundOpen || undefined },
-              { value: 'outbound', label: 'Outbound (request → POD)', count: outboundOpen || undefined },
+              { value: 'inbound', label: 'Inbound receipts (PL → GRN)', count: inboundOpen || undefined },
+              {
+                value: 'outbound',
+                label: 'Outbound releases (request → POD)',
+                count: outboundOpen || undefined,
+              },
             ]}
           />
         </div>
@@ -185,6 +195,10 @@ export function WarehousePage() {
         ) : view === 'outbound' ? (
           <div className="pt-2">
             <OutboundView />
+          </div>
+        ) : view === 'customers' ? (
+          <div className="pt-2">
+            <CustomerStockView />
           </div>
         ) : (
           <StockView />

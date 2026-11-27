@@ -24,6 +24,7 @@ export interface EnquiryRow extends Enquiry {
 export interface EnquiryInput {
   customerId: string;
   serviceCategory: ServiceCategory;
+  serviceCategories: ServiceCategory[];
   mode?: TransportMode;
   origin: string;
   destination: string;
@@ -38,7 +39,7 @@ const toRow = (e: Enquiry): EnquiryRow => ({ ...e, customerName: lookupName.cust
 export const enquiriesApi = {
   list(params: ListParams): Promise<Page<EnquiryRow>> {
     const rows = [...protoDb.get().enquiries]
-      .filter((e) => !params.type || e.serviceCategory === params.type)
+      .filter((e) => !params.type || e.serviceCategories.includes(params.type as ServiceCategory))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(toRow);
     return latency(
@@ -87,10 +88,18 @@ export const enquiriesApi = {
     });
     return latency(enquiry, 300);
   },
-  setStatus(id: string, status: EnquiryStatus): Promise<void> {
+  setStatus(id: string, status: EnquiryStatus, lostReason?: string): Promise<void> {
     protoDb.update((s) => ({
       ...s,
-      enquiries: s.enquiries.map((e) => (e.id === id ? { ...e, status } : e)),
+      enquiries: s.enquiries.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              status,
+              notes: lostReason ? `${e.notes ? `${e.notes}\n` : ''}Lost reason: ${lostReason}` : e.notes,
+            }
+          : e,
+      ),
     }));
     const e = protoDb.get().enquiries.find((x) => x.id === id);
     if (e)
@@ -103,6 +112,71 @@ export const enquiriesApi = {
     return latency(undefined, 200);
   },
 };
+
+/** Card row for the Kanban board: enquiry + its latest quotation and whether a sales order exists. */
+export interface EnquiryBoardRow extends EnquiryRow {
+  latestQuotation?: Pick<Quotation, 'id' | 'number' | 'status'>;
+  hasAcceptedQuotation: boolean;
+  hasSalesOrder: boolean;
+}
+
+/** Board query: bounded to the first 100 matches (search + type), grouped client-side. */
+export function boardList(params: ListParams): Promise<EnquiryBoardRow[]> {
+  const db = protoDb.get();
+  const page = paginate(
+    [...db.enquiries]
+      .filter((e) => !params.type || e.serviceCategories.includes(params.type as ServiceCategory))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(toRow),
+    { ...params, page: 1, pageSize: 100, status: undefined },
+    {
+      searchText: (r) => `${r.number} ${r.customerName} ${r.origin} ${r.destination} ${r.cargo.description}`,
+    },
+  );
+  const rows = page.items.map((r): EnquiryBoardRow => {
+    const qs = db.quotations
+      .filter((q) => q.enquiryId === r.id)
+      .sort((a, b) => b.version - a.version || b.createdAt.localeCompare(a.createdAt));
+    const latest = qs[0];
+    return {
+      ...r,
+      latestQuotation: latest ? { id: latest.id, number: latest.number, status: latest.status } : undefined,
+      hasAcceptedQuotation: qs.some((q) => q.status === 'Accepted'),
+      hasSalesOrder: db.salesOrders.some((so) => so.enquiryId === r.id && so.status !== 'Cancelled'),
+    };
+  });
+  return latency(rows);
+}
+
+export function useEnquiryBoard(params: ListParams) {
+  return useQuery({
+    queryKey: ['enquiries', 'board', params],
+    queryFn: () => boardList(params),
+    placeholderData: (prev) => prev,
+  });
+}
+
+/** Move a card: optimistic update of every cached board, rolled back on error. */
+export function useMoveEnquiry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, status, lostReason }: { id: string; status: EnquiryStatus; lostReason?: string }) =>
+      enquiriesApi.setStatus(id, status, lostReason),
+    onMutate: async ({ id, status }) => {
+      await qc.cancelQueries({ queryKey: ['enquiries', 'board'] });
+      const snapshots = qc.getQueriesData<EnquiryBoardRow[]>({ queryKey: ['enquiries', 'board'] });
+      qc.setQueriesData<EnquiryBoardRow[]>({ queryKey: ['enquiries', 'board'] }, (rows) =>
+        rows?.map((r) => (r.id === id ? { ...r, status } : r)),
+      );
+      return { snapshots };
+    },
+    onError: (_e, _v, ctx) => ctx?.snapshots.forEach(([key, data]) => qc.setQueryData(key, data)),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['enquiries'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
+    },
+  });
+}
 
 export function useEnquiries(params: ListParams) {
   return useQuery({

@@ -51,7 +51,8 @@ export function DataTable<T>({
   }
   return (
     <div>
-      <div className="overflow-x-auto">
+      {/* Focusable so keyboard users can scroll wide tables (WCAG 2.1.1). */}
+      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={caption}>
         <table className="w-full border-collapse text-left text-body-s">
           <caption className="sr-only">{caption}</caption>
           <thead>

@@ -1,15 +1,32 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { Plus, Send, Trash2 } from 'lucide-react';
+import { Send } from 'lucide-react';
 import { useState } from 'react';
-import { useFieldArray, useForm, useWatch } from 'react-hook-form';
+import { useController, useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
-import { SERVICE_CATEGORIES, serviceCategoryLabel } from '@/domain/workflow';
-import { locationLabel } from '@/features/sales-orders/commercial-ui';
-import { useCustomerOptions, useServiceOptions } from '@/shared/data/lookups';
+import { categoriesFromLines, serviceCategoryLabel } from '@/domain/workflow';
+import { locationLabel, ServiceTypesPicker } from '@/features/sales-orders/commercial-ui';
+import {
+  suggestServiceRate,
+  useCustomerComboOptions,
+  useCustomerOptions,
+  useServiceComboOptions,
+  useServiceOptions,
+} from '@/shared/data/lookups';
+import { ComboboxField } from '@/shared/ui/Combobox';
+import { PriceLinesGrid, type GridLine } from '@/shared/ui/PriceLinesGrid';
+import {
+  ENTRY_SHORTCUTS,
+  Kbd,
+  MOD,
+  ShortcutsButton,
+  StickyActionBar,
+  useFormShortcuts,
+} from '@/shared/ui/shortcuts';
+import { formatMoney } from '@/shared/utils/format';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
-import { inputClasses, SelectField, TextareaField, TextField } from '@/shared/ui/Field';
+import { SelectField, TextareaField, TextField } from '@/shared/ui/Field';
 import { DocRef } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
@@ -31,7 +48,9 @@ const lineSchema = z.object({
 const schema = z
   .object({
     customerId: z.string().min(1, 'Choose a customer'),
-    serviceCategory: z.enum(['Transport', 'Warehouse', 'Service']),
+    serviceCategories: z
+      .array(z.enum(['Transport', 'Warehouse', 'Service']))
+      .min(1, 'Select at least one service type'),
     mode: z.enum(['Road', 'Sea', 'Air']),
     origin: z.string().trim().min(2, 'Enter a location').max(80),
     destination: z.string().trim().max(80),
@@ -41,7 +60,7 @@ const schema = z
     lines: z.array(lineSchema).min(1, 'Add at least one price line'),
   })
   .superRefine((v, ctx) => {
-    if (v.serviceCategory === 'Transport' && v.destination.length < 2)
+    if (v.serviceCategories.includes('Transport') && v.destination.length < 2)
       ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
   });
 type FormInput = z.input<typeof schema>;
@@ -54,8 +73,16 @@ export function NewQuotationPage() {
   const prefill = useQuotationPrefill(enquiryId);
   const customers = useCustomerOptions();
   const services = useServiceOptions();
+  const customerCombo = useCustomerComboOptions();
+  const serviceCombo = useServiceComboOptions();
   // Wait for option lists so the selects show their prefilled values on first render.
-  if ((enquiryId && prefill.isLoading) || customers.isLoading || services.isLoading)
+  if (
+    (enquiryId && prefill.isLoading) ||
+    customers.isLoading ||
+    services.isLoading ||
+    customerCombo.isLoading ||
+    serviceCombo.isLoading
+  )
     return (
       <StatusMessage kind="loading" title={enquiryId ? 'Preparing quotation from enquiry…' : 'Loading…'} />
     );
@@ -71,8 +98,9 @@ function QuotationForm({
 }) {
   const navigate = useNavigate();
   const toast = useToast();
-  const customers = useCustomerOptions();
   const services = useServiceOptions();
+  const customerCombo = useCustomerComboOptions();
+  const serviceCombo = useServiceComboOptions();
   const create = useCreateQuotation();
   const [submitMode, setSubmitMode] = useState<'draft' | 'submit'>('draft');
 
@@ -87,7 +115,7 @@ function QuotationForm({
     resolver: zodResolver(schema),
     defaultValues: {
       customerId: prefill?.customerId ?? '',
-      serviceCategory: prefill?.serviceCategory ?? 'Transport',
+      serviceCategories: prefill?.serviceCategories ?? ['Transport'],
       mode: prefill?.mode ?? 'Road',
       origin: prefill?.origin ?? '',
       destination: prefill?.destination ?? '',
@@ -101,7 +129,16 @@ function QuotationForm({
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'lines' });
   const watchedLines = useWatch({ control, name: 'lines' }) ?? [];
-  const category = useWatch({ control, name: 'serviceCategory' });
+  const cats = useController({ control, name: 'serviceCategories' });
+  const customer = useController({ control, name: 'customerId' });
+  // Types found on the price lines are always included (one quote can mix services).
+  const lineTypes = categoriesFromLines(
+    watchedLines.map((l) => ({ serviceId: l?.serviceId ?? '' })),
+    (id) => services.data?.find((s) => s.value === id)?.mode,
+  );
+  const selected = cats.field.value;
+  const transport = selected.includes('Transport') || lineTypes.includes('Transport');
+  const locationKind = transport ? 'Transport' : selected.includes('Warehouse') ? 'Warehouse' : 'Service';
   const t = totals(
     watchedLines.map((l) => ({
       quantity: Number(l?.quantity) || 0,
@@ -110,19 +147,33 @@ function QuotationForm({
     })),
   );
 
-  const onServiceChange = (index: number, serviceId: string) => {
-    const svc = services.data?.find((s) => s.value === serviceId);
-    if (!svc) return;
-    setValue(`lines.${index}.unit`, svc.unit);
-    if (!getValues(`lines.${index}.description`)) setValue(`lines.${index}.description`, svc.label);
+  const emptyLine = { serviceId: '', description: '', quantity: 1, unit: '', unitPrice: 0, unitCost: 0 };
+  const gridLines: GridLine[] = watchedLines.map((l) => ({
+    serviceId: l?.serviceId ?? '',
+    description: l?.description ?? '',
+    quantity: String(l?.quantity ?? ''),
+    unit: l?.unit ?? '',
+    unitPrice: String(l?.unitPrice ?? ''),
+    unitCost: String(l?.unitCost ?? ''),
+  }));
+  const patchLine = (i: number, p: Partial<GridLine>) => {
+    const o = { shouldDirty: true };
+    if (p.serviceId !== undefined) setValue(`lines.${i}.serviceId`, p.serviceId, o);
+    if (p.description !== undefined) setValue(`lines.${i}.description`, p.description, o);
+    if (p.quantity !== undefined) setValue(`lines.${i}.quantity`, p.quantity, o);
+    if (p.unit !== undefined) setValue(`lines.${i}.unit`, p.unit, o);
+    if (p.unitPrice !== undefined) setValue(`lines.${i}.unitPrice`, p.unitPrice, o);
+    if (p.unitCost !== undefined) setValue(`lines.${i}.unitCost`, p.unitCost, o);
   };
+  const suggest = (serviceId: string) =>
+    suggestServiceRate(serviceId, { origin: getValues('origin'), destination: getValues('destination') });
 
   const save = (submit: boolean) => async (v: FormOutput) => {
     setSubmitMode(submit ? 'submit' : 'draft');
     const q = await create.mutateAsync({
       ...v,
-      mode: v.serviceCategory === 'Transport' ? v.mode : undefined,
-      destination: v.serviceCategory === 'Transport' ? v.destination : '',
+      mode: transport ? v.mode : undefined,
+      destination: transport ? v.destination : '',
       enquiryId,
       submit,
     });
@@ -133,6 +184,12 @@ function QuotationForm({
     void navigate({ to: '/quotations/$id', params: { id: q.id } });
   };
   const onSubmit = handleSubmit(save(false));
+  const onSubmitForApproval = () => void handleSubmit(save(true))();
+  useFormShortcuts({
+    onSave: () => void onSubmit(),
+    onPrimary: onSubmitForApproval,
+    onAddLine: () => append(emptyLine),
+  });
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -157,21 +214,33 @@ function QuotationForm({
         <Card>
           <CardHeader title="Customer & service" />
           <CardBody className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-            <SelectField
+            <ComboboxField
               label="Customer"
               required
               className="sm:col-span-2"
-              placeholder={customers.isLoading ? 'Loading…' : 'Select customer'}
-              options={customers.data ?? []}
+              placeholder="Type name, code or city…"
+              options={customerCombo.data ?? []}
+              value={customer.field.value}
+              onChange={customer.field.onChange}
               error={errors.customerId?.message}
-              {...register('customerId')}
             />
-            <SelectField
-              label="Service type"
-              required
-              options={SERVICE_CATEGORIES.map((c) => ({ value: c, label: serviceCategoryLabel[c] }))}
-              {...register('serviceCategory')}
-            />
+            <div className="sm:col-span-2 lg:col-span-4">
+              <ServiceTypesPicker
+                value={selected}
+                error={errors.serviceCategories?.message}
+                onChange={cats.field.onChange}
+              />
+              {lineTypes.some((c) => !selected.includes(c)) ? (
+                <p className="mt-2 text-caption text-fg-muted">
+                  Price lines also include{' '}
+                  {lineTypes
+                    .filter((c) => !selected.includes(c))
+                    .map((c) => serviceCategoryLabel[c])
+                    .join(', ')}{' '}
+                  — saved with the quotation.
+                </p>
+              ) : null}
+            </div>
             <SelectField
               label="Agreement"
               required
@@ -182,7 +251,7 @@ function QuotationForm({
               ]}
               {...register('agreement')}
             />
-            {category === 'Transport' ? (
+            {transport ? (
               <SelectField
                 label="Transport mode"
                 required
@@ -191,12 +260,12 @@ function QuotationForm({
               />
             ) : null}
             <TextField
-              label={category === 'Transport' ? 'Origin' : locationLabel(category)}
+              label={transport ? 'Origin' : locationLabel(locationKind)}
               required
               error={errors.origin?.message}
               {...register('origin')}
             />
-            {category === 'Transport' ? (
+            {transport ? (
               <TextField
                 label="Destination"
                 required
@@ -217,151 +286,36 @@ function QuotationForm({
         <Card>
           <CardHeader
             title="Price lines"
-            description="Unit cost is internal and never shown to the customer."
-            actions={
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={<Plus aria-hidden="true" />}
-                onClick={() =>
-                  append({ serviceId: '', description: '', quantity: 1, unit: '', unitPrice: 0, unitCost: 0 })
-                }
-              >
-                Add line
-              </Button>
-            }
+            description="Type to find a service — cost and a suggested price come from the rate card. Unit cost is internal."
           />
           <CardBody>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px] text-left text-body-s">
-                <caption className="sr-only">Quotation price lines</caption>
-                <thead>
-                  <tr className="text-caption uppercase tracking-wide text-fg-muted">
-                    <th scope="col" className="w-48 pb-2 pr-2 font-medium">
-                      Service
-                    </th>
-                    <th scope="col" className="pb-2 pr-2 font-medium">
-                      Description
-                    </th>
-                    <th scope="col" className="w-20 pb-2 pr-2 font-medium">
-                      Qty
-                    </th>
-                    <th scope="col" className="w-28 pb-2 pr-2 font-medium">
-                      Unit
-                    </th>
-                    <th scope="col" className="w-28 pb-2 pr-2 text-right font-medium">
-                      Unit price
-                    </th>
-                    <th scope="col" className="w-28 pb-2 pr-2 text-right font-medium">
-                      Unit cost
-                    </th>
-                    <th scope="col" className="w-28 pb-2 pr-2 text-right font-medium">
-                      Amount
-                    </th>
-                    <th scope="col" className="w-10 pb-2">
-                      <span className="sr-only">Remove</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fields.map((f, i) => {
-                    const le = errors.lines?.[i];
-                    const wl = watchedLines[i];
-                    const amount = (Number(wl?.quantity) || 0) * (Number(wl?.unitPrice) || 0);
-                    const reg = register(`lines.${i}.serviceId`);
-                    return (
-                      <tr key={f.id} className="align-top">
-                        <td className="py-1.5 pr-2">
-                          <select
-                            aria-label={`Line ${i + 1} service`}
-                            aria-invalid={!!le?.serviceId || undefined}
-                            className={`${inputClasses} h-9`}
-                            {...reg}
-                            onChange={(e) => {
-                              void reg.onChange(e);
-                              onServiceChange(i, e.target.value);
-                            }}
-                          >
-                            <option value="">Select…</option>
-                            {(services.data ?? []).map((s) => (
-                              <option key={s.value} value={s.value}>
-                                {s.label}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-1.5 pr-2">
-                          <input
-                            aria-label={`Line ${i + 1} description`}
-                            aria-invalid={!!le?.description || undefined}
-                            className={`${inputClasses} h-9`}
-                            {...register(`lines.${i}.description`)}
-                          />
-                        </td>
-                        <td className="py-1.5 pr-2">
-                          <input
-                            aria-label={`Line ${i + 1} quantity`}
-                            type="number"
-                            step="any"
-                            inputMode="decimal"
-                            aria-invalid={!!le?.quantity || undefined}
-                            className={`${inputClasses} h-9 text-right`}
-                            {...register(`lines.${i}.quantity`)}
-                          />
-                        </td>
-                        <td className="py-1.5 pr-2">
-                          <input
-                            aria-label={`Line ${i + 1} unit`}
-                            aria-invalid={!!le?.unit || undefined}
-                            className={`${inputClasses} h-9`}
-                            {...register(`lines.${i}.unit`)}
-                          />
-                        </td>
-                        <td className="py-1.5 pr-2">
-                          <input
-                            aria-label={`Line ${i + 1} unit price`}
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            aria-invalid={!!le?.unitPrice || undefined}
-                            className={`${inputClasses} h-9 text-right`}
-                            {...register(`lines.${i}.unitPrice`)}
-                          />
-                        </td>
-                        <td className="py-1.5 pr-2">
-                          <input
-                            aria-label={`Line ${i + 1} unit cost`}
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            aria-invalid={!!le?.unitCost || undefined}
-                            className={`${inputClasses} h-9 text-right`}
-                            {...register(`lines.${i}.unitCost`)}
-                          />
-                        </td>
-                        <td className="py-3 pr-2 text-right font-medium tabular-nums">
-                          {amount.toLocaleString('en-AE', {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </td>
-                        <td className="py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => remove(i)}
-                            disabled={fields.length === 1}
-                            aria-label={`Remove line ${i + 1}`}
-                            className="grid size-9 place-items-center rounded-md text-fg-muted hover:bg-danger-subtle hover:text-danger disabled:opacity-30"
-                          >
-                            <Trash2 aria-hidden="true" className="size-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <PriceLinesGrid
+              caption="Quotation price lines"
+              lines={gridLines}
+              keys={fields.map((f) => f.id)}
+              errors={
+                errors.lines
+                  ? fields.map((_, i) => {
+                      const le = errors.lines?.[i];
+                      return le
+                        ? {
+                            serviceId: le.serviceId?.message,
+                            description: le.description?.message,
+                            quantity: le.quantity?.message,
+                            unit: le.unit?.message,
+                            unitPrice: le.unitPrice?.message,
+                            unitCost: le.unitCost?.message,
+                          }
+                        : undefined;
+                    })
+                  : undefined
+              }
+              services={serviceCombo.data ?? []}
+              onPatch={patchLine}
+              onAdd={() => append(emptyLine)}
+              onRemove={remove}
+              suggest={suggest}
+            />
             {errors.lines ? (
               <p role="alert" className="mt-2 text-caption font-medium text-danger">
                 {errors.lines.message ?? errors.lines.root?.message ?? 'Check the highlighted line fields.'}
@@ -380,7 +334,22 @@ function QuotationForm({
           </CardBody>
         </Card>
 
-        <div className="flex flex-wrap justify-end gap-2">
+        <StickyActionBar
+          summary={
+            <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-body-s">
+              <span>
+                Total <strong className="tabular-nums">{formatMoney(t.total)}</strong>
+              </span>
+              <span className="text-fg-muted">
+                margin <span className="tabular-nums">{formatMoney(t.margin)}</span> ({t.marginPct}%)
+              </span>
+              <span className="hidden items-center gap-1 text-caption text-fg-muted md:flex">
+                <Kbd>{MOD}</Kbd>+<Kbd>S</Kbd> draft · <Kbd>{MOD}</Kbd>+<Kbd>Enter</Kbd> submit
+              </span>
+            </p>
+          }
+        >
+          <ShortcutsButton shortcuts={ENTRY_SHORTCUTS} />
           <ButtonLink to="/quotations" variant="secondary">
             Cancel
           </ButtonLink>
@@ -397,11 +366,11 @@ function QuotationForm({
             icon={<Send aria-hidden="true" />}
             busy={create.isPending && submitMode === 'submit'}
             disabled={create.isPending}
-            onClick={() => void handleSubmit(save(true))()}
+            onClick={onSubmitForApproval}
           >
             Submit for approval
           </Button>
-        </div>
+        </StickyActionBar>
       </form>
     </div>
   );

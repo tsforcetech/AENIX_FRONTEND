@@ -30,7 +30,11 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
-      onClose={onClose}
+      onClose={(e) => {
+        // Ignore close events bubbling up from a nested dialog (e.g. an import dialog inside a form dialog).
+        if (e.target !== e.currentTarget) return;
+        onClose();
+      }}
       aria-labelledby={titleId}
       className={`m-auto w-[calc(100%-2rem)] ${size === 'lg' ? 'max-w-2xl' : 'max-w-lg'} rounded-2xl border border-border-subtle bg-surface p-0 text-fg shadow-2xl backdrop:bg-black/40 backdrop:backdrop-blur-[2px]`}
     >

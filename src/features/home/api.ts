@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { customerBalance } from '@/domain/balances';
 import { invoiceTotals, workOrderFinancials } from '@/domain/calc';
 import type { ActivityEvent, ServiceCategory, TransportMode, WorkOrder } from '@/domain/types';
 import { monthlyRevenue, PROTO_TODAY } from '@/prototype/seed';
@@ -32,7 +33,15 @@ export interface HomeOverview {
   attention: { id: string; title: string; detail: string; tone: 'danger' | 'warning' | 'info'; to: string }[];
   activeShipments: (Pick<
     WorkOrder,
-    'id' | 'number' | 'serviceCategory' | 'mode' | 'origin' | 'destination' | 'status' | 'eta'
+    | 'id'
+    | 'number'
+    | 'serviceCategory'
+    | 'serviceCategories'
+    | 'mode'
+    | 'origin'
+    | 'destination'
+    | 'status'
+    | 'eta'
   > & {
     customer: string;
     progress: number;
@@ -52,10 +61,19 @@ function buildOverview(): HomeOverview {
     ['Confirmed', 'In progress', 'In transit', 'Delivered'].includes(w.status),
   );
   const openInv = db.invoices.filter((i) => ['Posted', 'Partially paid', 'Overdue'].includes(i.status));
-  const receivables = openInv.reduce((s, i) => s + invoiceTotals(i).outstanding, 0);
+  // Exact receivables: sum of every customer's outstanding from the balance model (invoices − receipts on them).
+  const balances = db.customers.map((c) => ({
+    customer: c,
+    b: customerBalance(c.id, {
+      salesOrders: db.salesOrders,
+      invoices: db.invoices,
+      collections: db.collections,
+    }),
+  }));
+  const receivables = balances.reduce((s, x) => s + x.b.outstanding, 0);
   const overdue = db.invoices.filter((i) => i.status === 'Overdue');
   const collectedMonth = db.collections
-    .filter((c) => c.date.startsWith('2026-11') && (c.status === 'Allocated' || c.status === 'Unallocated'))
+    .filter((c) => c.date.startsWith('2026-11') && ['Allocated', 'Unallocated', 'Advance'].includes(c.status))
     .reduce((s, c) => s + c.amount, 0);
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
@@ -96,15 +114,17 @@ function buildOverview(): HomeOverview {
         tone: 'warning' as const,
         to: `/work-orders/${w.id}`,
       })),
-    ...db.workOrders
-      .filter((w) => w.grn?.status === 'Variance raised')
-      .map((w) => ({
-        id: `${w.id}-grn`,
-        title: `${w.grn!.number} does not match ${w.packingList?.number ?? 'the PL'}`,
-        detail: `${w.number} · ${customerName(w.customerId)}`,
-        tone: 'danger' as const,
-        to: `/work-orders/${w.id}`,
-      })),
+    ...db.workOrders.flatMap((w) =>
+      w.inbounds
+        .filter((ib) => ib.grn?.status === 'Variance raised')
+        .map((ib) => ({
+          id: `${w.id}-${ib.id}-grn`,
+          title: `${ib.grn!.number} does not match ${ib.packingList.number}`,
+          detail: `${w.number} · ${ib.number} · ${customerName(w.customerId)}`,
+          tone: 'danger' as const,
+          to: `/work-orders/${w.id}`,
+        })),
+    ),
     ...db.workOrders.flatMap((w) =>
       w.customerRequests
         .filter((r) => r.status === 'Variance raised')
@@ -116,15 +136,17 @@ function buildOverview(): HomeOverview {
           to: `/work-orders/${w.id}`,
         })),
     ),
-    ...db.workOrders
-      .filter((w) => w.packingList?.status === 'Sent to warehouse' && !w.grn)
-      .map((w) => ({
-        id: `${w.id}-nogrn`,
-        title: `${w.number} is waiting for the GRN`,
-        detail: `${w.packingList!.number} sent to warehouse · ${customerName(w.customerId)}`,
-        tone: 'warning' as const,
-        to: `/work-orders/${w.id}`,
-      })),
+    ...db.workOrders.flatMap((w) =>
+      w.inbounds
+        .filter((ib) => ib.packingList.status === 'Sent to warehouse' && !ib.grn)
+        .map((ib) => ({
+          id: `${w.id}-${ib.id}-nogrn`,
+          title: `${ib.number} expected — no GRN yet`,
+          detail: `${w.number} · ${ib.reference || ib.packingList.number} · due ${ib.expectedAt} · ${customerName(w.customerId)}`,
+          tone: (ib.expectedAt < today ? 'warning' : 'info') as 'warning' | 'info',
+          to: `/work-orders/${w.id}`,
+        })),
+    ),
     ...db.workOrders.flatMap((w) =>
       w.customerRequests
         .filter((r) => r.status === 'Sent to vendor' && !r.pod && r.requiredBy < today)
@@ -155,6 +177,35 @@ function buildOverview(): HomeOverview {
         tone: 'info' as const,
         to: '/collections',
       })),
+    ...db.purchaseOrders
+      .filter((po) => po.status === 'Completed' && !po.vendorBillId)
+      .map((po) => ({
+        id: `po-${po.id}`,
+        title: `${po.number} awaiting vendor invoice`,
+        detail: `${db.vendors.find((v) => v.id === po.vendorId)?.name ?? '—'} · ${db.workOrders.find((w) => w.id === po.workOrderId)?.number ?? ''}`,
+        tone: 'warning' as const,
+        to: `/purchase-orders/${po.id}`,
+      })),
+    ...balances.flatMap(({ customer, b }) =>
+      b.salesOrders
+        .filter((o) => o.status === 'Completed' && o.notInvoiced > 0)
+        .map((o) => ({
+          id: `soinv-${o.salesOrderId}`,
+          title: `${o.number} completed — not invoiced`,
+          detail: `${customer.name} · AED ${o.notInvoiced.toLocaleString('en-AE', { minimumFractionDigits: 2 })} to bill`,
+          tone: 'warning' as const,
+          to: `/sales-orders/${o.salesOrderId}`,
+        })),
+    ),
+    ...balances
+      .filter(({ b }) => b.advances + b.unallocated > 0)
+      .map(({ customer, b }) => ({
+        id: `adv-${customer.id}`,
+        title: `Advance to apply — ${customer.name}`,
+        detail: `AED ${(b.advances + b.unallocated).toLocaleString('en-AE', { minimumFractionDigits: 2 })} received ahead of invoicing`,
+        tone: 'info' as const,
+        to: `/customers/${customer.id}`,
+      })),
     ...db.contracts
       .filter((c) => c.status === 'Expiring')
       .map((c) => ({
@@ -174,6 +225,7 @@ function buildOverview(): HomeOverview {
         id: w.id,
         number: w.number,
         serviceCategory: w.serviceCategory,
+        serviceCategories: w.serviceCategories,
         mode: w.mode,
         origin: w.origin,
         destination: w.destination,
@@ -206,9 +258,14 @@ function buildOverview(): HomeOverview {
       collectedTrend: [182000, 214000, 236000, 228000, 271000, Math.round(collectedMonth + 240000)],
     },
     pipeline: [
-      { key: 'enq', label: 'Open enquiries', count: openEnq.length, value: 0, to: '/enquiries' },
-      { key: 'qt', label: 'Quotations out', count: openQt.length, value: qtValue(openQt), to: '/quotations' },
-      { key: 'acc', label: 'Confirmed', count: accepted.length, value: qtValue(accepted), to: '/quotations' },
+      { key: 'enq', label: 'Enquiries', count: openEnq.length, value: 0, to: '/enquiries' },
+      {
+        key: 'qt',
+        label: 'Quotations',
+        count: openQt.length + accepted.length,
+        value: qtValue([...openQt, ...accepted]),
+        to: '/quotations',
+      },
       {
         key: 'so',
         label: 'Sales orders',
@@ -218,12 +275,13 @@ function buildOverview(): HomeOverview {
       },
       {
         key: 'wo',
-        label: 'Jobs running',
+        label: 'Jobs',
         count: active.length,
         value: sum(active.map((w) => workOrderFinancials(w).revenue)),
         to: '/work-orders',
       },
       { key: 'inv', label: 'Invoiced, unpaid', count: invoiced.length, value: receivables, to: '/invoices' },
+      // Collected this month (receipts incl. advances on sales orders).
       { key: 'paid', label: 'Collected', count: paid.length, value: collectedMonth, to: '/collections' },
     ],
     attention,

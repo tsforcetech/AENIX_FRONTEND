@@ -3,7 +3,14 @@ import { StatusBadge } from '@/shared/ui/Badge';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { DocRef } from '@/shared/ui/Money';
 import { formatDate, formatDateTime } from '@/shared/utils/format';
-import { useInbound, useOutbound, type InboundRow, type OutboundRow } from './docs';
+import {
+  useCustomerStock,
+  useInbound,
+  useOutbound,
+  type CustomerStockRow,
+  type InboundRow,
+  type OutboundRow,
+} from './docs';
 
 const stageStatus: Record<InboundRow['stage'], string> = {
   'PL draft': 'Draft',
@@ -25,14 +32,27 @@ const inboundColumns: Column<InboundRow>[] = [
     ),
   },
   {
+    key: 'inbound',
+    header: 'Inbound',
+    cell: (r) => (
+      <div className="min-w-36">
+        <DocRef>{r.inboundNumber}</DocRef>
+        <p className="max-w-52 truncate text-caption text-fg-muted">{r.reference || '—'}</p>
+        <p className="whitespace-nowrap text-caption text-fg-muted">Expected {formatDate(r.expectedAt)}</p>
+      </div>
+    ),
+  },
+  {
     key: 'pl',
     header: 'Product list',
     cell: (r) => (
       <div>
-        <p className="font-mono text-[13px]">{r.pl?.number}</p>
+        <p className="font-mono text-[13px]">{r.pl.number}</p>
         <p className="whitespace-nowrap text-caption text-fg-muted">
-          {r.pl?.sentAt ? `Sent ${formatDateTime(r.pl.sentAt)}` : 'Not sent yet'}
+          {r.pl.lines.length} SKU{r.pl.lines.length === 1 ? '' : 's'} ·{' '}
+          {r.pl.sentAt ? `sent ${formatDateTime(r.pl.sentAt)}` : 'not sent yet'}
         </p>
+        {r.pl.source ? <p className="text-caption text-fg-muted">via {r.pl.source}</p> : null}
       </div>
     ),
   },
@@ -152,15 +172,15 @@ export function InboundView() {
   const { data, isLoading, error } = useInbound();
   return (
     <DataTable
-      caption="Inbound product lists and GRNs"
+      caption="Inbound receipts: product lists and GRNs"
       columns={inboundColumns}
       rows={data}
       rowKey={(r) => r.id}
       loading={isLoading}
       error={error}
       onRowClick={(r) => void navigate({ to: '/work-orders/$id', params: { id: r.workOrderId } })}
-      emptyTitle="No product lists yet"
-      emptyDescription="Product lists are created on warehouse jobs and sent to the warehouse team from the job page."
+      emptyTitle="No inbound receipts yet"
+      emptyDescription="Inbounds are added on warehouse jobs — import the customer’s product list from Excel."
     />
   );
 }
@@ -179,6 +199,72 @@ export function OutboundView() {
       onRowClick={(r) => void navigate({ to: '/work-orders/$id', params: { id: r.workOrderId } })}
       emptyTitle="No customer requests yet"
       emptyDescription="Customer out / delivery requests are logged on the job and closed with the vendor’s POD."
+    />
+  );
+}
+
+const n = (v: number) => <span className="tabular-nums">{v.toLocaleString('en-AE')}</span>;
+
+const stockColumns: Column<CustomerStockRow>[] = [
+  {
+    key: 'job',
+    header: 'Customer / job',
+    cell: (r) => (
+      <div className="min-w-44">
+        <p className="font-medium">{r.customerName}</p>
+        <DocRef>{r.jobNumber}</DocRef>
+      </div>
+    ),
+  },
+  {
+    key: 'moves',
+    header: 'Inbounds / releases',
+    hideOnMobile: true,
+    cell: (r) => (
+      <span className="whitespace-nowrap text-fg-secondary">
+        {r.inbounds} in · {r.releases} out
+      </span>
+    ),
+  },
+  { key: 'skus', header: 'SKUs in stock', align: 'right', hideOnMobile: true, cell: (r) => n(r.skus) },
+  { key: 'received', header: 'Received', align: 'right', hideOnMobile: true, cell: (r) => n(r.received) },
+  { key: 'delivered', header: 'Delivered', align: 'right', hideOnMobile: true, cell: (r) => n(r.delivered) },
+  {
+    key: 'damaged',
+    header: 'Damaged',
+    align: 'right',
+    hideOnMobile: true,
+    cell: (r) => (r.damaged ? <span className="font-medium text-danger">{n(r.damaged)}</span> : '—'),
+  },
+  {
+    key: 'onHand',
+    header: 'On hand',
+    align: 'right',
+    cell: (r) => <span className="font-semibold">{n(r.onHand)}</span>,
+  },
+  { key: 'reserved', header: 'Reserved', align: 'right', cell: (r) => (r.reserved ? n(r.reserved) : '—') },
+  {
+    key: 'available',
+    header: 'Available',
+    align: 'right',
+    cell: (r) => <span className="font-semibold">{n(r.available)}</span>,
+  },
+];
+
+export function CustomerStockView() {
+  const navigate = useNavigate();
+  const { data, isLoading, error } = useCustomerStock();
+  return (
+    <DataTable
+      caption="Stock by customer job"
+      columns={stockColumns}
+      rows={data}
+      rowKey={(r) => r.id}
+      loading={isLoading}
+      error={error}
+      onRowClick={(r) => void navigate({ to: '/work-orders/$id', params: { id: r.workOrderId } })}
+      emptyTitle="No stored goods yet"
+      emptyDescription="Stock appears once a GRN is uploaded on a warehouse job."
     />
   );
 }

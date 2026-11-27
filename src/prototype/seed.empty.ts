@@ -12,6 +12,9 @@ export const vendorRates: typeof Seed.vendorRates = [];
 export const enquiries: typeof Seed.enquiries = [];
 export const quotations: typeof Seed.quotations = [];
 export const salesOrders: typeof Seed.salesOrders = [];
+export const purchaseOrders: typeof Seed.purchaseOrders = [];
+export const vendorPayments: typeof Seed.vendorPayments = [];
+export const ledgerAccounts: typeof Seed.ledgerAccounts = [];
 export const contracts: typeof Seed.contracts = [];
 export const workOrders: typeof Seed.workOrders = [];
 export const stockItems: typeof Seed.stockItems = [];
@@ -26,3 +29,17 @@ export const notifications: typeof Seed.notifications = [];
 export const monthlyRevenue: typeof Seed.monthlyRevenue = [];
 export const staffUsers: typeof Seed.staffUsers = [];
 export const prototypeLoginHint: typeof Seed.prototypeLoginHint = '';
+export const company: typeof Seed.company = {
+  legalName: '',
+  tagline: '',
+  website: '',
+  trn: '',
+  officeAddress: [],
+  registeredAddress: [],
+  phone: '',
+  email: '',
+  licenseNo: '',
+  bank: { bankName: '', accountName: '', accountNumber: '', iban: '', swift: '' },
+  invoicePrefix: 'AEN',
+  grnPrefix: 'GRN',
+};

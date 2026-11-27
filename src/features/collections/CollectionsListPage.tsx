@@ -13,9 +13,10 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate } from '@/shared/utils/format';
 import { useClearPdc, useCollections, type CollectionRow } from './api';
+import { ApplyAdvanceDialog } from './ApplyAdvanceDialog';
 
 const route = getRouteApi('/_app/collections');
-const STATUSES: Collection['status'][] = ['Unallocated', 'Allocated', 'PDC pending', 'Bounced'];
+const STATUSES: Collection['status'][] = ['Unallocated', 'Allocated', 'Advance', 'PDC pending', 'Bounced'];
 
 export function CollectionsListPage() {
   const search = route.useSearch();
@@ -28,6 +29,7 @@ export function CollectionsListPage() {
   });
   const clearPdc = useClearPdc();
   const [pdc, setPdc] = useState<CollectionRow | null>(null);
+  const [advance, setAdvance] = useState<CollectionRow | null>(null);
 
   const columns: Column<CollectionRow>[] = [
     {
@@ -47,7 +49,7 @@ export function CollectionsListPage() {
         <div className="min-w-40">
           <p className="font-medium">{r.customerName}</p>
           <p className="text-caption text-fg-muted">
-            {r.invoiceNumbers.length ? r.invoiceNumbers.join(', ') : 'No allocation yet'}
+            {r.targets.length ? r.targets.join(', ') : 'No allocation yet'}
           </p>
         </div>
       ),
@@ -96,7 +98,19 @@ export function CollectionsListPage() {
       key: 'actions',
       header: <span className="sr-only">Actions</span>,
       cell: (r) =>
-        r.status === 'PDC pending' ? (
+        r.advanceAmount > 0 && r.status !== 'PDC pending' ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="whitespace-nowrap"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAdvance(r);
+            }}
+          >
+            Apply advance
+          </Button>
+        ) : r.status === 'PDC pending' ? (
           <Button
             size="sm"
             variant="secondary"
@@ -115,11 +129,11 @@ export function CollectionsListPage() {
   return (
     <div>
       <PageHeader
-        title="Collections"
-        description="Customer receipts and their allocation to invoices. Post-dated cheques are held until they clear."
+        title="Receipts"
+        description="Money received from customers: allocated to invoices, or held as an advance against a sales order. Post-dated cheques are held until they clear."
         actions={
           <ButtonLink to="/collections/new" icon={<Plus aria-hidden="true" />}>
-            Record collection
+            New receipt
           </ButtonLink>
         }
       />
@@ -135,13 +149,13 @@ export function CollectionsListPage() {
           searchPlaceholder="Search receipt, customer, reference…"
         />
         <DataTable
-          caption="Collections"
+          caption="Receipts"
           columns={columns}
           rows={data?.items}
           rowKey={(r) => r.id}
           loading={isLoading || isFetching}
           error={error}
-          emptyTitle="No collections match"
+          emptyTitle="No receipts match"
           emptyDescription="Try another status or search term."
           footer={
             data ? (
@@ -155,6 +169,8 @@ export function CollectionsListPage() {
           }
         />
       </Card>
+
+      {advance ? <ApplyAdvanceDialog receipt={advance} onClose={() => setAdvance(null)} /> : null}
 
       <Dialog
         open={!!pdc}

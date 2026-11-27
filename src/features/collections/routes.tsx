@@ -6,12 +6,14 @@ import { NewCollectionPage } from './NewCollectionPage';
 export interface NewCollectionSearch {
   invoiceId?: string;
   customerId?: string;
+  salesOrderId?: string;
 }
 
 function validateNewCollectionSearch(s: Record<string, unknown>): NewCollectionSearch {
   return {
     invoiceId: typeof s.invoiceId === 'string' ? s.invoiceId.slice(0, 64) : undefined,
     customerId: typeof s.customerId === 'string' ? s.customerId.slice(0, 64) : undefined,
+    salesOrderId: typeof s.salesOrderId === 'string' ? s.salesOrderId.slice(0, 64) : undefined,
   };
 }
 

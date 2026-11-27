@@ -107,6 +107,10 @@ const statusTone: Record<string, Tone> = {
   Warehouse: 'neutral',
   'Direct service': 'neutral',
   'Sales order': 'info',
+  Issued: 'info',
+  Billed: 'success',
+  Advance: 'info',
+  'PDC issued': 'warning',
 };
 
 export function StatusBadge({ status }: { status: string }) {

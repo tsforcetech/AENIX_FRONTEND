@@ -21,6 +21,11 @@ export default tseslint.config(
     languageOptions: { ecmaVersion: 2022, globals: globals.browser },
     plugins: { 'react-hooks': reactHooks },
     rules: {
+      // Scrollable table regions (role=region) must be keyboard-focusable (axe scrollable-region-focusable).
+      'jsx-a11y/no-noninteractive-tabindex': [
+        'error',
+        { tags: [], roles: ['tabpanel', 'region'], allowExpressionValues: true },
+      ],
       ...reactHooks.configs.recommended.rules,
       'no-restricted-syntax': [
         'error',

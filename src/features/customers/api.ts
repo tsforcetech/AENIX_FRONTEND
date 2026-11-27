@@ -1,9 +1,10 @@
-import { jobKindLabel } from '@/domain/workflow';
+import { servicesLabel } from '@/domain/workflow';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoiceTotals, workOrderFinancials } from '@/domain/calc';
-import type { Customer } from '@/domain/types';
+import { customerBalance } from '@/domain/balances';
+import type { Customer, LedgerAccount } from '@/domain/types';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
-import { latency, newId, protoDb } from '@/prototype/store';
+import { latency, logActivity, newId, protoDb } from '@/prototype/store';
 import { buildStatement, openInvoiceStats } from './statement';
 
 /**
@@ -12,7 +13,9 @@ import { buildStatement, openInvoiceStats } from './statement';
  */
 export interface CustomerRow extends Customer {
   outstanding: number;
+  netBalance: number;
   creditUsedPct: number;
+  ledgerCode: string;
 }
 
 export interface CustomerInput {
@@ -28,11 +31,26 @@ export interface CustomerInput {
   paymentTermsDays: number;
 }
 
+function balanceOf(customerId: string) {
+  const db = protoDb.get();
+  return customerBalance(customerId, {
+    salesOrders: db.salesOrders,
+    invoices: db.invoices,
+    collections: db.collections,
+  });
+}
+
+function ledgerCodeOf(ledgerAccountId: string) {
+  return protoDb.get().ledgerAccounts.find((a) => a.id === ledgerAccountId)?.code ?? '—';
+}
+
 function toRow(c: Customer): CustomerRow {
   const { outstanding } = openInvoiceStats(protoDb.get().invoices.filter((i) => i.customerId === c.id));
   return {
     ...c,
     outstanding,
+    netBalance: balanceOf(c.id).balance,
+    ledgerCode: ledgerCodeOf(c.ledgerAccountId),
     creditUsedPct: c.creditLimit ? Math.min(100, Math.round((outstanding / c.creditLimit) * 100)) : 0,
   };
 }
@@ -75,7 +93,7 @@ export const customersApi = {
         .map((e) => ({
           id: e.id,
           number: e.number,
-          route: `${jobKindLabel(e.serviceCategory, e.mode)} · ${e.destination ? `${e.origin} → ${e.destination}` : e.origin}`,
+          route: `${servicesLabel(e.serviceCategories, e.mode)} · ${e.destination ? `${e.origin} → ${e.destination}` : e.origin}`,
           date: e.createdAt,
           status: e.status,
         })),
@@ -85,7 +103,7 @@ export const customersApi = {
           id: q.id,
           number: q.number,
           version: q.version,
-          route: `${jobKindLabel(q.serviceCategory, q.mode)} · ${q.destination ? `${q.origin} → ${q.destination}` : q.origin}`,
+          route: `${servicesLabel(q.serviceCategories, q.mode)} · ${q.destination ? `${q.origin} → ${q.destination}` : q.origin}`,
           date: q.createdAt,
           status: q.status,
         })),
@@ -94,7 +112,7 @@ export const customersApi = {
         .map((o) => ({
           id: o.id,
           number: o.number,
-          route: `${jobKindLabel(o.serviceCategory, o.mode)} · PO ${o.customerPoRef}`,
+          route: `${servicesLabel(o.serviceCategories, o.mode)} · PO ${o.customerPoRef}`,
           date: o.orderDate,
           status: o.status,
           value: o.lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0),
@@ -102,19 +120,37 @@ export const customersApi = {
       workOrders: workOrders.map((w) => ({
         id: w.id,
         number: w.number,
-        route: `${jobKindLabel(w.serviceCategory, w.mode)} · ${w.destination ? `${w.origin} → ${w.destination}` : w.origin}`,
+        route: `${servicesLabel(w.serviceCategories, w.mode)} · ${w.destination ? `${w.origin} → ${w.destination}` : w.origin}`,
         date: w.createdAt,
         status: w.status,
         revenue: workOrderFinancials(w).revenue,
       })),
-      statement: buildStatement(invoices, collections),
+      statement: buildStatement(invoices, collections, db.salesOrders),
+      balance: balanceOf(id),
     });
   },
-  create(input: CustomerInput): Promise<Customer> {
+  create(input: CustomerInput): Promise<{ customer: Customer; ledgerCode: string }> {
     const db = protoDb.get();
     const next = Math.max(...db.customers.map((c) => Number(c.code.split('-')[1]))) + 1;
+    const id = newId('cus');
+    // Every customer gets its own sub-ledger under Accounts receivable (1200), created automatically.
+    const arCodes = db.ledgerAccounts
+      .filter((a) => a.parentId === 'g-ar')
+      .map((a) => Number(a.code.split('-')[1]))
+      .filter((n) => Number.isFinite(n));
+    const ledger: LedgerAccount = {
+      id: newId('la-cus'),
+      code: `1200-${String((arCodes.length ? Math.max(...arCodes) : 0) + 1).padStart(3, '0')}`,
+      name: input.name,
+      group: 'Assets',
+      kind: 'Ledger',
+      parentId: 'g-ar',
+      party: { type: 'Customer', id },
+      system: true,
+      active: true,
+    };
     const customer: Customer = {
-      id: newId('cus'),
+      id,
       code: `CUS-${String(next).padStart(4, '0')}`,
       name: input.name,
       industry: input.industry,
@@ -128,9 +164,20 @@ export const customersApi = {
       paymentTermsDays: input.paymentTermsDays,
       status: 'Active',
       createdAt: new Date().toISOString().slice(0, 10),
+      ledgerAccountId: ledger.id,
     };
-    protoDb.update((s) => ({ ...s, customers: [customer, ...s.customers] }));
-    return latency(customer, 300);
+    protoDb.update((s) => ({
+      ...s,
+      customers: [customer, ...s.customers],
+      ledgerAccounts: [...s.ledgerAccounts, ledger],
+    }));
+    logActivity({
+      entity: 'Ledger',
+      entityId: ledger.id,
+      entityRef: ledger.code,
+      action: `opened receivable ledger for ${customer.name}`,
+    });
+    return latency({ customer, ledgerCode: ledger.code }, 300);
   },
 };
 
@@ -155,6 +202,8 @@ export function useCreateCustomer() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['customers'] });
       void qc.invalidateQueries({ queryKey: ['lookups', 'customers'] });
+      void qc.invalidateQueries({ queryKey: ['ledger'] });
+      void qc.invalidateQueries({ queryKey: ['accounting'] });
     },
   });
 }

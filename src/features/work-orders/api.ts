@@ -6,10 +6,12 @@ import type {
   CustomerRequest,
   DocLine,
   Grn,
-  Invoice,
+  Inbound,
   Milestone,
+  PackingList,
   Pod,
   PriceLine,
+  PurchaseOrder,
   ServiceCategory,
   StockMovement,
   TransportMode,
@@ -18,8 +20,10 @@ import type {
   WorkOrder,
   WorkOrderStatus,
 } from '@/domain/types';
+import { nextDocNumber } from '@/domain/numbering';
 import { reconcile } from '@/domain/reconcile';
-import { milestoneLabels } from '@/domain/workflow';
+import { jobStock } from '@/domain/stock';
+import { milestoneLabels, primaryCategory, SERVICE_CATEGORIES } from '@/domain/workflow';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
@@ -32,8 +36,10 @@ export const PROTO_TODAY = '2026-11-23';
 
 /** Document status chips shown on lists (PL → GRN, request → POD). */
 export interface DocFlags {
-  awaitingGrn: boolean;
-  grnVariance: boolean;
+  /** Inbound receipts whose PL was sent but no GRN has come back yet. */
+  awaitingGrn: number;
+  /** Inbound receipts with an unresolved GRN variance. */
+  grnVariance: number;
   awaitingPod: number;
   podVariance: number;
 }
@@ -58,19 +64,37 @@ export interface PurchaseInvoiceRef {
   status: VendorBill['status'];
 }
 
+export interface PurchaseOrderRef {
+  id: string;
+  number: string;
+  vendorId: string;
+  vendorName: string;
+  serviceName: string;
+  amount: number;
+  status: PurchaseOrder['status'];
+  vendorBillId?: string;
+}
+
 export interface WorkOrderDetail extends WorkOrderRow {
   invoiceNumber?: string;
+  purchaseOrders: PurchaseOrderRef[];
   salesOrderNumber?: string;
   purchaseInvoices: PurchaseInvoiceRef[];
   movements: (StockMovement & { customerName: string })[];
-  assignments: (VendorAssignment & { vendorName: string; serviceName: string })[];
+  assignments: (VendorAssignment & {
+    vendorName: string;
+    serviceName: string;
+    poNumber?: string;
+    poStatus?: PurchaseOrder['status'];
+  })[];
 }
 
 export interface WorkOrderInput {
   customerId: string;
   source: WorkOrder['source'];
   salesOrderId?: string;
-  serviceCategory: ServiceCategory;
+  /** Every service type on the job (transport, warehouse and/or direct service). */
+  serviceCategories: ServiceCategory[];
   /** Transport only. */
   mode?: TransportMode;
   /** Optional product list for warehouse jobs (saved as a Draft PL). */
@@ -97,7 +121,7 @@ export interface WorkOrderPrefill {
   source: WorkOrder['source'];
   sourceRef?: string;
   salesOrderId?: string;
-  serviceCategory?: ServiceCategory;
+  serviceCategories?: ServiceCategory[];
   mode?: TransportMode;
   origin?: string;
   destination?: string;
@@ -113,12 +137,22 @@ function sourceRef(wo: WorkOrder): string | undefined {
   return undefined;
 }
 
-export function grnResult(wo: Pick<WorkOrder, 'packingList' | 'grn'>) {
-  if (!wo.packingList || !wo.grn) return undefined;
+export function grnResult(ib: Pick<Inbound, 'packingList' | 'grn'>) {
+  if (!ib.grn) return undefined;
   return reconcile(
-    wo.packingList.lines,
-    wo.grn.lines.map((l) => ({ sku: l.sku, qty: l.receivedQty, damaged: l.damagedQty, remarks: l.remarks })),
+    ib.packingList.lines,
+    ib.grn.lines.map((l) => ({ sku: l.sku, qty: l.receivedQty, damaged: l.damagedQty, remarks: l.remarks })),
   );
+}
+
+export type InboundStage = 'Draft PL' | 'Expected' | 'GRN uploaded' | 'Verified' | 'Variance raised';
+
+/** Where one inbound receipt is in its PL → GRN → check cycle. */
+export function inboundStage(ib: Inbound): InboundStage {
+  if (!ib.grn) return ib.packingList.status === 'Sent to warehouse' ? 'Expected' : 'Draft PL';
+  if (ib.grn.status === 'Verified') return 'Verified';
+  if (ib.grn.status === 'Variance raised') return 'Variance raised';
+  return 'GRN uploaded';
 }
 
 export function podResult(req: CustomerRequest) {
@@ -130,10 +164,13 @@ export function podResult(req: CustomerRequest) {
 }
 
 export function docFlags(wo: WorkOrder): DocFlags {
-  const grn = grnResult(wo);
   return {
-    awaitingGrn: wo.packingList?.status === 'Sent to warehouse' && !wo.grn,
-    grnVariance: wo.grn?.status === 'Variance raised' || (!!grn && !grn.ok && wo.grn?.status !== 'Verified'),
+    awaitingGrn: wo.inbounds.filter((ib) => inboundStage(ib) === 'Expected').length,
+    grnVariance: wo.inbounds.filter(
+      (ib) =>
+        ib.grn?.status === 'Variance raised' ||
+        (!!ib.grn && ib.grn.status !== 'Verified' && !grnResult(ib)?.ok),
+    ).length,
     awaitingPod: wo.customerRequests.filter((r) => !r.pod && r.status !== 'Closed').length,
     podVariance: wo.customerRequests.filter(
       (r) => r.status === 'Variance raised' || (r.pod && r.status !== 'Closed' && !podResult(r)?.ok),
@@ -141,16 +178,14 @@ export function docFlags(wo: WorkOrder): DocFlags {
   };
 }
 
-/** Good (received − damaged) quantity per SKU available to release on a warehouse job, net of open/closed requests. */
+/** Good quantity per SKU still available to release (running stock across ALL inbounds and releases). */
 export function availableToRelease(wo: WorkOrder, excludeRequestId?: string): Map<string, number> {
-  const avail = new Map<string, number>();
-  for (const l of wo.grn?.lines ?? [])
-    avail.set(l.sku, (avail.get(l.sku) ?? 0) + l.receivedQty - l.damagedQty);
-  for (const r of wo.customerRequests) {
-    if (r.id === excludeRequestId) continue;
-    for (const l of r.lines) avail.set(l.sku, (avail.get(l.sku) ?? 0) - l.quantity);
-  }
-  return avail;
+  return new Map(jobStock(wo, excludeRequestId).map((s) => [s.sku, s.available]));
+}
+
+/** Release checks apply once the job has received goods on at least one GRN. */
+export function hasReceivedStock(wo: WorkOrder): boolean {
+  return wo.inbounds.some((ib) => !!ib.grn);
 }
 
 function toRow(wo: WorkOrder): WorkOrderRow {
@@ -173,12 +208,26 @@ function toRow(wo: WorkOrder): WorkOrderRow {
   };
 }
 
+/** Milestone labels for a multi-service job: Transport (by mode) → Warehouse → Service, one confirmation step. */
+export function composedMilestoneLabels(categories: ServiceCategory[], mode?: TransportMode): string[] {
+  const ordered = SERVICE_CATEGORIES.filter((c) => categories.includes(c));
+  const firstSteps = new Set(['Booking confirmed', 'Order confirmed']);
+  const labels: string[] = [];
+  ordered.forEach((c, i) => {
+    for (const label of milestoneLabels(c, mode)) {
+      if (i > 0 && firstSteps.has(label)) continue;
+      if (!labels.includes(label)) labels.push(label);
+    }
+  });
+  return labels.length ? labels : [...milestoneLabels('Service')];
+}
+
 function buildMilestones(
-  category: ServiceCategory,
+  categories: ServiceCategory[],
   mode: TransportMode | undefined,
   confirmed: boolean,
 ): Milestone[] {
-  return milestoneLabels(category, mode).map((label, i) => ({
+  return composedMilestoneLabels(categories, mode).map((label, i) => ({
     id: newId('ms'),
     label,
     status: confirmed
@@ -219,9 +268,6 @@ function advanceIfCurrent(w: WorkOrder, label: string): WorkOrder {
   return { ...w, milestones, status };
 }
 
-const addDaysIso = (iso: string, days: number) =>
-  new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-
 function actor() {
   return protoDb.get().session?.displayName ?? 'Prototype user';
 }
@@ -249,10 +295,20 @@ function findOrThrow(id: string): WorkOrder {
   return wo;
 }
 
+function findInbound(id: string, inboundId: string): Inbound {
+  const ib = findOrThrow(id).inbounds.find((x) => x.id === inboundId);
+  if (!ib) throw new Error('Inbound receipt not found');
+  return ib;
+}
+
+function patchInbound(id: string, inboundId: string, fn: (ib: Inbound) => Inbound): WorkOrder {
+  return patch(id, (w) => ({ ...w, inbounds: w.inbounds.map((x) => (x.id === inboundId ? fn(x) : x)) }));
+}
+
 export const workOrdersApi = {
   list(params: ListParams): Promise<Page<WorkOrderRow>> {
     const rows = [...protoDb.get().workOrders]
-      .filter((w) => !params.type || w.serviceCategory === params.type)
+      .filter((w) => !params.type || w.serviceCategories.includes(params.type as ServiceCategory))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(toRow);
     return latency(
@@ -287,11 +343,28 @@ export const workOrdersApi = {
       movements: db.stockMovements
         .filter((m) => m.workOrderId === id)
         .map((m) => ({ ...m, customerName: lookupName.customer(m.customerId) })),
-      assignments: wo.vendorAssignments.map((a) => ({
-        ...a,
-        vendorName: lookupName.vendor(a.vendorId),
-        serviceName: lookupName.service(a.serviceId),
-      })),
+      purchaseOrders: db.purchaseOrders
+        .filter((p) => p.workOrderId === id)
+        .map((p) => ({
+          id: p.id,
+          number: p.number,
+          vendorId: p.vendorId,
+          vendorName: lookupName.vendor(p.vendorId),
+          serviceName: lookupName.service(p.serviceId),
+          amount: p.amount,
+          status: p.status,
+          vendorBillId: p.vendorBillId,
+        })),
+      assignments: wo.vendorAssignments.map((a) => {
+        const po = a.purchaseOrderId ? db.purchaseOrders.find((p) => p.id === a.purchaseOrderId) : undefined;
+        return {
+          ...a,
+          vendorName: lookupName.vendor(a.vendorId),
+          serviceName: lookupName.service(a.serviceId),
+          poNumber: po?.number,
+          poStatus: po?.status,
+        };
+      }),
     });
   },
 
@@ -315,7 +388,7 @@ export const workOrdersApi = {
           source: { type: 'Sales order', refId: so.id },
           sourceRef: so.number,
           salesOrderId: so.id,
-          serviceCategory: so.serviceCategory,
+          serviceCategories: so.serviceCategories,
           mode: so.mode,
           origin: so.origin,
           destination: so.destination,
@@ -337,7 +410,7 @@ export const workOrdersApi = {
           customerId: q.customerId,
           source: { type: 'Quotation', refId: q.id },
           sourceRef: q.number,
-          serviceCategory: q.serviceCategory,
+          serviceCategories: q.serviceCategories,
           mode: q.mode,
           origin: q.origin,
           destination: q.destination,
@@ -356,7 +429,7 @@ export const workOrdersApi = {
           customerId: c.customerId,
           source: { type: 'Contract', refId: c.id },
           sourceRef: c.number,
-          serviceCategory: category,
+          serviceCategories: [category],
           mode:
             category !== 'Transport'
               ? undefined
@@ -374,30 +447,43 @@ export const workOrdersApi = {
     const db = protoDb.get();
     const next = Math.max(...db.workOrders.map((w) => Number(w.number.split('-')[1]))) + 1;
     const confirmed = input.status === 'Confirmed';
+    const categories = SERVICE_CATEGORIES.filter((c) => input.serviceCategories.includes(c));
+    const primary = primaryCategory(categories);
+    const hasTransport = categories.includes('Transport');
     const wo: WorkOrder = {
       id: newId('wo'),
       number: `JOB-${next}`,
       customerId: input.customerId,
-      serviceCategory: input.serviceCategory,
+      serviceCategory: primary,
+      serviceCategories: categories,
       salesOrderId: input.salesOrderId,
       source: input.source,
-      mode: input.serviceCategory === 'Transport' ? input.mode : undefined,
+      mode: hasTransport ? input.mode : undefined,
       origin: input.origin,
       destination: input.destination,
       cargo: input.cargo,
       status: input.status,
       priority: input.priority,
-      milestones: buildMilestones(input.serviceCategory, input.mode, confirmed),
+      milestones: buildMilestones(categories, hasTransport ? input.mode : undefined, confirmed),
       vendorAssignments: [],
       lines: input.lines.map((l) => ({ ...l, id: newId('ln') })),
-      hasWarehouse: input.serviceCategory === 'Warehouse' || input.hasWarehouse,
-      packingList: input.packingLines?.length
-        ? {
-            number: `PL-${next}`,
-            status: 'Draft',
-            lines: input.packingLines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
-          }
-        : undefined,
+      hasWarehouse: categories.includes('Warehouse') || input.hasWarehouse,
+      inbounds: input.packingLines?.length
+        ? [
+            {
+              id: newId('ib'),
+              number: `IN-${next}-01`,
+              reference: 'First consignment',
+              expectedAt: input.eta,
+              packingList: {
+                number: `PL-${next}-01`,
+                status: 'Draft',
+                source: 'Staff',
+                lines: input.packingLines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+              },
+            },
+          ]
+        : [],
       customerRequests: [],
       createdAt: nowIso(),
       eta: input.eta,
@@ -428,8 +514,8 @@ export const workOrdersApi = {
       entityRef: wo.number,
       action:
         input.source.type === 'Direct'
-          ? 'created a direct work order'
-          : `created a work order from ${input.source.type.toLowerCase()}`,
+          ? 'created a direct job'
+          : `created a job from ${input.source.type.toLowerCase()}`,
     });
     return latency(wo, 300);
   },
@@ -452,7 +538,7 @@ export const workOrdersApi = {
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: 'confirmed the work order',
+      action: 'confirmed the job',
     });
     return latency(updated, 200);
   },
@@ -490,17 +576,18 @@ export const workOrdersApi = {
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `cancelled the work order (${reason})`,
+      action: `cancelled the job (${reason})`,
     });
     return latency(updated, 200);
   },
 
   /**
    * Complete the job. Transport jobs complete after delivery; warehouse / direct-service jobs may
-   * complete from In progress. Drafts one purchase invoice per vendor assignment not yet billed.
+   * complete from In progress. Industry standard: vendor POs were issued at assignment, so
+   * completion marks those POs Completed; vendor invoices are then recorded against them
+   * (3-way match) and the customer is invoiced from the sales order.
    */
-  complete(id: string): Promise<{ wo: WorkOrder; drafted: VendorBill[] }> {
-    const db = protoDb.get();
+  complete(id: string): Promise<{ wo: WorkOrder; awaitingInvoice: PurchaseOrder[] }> {
     const wo = findOrThrow(id);
     if (!canComplete(wo)) {
       return Promise.reject(
@@ -511,36 +598,13 @@ export const workOrdersApi = {
         ),
       );
     }
-    const billed = new Set(db.vendorBills.filter((b) => b.workOrderId === id).map((b) => b.vendorId));
-    let seq = Math.max(7800, ...db.vendorBills.map((b) => Number(b.number.split('-')[1]) || 0));
-    const drafted: VendorBill[] = [];
-    for (const a of wo.vendorAssignments) {
-      if (billed.has(a.vendorId) && drafted.every((d) => d.vendorId !== a.vendorId)) continue;
-      const existing = drafted.find((d) => d.vendorId === a.vendorId);
-      if (existing) {
-        existing.amount = Math.round((existing.amount + a.agreedCost) * 100) / 100;
-        existing.vat = Math.round(existing.amount * 0.05 * 100) / 100;
-        continue;
-      }
-      seq += 1;
-      const terms = db.vendors.find((v) => v.id === a.vendorId)?.paymentTermsDays ?? 30;
-      drafted.push({
-        id: newId('bill'),
-        number: `PI-${seq}`,
-        vendorRef: '',
-        vendorId: a.vendorId,
-        workOrderId: id,
-        billDate: PROTO_TODAY,
-        dueDate: addDaysIso(PROTO_TODAY, terms),
-        amount: a.agreedCost,
-        vat: Math.round(a.agreedCost * 0.05 * 100) / 100,
-        paid: 0,
-        status: 'Draft',
-      });
-    }
     protoDb.update((s) => ({
       ...s,
-      vendorBills: [...drafted, ...s.vendorBills],
+      purchaseOrders: s.purchaseOrders.map((p) =>
+        p.workOrderId === id && !['Billed', 'Cancelled', 'Completed'].includes(p.status)
+          ? { ...p, status: 'Completed' as const }
+          : p,
+      ),
       workOrders: s.workOrders.map((w) =>
         w.id === id
           ? {
@@ -551,7 +615,6 @@ export const workOrdersApi = {
                 m.status === 'Done' ? m : { ...m, status: 'Done', at: nowIso() },
               ),
               vendorAssignments: w.vendorAssignments.map((a) => ({ ...a, status: 'Completed' })),
-              purchaseInvoiceIds: [...(w.purchaseInvoiceIds ?? []), ...drafted.map((d) => d.id)],
             }
           : w,
       ),
@@ -563,100 +626,175 @@ export const workOrdersApi = {
         return open ? o : { ...o, status: 'Completed' as const };
       }),
     }));
+    const awaitingInvoice = protoDb
+      .get()
+      .purchaseOrders.filter((p) => p.workOrderId === id && p.status === 'Completed' && !p.vendorBillId);
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: drafted.length
-        ? `completed the job and drafted ${drafted.length} purchase invoice${drafted.length === 1 ? '' : 's'}`
+      action: awaitingInvoice.length
+        ? `completed the job — ${awaitingInvoice.length} PO${awaitingInvoice.length === 1 ? '' : 's'} awaiting vendor invoice`
         : 'completed the job',
     });
-    return latency({ wo: findOrThrow(id), drafted }, 250);
+    return latency({ wo: findOrThrow(id), awaitingInvoice }, 250);
   },
 
-  // ---------- Documents: PL → GRN ----------
-  savePackingList(id: string, lines: DocLine[]): Promise<WorkOrder> {
+  // ---------- Documents: inbound receipts (many per job): PL → GRN ----------
+  addInbound(
+    id: string,
+    input: {
+      reference: string;
+      expectedAt: string;
+      lines: DocLine[];
+      attachment?: Attachment;
+      source: NonNullable<PackingList['source']>;
+      send: boolean;
+      /** Shipment header (ASN, BOE, container, seal, BL, supplier, location). */
+      header?: InboundHeader;
+    },
+  ): Promise<Inbound> {
     const wo = findOrThrow(id);
-    if (wo.packingList?.status === 'Sent to warehouse')
-      return Promise.reject(new Error('The PL was already sent to the warehouse'));
-    const updated = patch(id, (w) => ({
-      ...w,
-      hasWarehouse: true,
+    if (!input.lines.length) return Promise.reject(new Error('Add at least one product line'));
+    const seq = wo.inbounds.length + 1;
+    const n = wo.number.split('-')[1];
+    const ib: Inbound = {
+      id: newId('ib'),
+      number: `IN-${n}-${String(seq).padStart(2, '0')}`,
+      reference: input.reference,
+      expectedAt: input.expectedAt,
+      ...input.header,
       packingList: {
-        number: w.packingList?.number ?? `PL-${w.number.split('-')[1]}`,
-        status: 'Draft',
-        lines,
+        number: `PL-${n}-${String(seq).padStart(2, '0')}`,
+        status: input.send ? 'Sent to warehouse' : 'Draft',
+        sentAt: input.send ? nowIso() : undefined,
+        lines: input.lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+        attachment: input.attachment,
+        source: input.source,
       },
+    };
+    patch(id, (w) => {
+      const next = { ...w, hasWarehouse: true, inbounds: [...w.inbounds, ib] };
+      return input.send ? advanceIfCurrent(next, 'PL sent to warehouse') : next;
+    });
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `added inbound ${ib.number} (${ib.packingList.lines.length} PL lines${input.source === 'Excel import' ? ', imported from Excel' : ''})`,
+    });
+    return latency(ib, 200);
+  },
+
+  savePackingList(id: string, inboundId: string, lines: DocLine[]): Promise<WorkOrder> {
+    const ib = findInbound(id, inboundId);
+    if (ib.packingList.status === 'Sent to warehouse')
+      return Promise.reject(new Error('The PL was already sent to the warehouse'));
+    const updated = patchInbound(id, inboundId, (x) => ({
+      ...x,
+      packingList: { ...x.packingList, lines: lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })) },
     }));
     return latency(updated, 150);
   },
 
-  sendPackingList(id: string): Promise<WorkOrder> {
+  sendPackingList(id: string, inboundId: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (!wo.packingList?.lines.length)
-      return Promise.reject(new Error('Add at least one product line first'));
-    const updated = patch(id, (w) =>
-      advanceIfCurrent(
-        { ...w, packingList: { ...w.packingList!, status: 'Sent to warehouse', sentAt: nowIso() } },
-        'PL sent to warehouse',
-      ),
-    );
+    const ib = findInbound(id, inboundId);
+    if (!ib.packingList.lines.length) return Promise.reject(new Error('Add at least one product line first'));
+    patchInbound(id, inboundId, (x) => ({
+      ...x,
+      packingList: { ...x.packingList, status: 'Sent to warehouse', sentAt: nowIso() },
+    }));
+    const updated = patch(id, (w) => advanceIfCurrent(w, 'PL sent to warehouse'));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `sent ${wo.packingList.number} to the warehouse team`,
+      action: `sent ${ib.packingList.number} (${ib.number}) to the warehouse team`,
     });
     return latency(updated, 200);
   },
 
-  uploadGrn(id: string, grn: Omit<Grn, 'status'>): Promise<WorkOrder> {
+  /** Issue Aenix's own GRN to the customer (AEN061 layout) from an uploaded vendor GRN. */
+  issueCustomerGrn(id: string, inboundId: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (wo.packingList?.status !== 'Sent to warehouse')
-      return Promise.reject(new Error('Send the PL to the warehouse before uploading a GRN'));
-    const updated = patch(id, (w) =>
-      advanceIfCurrent({ ...w, grn: { ...grn, status: 'Uploaded' } }, 'GRN received'),
-    );
+    const ib = findInbound(id, inboundId);
+    if (!ib.grn) return Promise.reject(new Error('Upload the vendor GRN first'));
+    if (ib.grn.customerGrnNumber) return latency(wo, 100);
+    const db = protoDb.get();
+    const existing = db.workOrders.flatMap((w) => w.inbounds.map((x) => x.grn?.customerGrnNumber ?? ''));
+    const number = nextDocNumber(existing, db.company.grnPrefix, 3, 60);
+    const updated = patchInbound(id, inboundId, (x) => ({
+      ...x,
+      grn: { ...x.grn!, customerGrnNumber: number, customerGrnIssuedAt: nowIso() },
+    }));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `uploaded ${grn.number}`,
+      action: `issued customer GRN ${number} for ${ib.number}`,
+    });
+    return latency(updated, 200);
+  },
+
+  uploadGrn(id: string, inboundId: string, grn: Omit<Grn, 'status'>): Promise<WorkOrder> {
+    const wo = findOrThrow(id);
+    const ib = findInbound(id, inboundId);
+    if (ib.packingList.status !== 'Sent to warehouse')
+      return Promise.reject(new Error('Send the PL to the warehouse before uploading a GRN'));
+    patchInbound(id, inboundId, (x) => ({
+      ...x,
+      grn: {
+        ...grn,
+        lines: grn.lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+        status: 'Uploaded',
+      },
+    }));
+    const updated = patch(id, (w) => advanceIfCurrent(w, 'GRN received'));
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `uploaded ${grn.number} for ${ib.number}`,
     });
     return latency(updated, 250);
   },
 
-  verifyGrn(id: string): Promise<WorkOrder> {
+  verifyGrn(id: string, inboundId: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (!wo.grn) return Promise.reject(new Error('No GRN uploaded'));
-    if (!grnResult(wo)?.ok)
+    const ib = findInbound(id, inboundId);
+    if (!ib.grn) return Promise.reject(new Error('No GRN uploaded'));
+    if (!grnResult(ib)?.ok)
       return Promise.reject(new Error('The GRN does not match the PL — raise a variance instead'));
-    const updated = patch(id, (w) =>
-      advanceIfCurrent({ ...w, grn: { ...w.grn!, status: 'Verified' } }, 'Goods stored'),
-    );
+    patchInbound(id, inboundId, (x) => ({ ...x, grn: { ...x.grn!, status: 'Verified' } }));
+    const updated = patch(id, (w) => advanceIfCurrent(w, 'Goods stored'));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `verified ${wo.grn.number} against the PL`,
+      action: `verified ${ib.grn.number} against ${ib.packingList.number}`,
     });
     return latency(updated, 200);
   },
 
-  raiseGrnVariance(id: string): Promise<WorkOrder> {
+  raiseGrnVariance(id: string, inboundId: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (!wo.grn) return Promise.reject(new Error('No GRN uploaded'));
-    const r = grnResult(wo);
-    const updated = patch(id, (w) => ({ ...w, grn: { ...w.grn!, status: 'Variance raised' } }));
+    const ib = findInbound(id, inboundId);
+    if (!ib.grn) return Promise.reject(new Error('No GRN uploaded'));
+    const r = grnResult(ib);
+    const updated = patchInbound(id, inboundId, (x) => ({
+      ...x,
+      grn: { ...x.grn!, status: 'Variance raised' },
+    }));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `raised a GRN variance on ${wo.grn.number}`,
+      action: `raised a GRN variance on ${ib.grn.number} (${ib.number})`,
     });
     notify(
       `GRN variance on ${wo.number}`,
-      `${wo.grn.number}: ${r?.mismatches ?? 0} line(s) differ from ${wo.packingList?.number ?? 'the PL'}`,
+      `${ib.grn.number}: ${r?.mismatches ?? 0} line(s) differ from ${ib.packingList.number}`,
       `/work-orders/${id}`,
     );
     return latency(updated, 200);
@@ -670,12 +808,14 @@ export const workOrdersApi = {
     const db = protoDb.get();
     const wo = findOrThrow(id);
     if (!input.lines.length) return Promise.reject(new Error('Add at least one line'));
-    if (wo.serviceCategory === 'Warehouse' && wo.grn) {
+    if (hasReceivedStock(wo)) {
       const avail = availableToRelease(wo);
-      const over = input.lines.find((l) => l.quantity > (avail.get(l.sku) ?? 0));
+      const over = input.lines.find((l) => l.quantity > (avail.get(l.sku.trim().toUpperCase()) ?? 0));
       if (over)
         return Promise.reject(
-          new Error(`Only ${Math.max(0, avail.get(over.sku) ?? 0)} ${over.sku} available to release`),
+          new Error(
+            `Only ${Math.max(0, avail.get(over.sku.trim().toUpperCase()) ?? 0)} ${over.sku} available to release`,
+          ),
         );
     }
     const seq =
@@ -689,7 +829,7 @@ export const workOrdersApi = {
       requestedAt: nowIso(),
       requiredBy: input.requiredBy,
       deliverTo: input.deliverTo,
-      lines: input.lines,
+      lines: input.lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
       status: 'Open',
     };
     patch(id, (w) =>
@@ -797,64 +937,50 @@ export const workOrdersApi = {
     return latency(updated, 200);
   },
 
+  /** Assign a vendor and issue the purchase order (industry standard: PO before the work). */
   assignVendor(
     id: string,
     input: { vendorId: string; serviceId: string; agreedCost: number },
-  ): Promise<WorkOrder> {
-    const wo = findOrThrow(id);
-    const updated = patch(id, (w) => ({
-      ...w,
-      vendorAssignments: [...w.vendorAssignments, { id: newId('va'), status: 'Requested', ...input }],
-    }));
-    logActivity({
-      entity: 'Work order',
-      entityId: id,
-      entityRef: wo.number,
-      action: `assigned ${lookupName.vendor(input.vendorId)}`,
-    });
-    return latency(updated, 200);
-  },
-
-  createInvoice(id: string): Promise<Invoice> {
+  ): Promise<{ wo: WorkOrder; po: PurchaseOrder }> {
     const db = protoDb.get();
     const wo = findOrThrow(id);
-    if (wo.invoiceId) return Promise.reject(new Error('This job is already invoiced'));
-    if (wo.status !== 'Delivered' && wo.status !== 'Completed')
-      return Promise.reject(new Error('Invoice after delivery'));
-    const next = Math.max(...db.invoices.map((i) => Number(i.number.split('-')[1]))) + 1;
-    const terms = db.customers.find((c) => c.id === wo.customerId)?.paymentTermsDays ?? 30;
-    const due = new Date(Date.parse(`${PROTO_TODAY}T00:00:00Z`) + terms * 86_400_000)
-      .toISOString()
-      .slice(0, 10);
-    const invoice: Invoice = {
-      id: newId('inv'),
-      number: `INV-${next}`,
-      customerId: wo.customerId,
-      workOrderId: wo.id,
-      issueDate: PROTO_TODAY,
-      dueDate: due,
-      lines: wo.lines.map((l) => ({
-        id: newId('il'),
-        description: l.description,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        vatRate: 0.05,
-      })),
-      paid: 0,
-      status: 'Draft',
+    const next = Math.max(6100, ...db.purchaseOrders.map((p) => Number(p.number.split('-')[1]) || 0)) + 1;
+    const assignmentId = newId('va');
+    const po: PurchaseOrder = {
+      id: newId('po'),
+      number: `PO-${next}`,
+      vendorId: input.vendorId,
+      workOrderId: id,
+      salesOrderId: wo.salesOrderId,
+      serviceId: input.serviceId,
+      description: `${lookupName.service(input.serviceId)} — ${wo.number}`,
+      amount: input.agreedCost,
+      vatRate: 0.05,
+      issuedAt: nowIso(),
+      status: 'Issued',
     };
     protoDb.update((s) => ({
       ...s,
-      invoices: [invoice, ...s.invoices],
-      workOrders: s.workOrders.map((w) => (w.id === id ? { ...w, invoiceId: invoice.id } : w)),
+      purchaseOrders: [po, ...s.purchaseOrders],
+      workOrders: s.workOrders.map((w) =>
+        w.id === id
+          ? {
+              ...w,
+              vendorAssignments: [
+                ...w.vendorAssignments,
+                { id: assignmentId, status: 'Requested', purchaseOrderId: po.id, ...input },
+              ],
+            }
+          : w,
+      ),
     }));
     logActivity({
-      entity: 'Invoice',
-      entityId: invoice.id,
-      entityRef: invoice.number,
-      action: `drafted an invoice for ${wo.number}`,
+      entity: 'Purchase order',
+      entityId: po.id,
+      entityRef: po.number,
+      action: `issued to ${lookupName.vendor(input.vendorId)} for ${wo.number}`,
     });
-    return latency(invoice, 300);
+    return latency({ wo: findOrThrow(id), po }, 200);
   },
 };
 
@@ -900,6 +1026,7 @@ function useInvalidate() {
     void qc.invalidateQueries({ queryKey: ['vendor-bills'] });
     void qc.invalidateQueries({ queryKey: ['sales-orders'] });
     void qc.invalidateQueries({ queryKey: ['warehouse'] });
+    void qc.invalidateQueries({ queryKey: ['purchase-orders'] });
   };
 }
 
@@ -936,22 +1063,22 @@ export function useAssignVendor() {
   });
 }
 
-export function useCreateJobInvoice() {
-  const invalidate = useInvalidate();
-  return useMutation({ mutationFn: workOrdersApi.createInvoice, onSuccess: invalidate });
-}
-
 export function useCompleteWorkOrder() {
   const invalidate = useInvalidate();
   return useMutation({ mutationFn: (id: string) => workOrdersApi.complete(id), onSuccess: invalidate });
 }
 
+export type InboundHeader = Partial<
+  Pick<Inbound, 'asnNo' | 'boeNo' | 'containerNo' | 'sealNo' | 'blNo' | 'supplierName' | 'location'>
+>;
+
 export type DocAction =
-  | { kind: 'savePl'; id: string; lines: DocLine[] }
-  | { kind: 'sendPl'; id: string }
-  | { kind: 'uploadGrn'; id: string; grn: Omit<Grn, 'status'> }
-  | { kind: 'verifyGrn'; id: string }
-  | { kind: 'grnVariance'; id: string }
+  | { kind: 'savePl'; id: string; inboundId: string; lines: DocLine[] }
+  | { kind: 'sendPl'; id: string; inboundId: string }
+  | { kind: 'uploadGrn'; id: string; inboundId: string; grn: Omit<Grn, 'status'> }
+  | { kind: 'verifyGrn'; id: string; inboundId: string }
+  | { kind: 'grnVariance'; id: string; inboundId: string }
+  | { kind: 'issueCustomerGrn'; id: string; inboundId: string }
   | { kind: 'sendRequest'; id: string; requestId: string; vendorId: string }
   | { kind: 'uploadPod'; id: string; requestId: string; pod: Pod }
   | { kind: 'closeRequest'; id: string; requestId: string }
@@ -963,15 +1090,17 @@ export function useDocAction() {
     mutationFn: (a: DocAction): Promise<WorkOrder> => {
       switch (a.kind) {
         case 'savePl':
-          return workOrdersApi.savePackingList(a.id, a.lines);
+          return workOrdersApi.savePackingList(a.id, a.inboundId, a.lines);
         case 'sendPl':
-          return workOrdersApi.sendPackingList(a.id);
+          return workOrdersApi.sendPackingList(a.id, a.inboundId);
         case 'uploadGrn':
-          return workOrdersApi.uploadGrn(a.id, a.grn);
+          return workOrdersApi.uploadGrn(a.id, a.inboundId, a.grn);
         case 'verifyGrn':
-          return workOrdersApi.verifyGrn(a.id);
+          return workOrdersApi.verifyGrn(a.id, a.inboundId);
         case 'grnVariance':
-          return workOrdersApi.raiseGrnVariance(a.id);
+          return workOrdersApi.raiseGrnVariance(a.id, a.inboundId);
+        case 'issueCustomerGrn':
+          return workOrdersApi.issueCustomerGrn(a.id, a.inboundId);
         case 'sendRequest':
           return workOrdersApi.sendRequest(a.id, a.requestId, a.vendorId);
         case 'uploadPod':
@@ -982,6 +1111,15 @@ export function useDocAction() {
           return workOrdersApi.raiseRequestVariance(a.id, a.requestId);
       }
     },
+    onSuccess: invalidate,
+  });
+}
+
+export function useAddInbound() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, ...input }: { id: string } & Parameters<typeof workOrdersApi.addInbound>[1]) =>
+      workOrdersApi.addInbound(id, input),
     onSuccess: invalidate,
   });
 }
@@ -1003,4 +1141,14 @@ export function toAttachment(file: File): Attachment {
     uploadedAt: nowIso(),
     uploadedBy: actor(),
   };
+}
+
+/** The job's warehouse vendor (for remembered GRN column mappings); falls back to the own warehouse team. */
+export function warehouseVendorOf(wo: Pick<WorkOrder, 'vendorAssignments'>): { id: string; name: string } {
+  const db = protoDb.get();
+  for (const a of wo.vendorAssignments) {
+    const v = db.vendors.find((x) => x.id === a.vendorId);
+    if (v?.category === 'Warehouse') return { id: v.id, name: v.name };
+  }
+  return { id: 'warehouse', name: 'the warehouse team' };
 }

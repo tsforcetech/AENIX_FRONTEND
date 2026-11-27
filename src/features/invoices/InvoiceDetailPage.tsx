@@ -1,3 +1,4 @@
+import { useProtoDb } from '@/prototype/store';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { Download, FileMinus2, Lock, Send, Trash2, Wallet } from 'lucide-react';
 import { useState } from 'react';
@@ -43,7 +44,7 @@ export function InvoiceDetailPage() {
         crumbs={[{ label: 'Invoices', to: '/invoices' }, { label: inv.number }]}
         title={inv.number}
         meta={<StatusBadge status={inv.status} />}
-        description={`${inv.customerName} · ${inv.sourceType === 'Job' ? `work order ${inv.sourceLabel}` : inv.sourceType === 'Storage' ? `storage run ${inv.sourceLabel}` : 'manual invoice'}`}
+        description={`${inv.customerName} · ${inv.salesOrders.length ? `sales order${inv.salesOrders.length > 1 ? 's' : ''} ${inv.salesOrders.map((x) => x.number).join(', ')}` : inv.sourceType === 'Storage' ? `storage run ${inv.sourceLabel}` : inv.sourceType === 'Job' ? `job ${inv.sourceLabel}` : 'manual invoice'}`}
       />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <TaxInvoiceDocument inv={inv} />
@@ -53,158 +54,183 @@ export function InvoiceDetailPage() {
   );
 }
 
+/** Tax invoice in the owner's AEN078 layout (logo + company block, customer block, per-line VAT, bank details). */
 function TaxInvoiceDocument({ inv }: { inv: InvoiceDetail }) {
+  const company = useProtoDb((db) => db.company);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const rows = inv.lines.map((l) => {
+    const sub = r2(l.quantity * l.unitPrice);
+    const vat = r2(sub * l.vatRate);
+    return { ...l, sub, vat, total: r2(sub + vat) };
+  });
+  const sum = (k: 'sub' | 'vat' | 'total') => r2(rows.reduce((s, x) => s + x[k], 0));
+  const money = (n: number) => formatNumber(n, 2);
+  const th = 'border border-fg/70 px-2 py-1.5 text-left font-semibold';
+  const td = 'border border-fg/70 px-2 py-1.5';
   return (
     <Card className="overflow-hidden">
-      <article aria-label={`Tax invoice ${inv.number}`} className="p-6 sm:p-10">
-        <header className="flex flex-wrap items-start justify-between gap-6 border-b border-border-subtle pb-6">
+      <article
+        aria-label={`Tax invoice ${inv.number}`}
+        className="bg-white px-6 pb-8 pt-4 text-[13px] text-[#1a1a1a] sm:px-10"
+      >
+        <p className="text-right text-caption">{company.website}</p>
+        <div aria-hidden="true" className="mt-2 h-2 bg-[#9a2119]" />
+        <header className="flex flex-wrap items-start justify-between gap-6 pt-6">
           <div>
-            <Logo height={40} />
-            <p className="mt-3 text-caption leading-5 text-fg-muted">
-              AENIX Logistics LLC (prototype)
-              <br />
-              Dubai, United Arab Emirates
-              <br />
-              TRN 1000•••••••001
-            </p>
+            <Logo height={44} />
+            <p className="mt-1 text-[10px] font-semibold">{company.tagline}</p>
           </div>
-          <div className="text-right">
-            <p className="font-mono text-caption font-medium uppercase tracking-[0.18em] text-brand">
-              Tax invoice
+          <div className="max-w-xs text-[11px] leading-[1.35]">
+            <p className="text-[13px] font-semibold text-[#9a2119]">{company.legalName}</p>
+            {company.officeAddress.map((l) => (
+              <p key={l}>{l}</p>
+            ))}
+            <p>
+              Tel: {company.phone} &nbsp; Email: {company.email}
             </p>
-            <p className="mt-1 text-[24px] font-semibold tracking-tight">{inv.number}</p>
-            <dl className="mt-3 grid grid-cols-[auto_auto] justify-end gap-x-4 gap-y-1 text-caption">
-              <dt className="text-fg-muted">Issue date</dt>
-              <dd className="tabular-nums">
-                {inv.status === 'Draft' ? 'On posting' : formatDate(inv.issueDate)}
-              </dd>
-              <dt className="text-fg-muted">Due date</dt>
-              <dd className="tabular-nums">{formatDate(inv.dueDate)}</dd>
-              <dt className="text-fg-muted">Reference</dt>
-              <dd className="font-mono">{inv.sourceLabel}</dd>
-            </dl>
+            <p className="mt-1 text-[#9a2119]">TRN: {company.trn}</p>
           </div>
         </header>
+        <h2 className="mt-8 border-b border-fg/60 pb-2 text-center text-[14px] font-semibold text-[#9a2119]">
+          Tax Invoice
+        </h2>
 
-        <section aria-label="Bill to" className="grid gap-6 py-6 sm:grid-cols-2">
-          <div>
-            <p className="text-caption font-medium uppercase tracking-wide text-fg-muted">Bill to</p>
+        <section
+          aria-label="Customer and invoice details"
+          className="flex flex-wrap justify-between gap-6 border-b border-fg/20 py-6"
+        >
+          <div className="text-[12px] leading-[1.45]">
             <Link
               to="/customers/$id"
               params={{ id: inv.customer.id }}
-              className="mt-1 block font-semibold hover:text-brand hover:underline"
+              className="font-semibold hover:underline"
             >
               {inv.customer.name}
             </Link>
-            <p className="text-body-s text-fg-secondary">
-              {inv.customer.city}, {inv.customer.country}
+            <p>Attn: {inv.customer.contactName}</p>
+            <p className="mt-1">
+              M: {inv.customer.contactPhone} &nbsp; E: {inv.customer.contactEmail}
             </p>
-            <p className="text-body-s text-fg-secondary">Attn: {inv.customer.contactName}</p>
-            <p className="mt-1 text-caption text-fg-muted">
-              TRN <span className="font-mono">{inv.customer.trnMasked}</span> · {inv.customer.code}
-            </p>
+            <p>{inv.customer.postalAddress ?? `${inv.customer.city}, ${inv.customer.country}`}</p>
+            <p>TRN: {inv.customer.trnMasked}</p>
           </div>
-          <div className="sm:text-right">
-            <p className="text-caption font-medium uppercase tracking-wide text-fg-muted">Payment terms</p>
-            <p className="mt-1 text-body-s">{inv.customer.paymentTermsDays} days net</p>
-            {inv.sourceType === 'Job' && inv.workOrderId ? (
-              <Link
-                to="/work-orders/$id"
-                params={{ id: inv.workOrderId }}
-                className="mt-1 inline-block text-body-s font-medium text-brand hover:underline"
-              >
-                View work order {inv.sourceLabel}
-              </Link>
+          <dl className="grid grid-cols-[auto_auto] gap-x-6 gap-y-1 self-start text-[12px]">
+            <dt>Invoice:</dt>
+            <dd className="font-medium">{inv.number}</dd>
+            <dt>Invoice Date:</dt>
+            <dd>{formatDate(inv.issueDate)}</dd>
+            <dt>Due Date:</dt>
+            <dd>{formatDate(inv.dueDate)}</dd>
+            {inv.salesOrders.length ? (
+              <>
+                <dt>Sales order:</dt>
+                <dd className="flex flex-wrap gap-x-2">
+                  {inv.salesOrders.map((so) => (
+                    <Link
+                      key={so.id}
+                      to="/sales-orders/$id"
+                      params={{ id: so.id }}
+                      className="text-[#9a2119] underline"
+                    >
+                      {so.number}
+                    </Link>
+                  ))}
+                </dd>
+              </>
             ) : null}
-            {inv.sourceType === 'Storage' ? (
-              <Link
-                to="/storage-billing"
-                className="mt-1 inline-block text-body-s font-medium text-brand hover:underline"
-              >
-                View storage billing
-              </Link>
-            ) : null}
-          </div>
+          </dl>
         </section>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-body-s">
-            <caption className="sr-only">Invoice lines</caption>
+        <div className="mt-6 overflow-x-auto" role="region" aria-label="Invoice lines" tabIndex={0}>
+          <table className="w-full min-w-[680px] border-collapse text-[12px]">
             <thead>
-              <tr className="border-y border-border-subtle bg-canvas/60 text-caption uppercase tracking-wide text-fg-muted">
-                <th scope="col" className="px-3 py-2 text-left font-medium">
+              <tr>
+                <th scope="col" className={th}>
                   Description
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  Qty
+                <th scope="col" className={th}>
+                  Cur
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  Unit price
+                <th scope="col" className={th}>
+                  UOM
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
+                <th scope="col" className={`${th} text-center`}>
+                  Quantity
+                </th>
+                <th scope="col" className={`${th} text-center`}>
+                  Unit Price
+                </th>
+                <th scope="col" className={`${th} text-center`}>
+                  Sub Total
+                </th>
+                <th scope="col" className={`${th} text-center`}>
                   VAT
                 </th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">
-                  Amount
+                <th scope="col" className={`${th} text-center`}>
+                  Total Amount (Including VAT)
                 </th>
               </tr>
             </thead>
             <tbody>
-              {inv.lines.map((l) => (
-                <tr key={l.id} className="border-b border-border-subtle">
-                  <td className="px-3 py-3">{l.description}</td>
-                  <td className="px-3 py-3 text-right tabular-nums">{formatNumber(l.quantity)}</td>
-                  <td className="px-3 py-3 text-right">
-                    <Money amount={l.unitPrice} className="whitespace-nowrap" />
-                  </td>
-                  <td className="px-3 py-3 text-right tabular-nums text-fg-muted">
-                    {Math.round(l.vatRate * 100)}%
-                  </td>
-                  <td className="px-3 py-3 text-right">
-                    <Money amount={l.quantity * l.unitPrice} className="whitespace-nowrap" />
-                  </td>
+              {rows.map((l) => (
+                <tr key={l.id}>
+                  <td className={td}>{l.description}</td>
+                  <td className={td}>AED</td>
+                  <td className={td}>{l.uom ?? '—'}</td>
+                  <td className={`${td} text-center tabular-nums`}>{formatNumber(l.quantity)}</td>
+                  <td className={`${td} text-center tabular-nums`}>{money(l.unitPrice)}</td>
+                  <td className={`${td} text-center tabular-nums`}>{money(l.sub)}</td>
+                  <td className={`${td} text-center tabular-nums`}>{money(l.vat)}</td>
+                  <td className={`${td} text-center tabular-nums`}>{money(l.total)}</td>
+                </tr>
+              ))}
+              <tr>
+                <td className={`${td} text-right`} colSpan={5}>
+                  Total Amount Payable AED
+                </td>
+                <td className={`${td} text-center font-medium tabular-nums`}>{money(sum('sub'))}</td>
+                <td className={`${td} text-center font-medium tabular-nums`}>{money(sum('vat'))}</td>
+                <td className={`${td} text-center font-semibold tabular-nums`}>{money(sum('total'))}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {inv.paid > 0 ? (
+          <p className="mt-2 text-right text-[12px]">
+            Amount received: <span className="tabular-nums">AED {money(inv.paid)}</span> · Balance due:{' '}
+            <strong className="tabular-nums">AED {money(r2(sum('total') - inv.paid))}</strong>
+          </p>
+        ) : null}
+
+        <section aria-label="Bank details" className="mt-10 max-w-md border-t border-fg/20 pt-6">
+          <p className="mb-1 text-center text-[12px] font-semibold">Bank Details:</p>
+          <table className="w-full border-collapse text-[12px]">
+            <tbody>
+              {[
+                ['Bank Name:', company.bank.bankName],
+                ['Account Name:', company.bank.accountName],
+                ['Account Number:', company.bank.accountNumber],
+                ['IBAN Number:', company.bank.iban],
+                ['Swift Code:', company.bank.swift],
+              ].map(([k, v]) => (
+                <tr key={k}>
+                  <th scope="row" className="w-36 border border-fg/70 px-2 py-1 text-left font-normal">
+                    {k}
+                  </th>
+                  <td className="border border-fg/70 px-2 py-1 text-center">{v}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+        </section>
 
-        <dl className="ml-auto mt-6 w-full max-w-xs space-y-2 text-body-s">
-          <div className="flex justify-between">
-            <dt className="text-fg-muted">Subtotal</dt>
-            <dd>
-              <Money amount={inv.subtotal} />
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-fg-muted">VAT 5%</dt>
-            <dd>
-              <Money amount={inv.vat} />
-            </dd>
-          </div>
-          <div className="flex justify-between border-t border-border-subtle pt-2 text-[15px] font-semibold">
-            <dt>Total (AED)</dt>
-            <dd>
-              <Money amount={inv.total} />
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-fg-muted">Amount paid</dt>
-            <dd>
-              <Money amount={inv.paid ? -inv.paid : 0} muted />
-            </dd>
-          </div>
-          <div className="flex justify-between rounded-lg bg-surface-inverse px-3 py-2 font-semibold text-fg-inverse">
-            <dt>Balance due</dt>
-            <dd>
-              <Money amount={inv.status === 'Cancelled' ? 0 : inv.outstanding} />
-            </dd>
-          </div>
-        </dl>
-
-        <p className="mt-8 border-t border-border-subtle pt-4 text-caption text-fg-muted">
-          Prototype document — sample data. Final tax-invoice layout, numbering and PDF are produced by the
-          AENIX backend.
+        <footer className="mt-12 flex flex-wrap justify-between gap-2 text-[11px] text-fg-secondary">
+          <span>© 2026 {company.legalName}. All rights reserved.</span>
+          <span>This is a system-generated document and does not require a signature.</span>
+        </footer>
+        <p className="mt-4 rounded bg-surface-muted px-3 py-2 text-caption text-fg-muted">
+          Prototype — sample data. The official PDF, company stamp and numbering are produced by the AENIX
+          backend.
         </p>
       </article>
     </Card>

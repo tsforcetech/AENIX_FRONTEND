@@ -1,10 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { billTotals, daysBetween } from '@/domain/calc';
-import type { ServiceCategory, TransportMode, VendorBill, WorkOrderStatus } from '@/domain/types';
+import type {
+  PurchaseOrder,
+  ServiceCategory,
+  TransportMode,
+  VendorBill,
+  WorkOrder,
+  WorkOrderStatus,
+} from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { PROTO_TODAY } from '@/prototype/seed';
-import { latency, logActivity, protoDb } from '@/prototype/store';
+import { latency, logActivity, newId, protoDb } from '@/prototype/store';
 import { ACCOUNTS, postJournal } from '@/features/accounting/ledger';
 import { invalidateFinance } from '@/features/invoices/api';
 
@@ -23,8 +30,15 @@ export interface VendorBillRow extends VendorBill {
   draftedAtCompletion: boolean;
   /** Delivery evidence on the linked job, so AP can check before approving. */
   evidence?: {
-    packingList?: { number: string; status: string };
-    grn?: { number: string; status: string };
+    /** Every inbound receipt on the job: its PL and the GRN returned for it. */
+    inbounds: {
+      id: string;
+      number: string;
+      plNumber: string;
+      plStatus: string;
+      grnNumber?: string;
+      grnStatus?: string;
+    }[];
     requests: { id: string; number: string; status: string; podNumber?: string }[];
   };
   total: number;
@@ -33,6 +47,72 @@ export interface VendorBillRow extends VendorBill {
   /** Agreed vendor cost on the linked work order (job-cost match). */
   agreedCost?: number;
   variance?: number;
+  /** Purchase order this vendor invoice is matched to. */
+  po?: { id: string; number: string; amount: number; status: PurchaseOrder['status'] };
+  /** 3-way match: PO vs proof of work (GRN / POD) vs vendor invoice. */
+  match?: ThreeWayMatch;
+}
+
+export interface ThreeWayMatch {
+  poAmount: number;
+  invoiceAmount: number;
+  difference: number;
+  amountOk: boolean;
+  proof: { label: string; detail: string; ok: boolean }[];
+  proofOk: boolean;
+  ok: boolean;
+}
+
+/** Proof of work on the job: GRN verified, every customer request closed by a matching POD. */
+export function proofOfWork(wo: WorkOrder | undefined): ThreeWayMatch['proof'] {
+  if (!wo) return [{ label: 'Job', detail: 'Not linked to a job', ok: false }];
+  const proof: ThreeWayMatch['proof'] = [];
+  for (const ib of wo.inbounds) {
+    proof.push(
+      ib.grn
+        ? {
+            label: `GRN ${ib.grn.number} (${ib.number})`,
+            detail: ib.grn.status,
+            ok: ib.grn.status === 'Verified',
+          }
+        : {
+            label: `GRN for ${ib.number}`,
+            detail:
+              ib.packingList.status === 'Sent to warehouse'
+                ? `Not received (PL ${ib.packingList.number} sent)`
+                : 'PL not sent yet',
+            ok: false,
+          },
+    );
+  }
+  if (!wo.inbounds.length && wo.serviceCategories.includes('Warehouse'))
+    proof.push({ label: 'GRN', detail: 'No inbound receipt recorded', ok: false });
+  for (const r of wo.customerRequests) {
+    proof.push({
+      label: `POD for ${r.number}`,
+      detail: r.pod ? `${r.pod.number} · request ${r.status}` : `Missing · request ${r.status}`,
+      ok: !!r.pod && r.status === 'Closed',
+    });
+  }
+  if (!proof.length)
+    proof.push({
+      label: `Job ${wo.number}`,
+      detail: wo.status,
+      ok: wo.status === 'Completed' || wo.status === 'Delivered',
+    });
+  return proof;
+}
+
+export function threeWayMatch(
+  poAmount: number,
+  invoiceAmount: number,
+  wo: WorkOrder | undefined,
+): ThreeWayMatch {
+  const difference = round2(invoiceAmount - poAmount);
+  const proof = proofOfWork(wo);
+  const amountOk = Math.abs(difference) < 0.01;
+  const proofOk = proof.every((p) => p.ok);
+  return { poAmount, invoiceAmount, difference, amountOk, proof, proofOk, ok: amountOk && proofOk };
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -51,6 +131,7 @@ function toRow(b: VendorBill): VendorBillRow {
     ? wo.vendorAssignments.filter((a) => a.vendorId === b.vendorId).reduce((s, a) => s + a.agreedCost, 0)
     : undefined;
   const status = effectiveStatus(b);
+  const po = b.purchaseOrderId ? db.purchaseOrders.find((x) => x.id === b.purchaseOrderId) : undefined;
   return {
     ...b,
     status,
@@ -67,10 +148,14 @@ function toRow(b: VendorBill): VendorBillRow {
       (wo.purchaseInvoiceIds?.includes(b.id) ?? true),
     evidence: wo
       ? {
-          packingList: wo.packingList
-            ? { number: wo.packingList.number, status: wo.packingList.status }
-            : undefined,
-          grn: wo.grn ? { number: wo.grn.number, status: wo.grn.status } : undefined,
+          inbounds: wo.inbounds.map((ib) => ({
+            id: ib.id,
+            number: ib.number,
+            plNumber: ib.packingList.number,
+            plStatus: ib.packingList.status,
+            grnNumber: ib.grn?.number,
+            grnStatus: ib.grn?.status,
+          })),
           requests: wo.customerRequests.map((r) => ({
             id: r.id,
             number: r.number,
@@ -83,6 +168,8 @@ function toRow(b: VendorBill): VendorBillRow {
     daysOverdue: status === 'Overdue' ? daysBetween(b.dueDate, PROTO_TODAY) : 0,
     agreedCost: agreed,
     variance: agreed !== undefined ? round2(b.amount - agreed) : undefined,
+    po: po ? { id: po.id, number: po.number, amount: po.amount, status: po.status } : undefined,
+    match: po ? threeWayMatch(po.amount, b.amount, wo) : undefined,
   };
 }
 
@@ -91,7 +178,8 @@ export const vendorBillsApi = {
     const rows = [...protoDb.get().vendorBills].sort((a, b) => b.number.localeCompare(a.number)).map(toRow);
     return latency(
       paginate(rows, params, {
-        searchText: (r) => `${r.number} ${r.vendorRef} ${r.vendorName} ${r.workOrderNumber ?? ''}`,
+        searchText: (r) =>
+          `${r.number} ${r.vendorRef} ${r.vendorName} ${r.workOrderNumber ?? ''} ${r.po?.number ?? ''}`,
         status: (r) => r.status,
       }),
     );
@@ -99,6 +187,64 @@ export const vendorBillsApi = {
   get(id: string): Promise<VendorBillRow> {
     const b = protoDb.get().vendorBills.find((x) => x.id === id);
     return b ? latency(toRow(b)) : Promise.reject(new Error('Not found'));
+  },
+  /** Purchase order + its job, to record the vendor's invoice against it. */
+  purchaseOrder(purchaseOrderId: string): Promise<PoForBilling> {
+    const db = protoDb.get();
+    const po = db.purchaseOrders.find((x) => x.id === purchaseOrderId);
+    if (!po) return Promise.reject(new Error('Purchase order not found'));
+    const wo = db.workOrders.find((w) => w.id === po.workOrderId);
+    return latency({
+      ...po,
+      vendorName: lookupName.vendor(po.vendorId),
+      paymentTermsDays: db.vendors.find((v) => v.id === po.vendorId)?.paymentTermsDays ?? 30,
+      jobNumber: wo?.number,
+      proof: proofOfWork(wo),
+    });
+  },
+  /** Records the vendor's invoice against a PO (Draft). A mismatch needs a reason before saving. */
+  createFromPo(input: NewVendorInvoiceInput): Promise<VendorBill> {
+    const db = protoDb.get();
+    const po = db.purchaseOrders.find((x) => x.id === input.purchaseOrderId);
+    if (!po) return Promise.reject(new Error('Purchase order not found'));
+    if (po.vendorBillId || po.status === 'Billed' || po.status === 'Cancelled')
+      return Promise.reject(new Error('This purchase order is already billed or cancelled'));
+    const wo = db.workOrders.find((w) => w.id === po.workOrderId);
+    const match = threeWayMatch(po.amount, round2(input.amount), wo);
+    if (!match.ok && !input.reason?.trim())
+      return Promise.reject(new Error('Give a reason to save a purchase invoice that does not match'));
+    const next = Math.max(7700, ...db.vendorBills.map((b) => Number(b.number.split('-')[1]) || 0)) + 1;
+    const terms = db.vendors.find((v) => v.id === po.vendorId)?.paymentTermsDays ?? 30;
+    const bill: VendorBill = {
+      id: newId('bill'),
+      number: `PI-${next}`,
+      vendorRef: input.vendorRef.trim(),
+      vendorId: po.vendorId,
+      workOrderId: po.workOrderId,
+      purchaseOrderId: po.id,
+      billDate: input.billDate,
+      dueDate: new Date(Date.parse(input.billDate) + terms * 86_400_000).toISOString().slice(0, 10),
+      amount: round2(input.amount),
+      vat: round2(input.amount * po.vatRate),
+      paid: 0,
+      status: 'Draft',
+    };
+    protoDb.update((s) => ({
+      ...s,
+      vendorBills: [bill, ...s.vendorBills],
+      purchaseOrders: s.purchaseOrders.map((x) =>
+        x.id === po.id ? { ...x, status: 'Billed' as const, vendorBillId: bill.id } : x,
+      ),
+    }));
+    logActivity({
+      entity: 'Vendor bill',
+      entityId: bill.id,
+      entityRef: bill.number,
+      action: match.ok
+        ? `recorded vendor invoice ${bill.vendorRef} against ${po.number}`
+        : `recorded vendor invoice ${bill.vendorRef} against ${po.number} with a mismatch: ${input.reason?.trim()}${input.fileName ? ` (${input.fileName})` : ''}`,
+    });
+    return latency(bill, 300);
   },
   /** Draft → Approved: recognises the cost and the AP liability. */
   approve(id: string): Promise<void> {
@@ -160,6 +306,69 @@ export const vendorBillsApi = {
     return latency(undefined, 250);
   },
 };
+
+/** Used by Payments: settles part of a bill (status → Partially paid / Paid). */
+export function applyPaymentToBill(billId: string, amount: number): void {
+  protoDb.update((s) => ({
+    ...s,
+    vendorBills: s.vendorBills.map((x) => {
+      if (x.id !== billId) return x;
+      const paid = round2(x.paid + amount);
+      return {
+        ...x,
+        paid,
+        status: paid >= billTotals(x).total - 0.005 ? ('Paid' as const) : ('Partially paid' as const),
+      };
+    }),
+  }));
+}
+
+/** Approved / part-paid / overdue bills of a vendor with something left to pay, oldest due first. */
+export function openBillsForVendor(vendorId: string): VendorBillRow[] {
+  return protoDb
+    .get()
+    .vendorBills.filter(
+      (b) => b.vendorId === vendorId && ['Approved', 'Partially paid', 'Overdue'].includes(b.status),
+    )
+    .map(toRow)
+    .filter((r) => r.outstanding > 0.005)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+}
+
+export interface PoForBilling extends PurchaseOrder {
+  vendorName: string;
+  paymentTermsDays: number;
+  jobNumber?: string;
+  proof: ThreeWayMatch['proof'];
+}
+
+export interface NewVendorInvoiceInput {
+  purchaseOrderId: string;
+  vendorRef: string;
+  billDate: string;
+  amount: number;
+  fileName?: string;
+  reason?: string;
+}
+
+export function usePurchaseOrderForBilling(purchaseOrderId: string | undefined) {
+  return useQuery({
+    queryKey: ['vendor-bills', 'po', purchaseOrderId],
+    queryFn: () => vendorBillsApi.purchaseOrder(purchaseOrderId!),
+    enabled: !!purchaseOrderId,
+  });
+}
+
+export function useCreateVendorInvoice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: vendorBillsApi.createFromPo,
+    onSuccess: () => {
+      invalidateFinance(qc);
+      void qc.invalidateQueries({ queryKey: ['work-orders'] });
+    },
+  });
+}
 
 export function useVendorBills(params: ListParams) {
   return useQuery({

@@ -1,5 +1,7 @@
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
+import { Banknote } from 'lucide-react';
 import { Badge, StatusBadge } from '@/shared/ui/Badge';
+import { ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
@@ -15,6 +17,81 @@ const route = getRouteApi('/_app/vendors/$id');
 type RateRow = VendorDetail['rates'][number];
 type AssignmentRow = VendorDetail['assignments'][number];
 type BillRow = VendorDetail['bills'][number];
+type PoRow = VendorDetail['purchaseOrders'][number];
+type PaymentRow = VendorDetail['payments'][number];
+
+const poColumns: Column<PoRow>[] = [
+  {
+    key: 'number',
+    header: 'Purchase order',
+    cell: (p) => (
+      <div>
+        <Link
+          to="/purchase-orders/$id"
+          params={{ id: p.id }}
+          className="font-mono text-[13px] font-medium text-brand hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {p.number}
+        </Link>
+        <p className="text-caption text-fg-muted">{p.description}</p>
+      </div>
+    ),
+  },
+  {
+    key: 'job',
+    header: 'Job',
+    hideOnMobile: true,
+    cell: (p) => <span className="font-mono text-[13px]">{p.workOrderNumber}</span>,
+  },
+  {
+    key: 'issued',
+    header: 'Issued',
+    hideOnMobile: true,
+    cell: (p) => <span className="whitespace-nowrap">{formatDate(p.issuedAt)}</span>,
+  },
+  { key: 'total', header: 'Total incl. VAT', align: 'right', cell: (p) => <Money amount={p.total} /> },
+  {
+    key: 'bill',
+    header: 'Vendor invoice',
+    hideOnMobile: true,
+    cell: (p) =>
+      p.billNumber ? (
+        <span className="font-mono text-[13px]">{p.billNumber}</span>
+      ) : (
+        <span className="text-caption text-fg-muted">Not yet invoiced</span>
+      ),
+  },
+  { key: 'status', header: 'Status', cell: (p) => <StatusBadge status={p.status} /> },
+];
+
+const paymentColumns: Column<PaymentRow>[] = [
+  { key: 'number', header: 'Payment', cell: (p) => <DocRef>{p.number}</DocRef> },
+  {
+    key: 'date',
+    header: 'Date',
+    cell: (p) => <span className="whitespace-nowrap">{formatDate(p.date)}</span>,
+  },
+  {
+    key: 'method',
+    header: 'Method',
+    hideOnMobile: true,
+    cell: (p) => (
+      <span>
+        {p.method}
+        <span className="block text-caption text-fg-muted">{p.reference}</span>
+      </span>
+    ),
+  },
+  {
+    key: 'bills',
+    header: 'Against',
+    hideOnMobile: true,
+    cell: (p) => <span className="font-mono text-[13px]">{p.bills.join(', ') || '—'}</span>,
+  },
+  { key: 'amount', header: 'Amount', align: 'right', cell: (p) => <Money amount={p.amount} /> },
+  { key: 'status', header: 'Status', cell: (p) => <StatusBadge status={p.status} /> },
+];
 
 const rateColumns: Column<RateRow>[] = [
   { key: 'service', header: 'Service', cell: (r) => <span className="font-medium">{r.serviceName}</span> },
@@ -38,7 +115,7 @@ const rateColumns: Column<RateRow>[] = [
 const assignmentColumns: Column<AssignmentRow>[] = [
   {
     key: 'wo',
-    header: 'Work order',
+    header: 'Job',
     cell: (a) => (
       <Link
         to="/work-orders/$id"
@@ -59,7 +136,7 @@ const assignmentColumns: Column<AssignmentRow>[] = [
 const billColumns: Column<BillRow>[] = [
   {
     key: 'number',
-    header: 'Bill',
+    header: 'Purchase invoice',
     cell: (b) => (
       <div>
         <DocRef>{b.number}</DocRef>
@@ -96,6 +173,7 @@ export function VendorDetailPage() {
   if (error) return <StatusMessage kind="error" title="Vendor not found" />;
   if (isLoading || !data) return <StatusMessage kind="loading" title="Loading vendor…" />;
   const v = data.vendor;
+  const bal = data.balance;
   return (
     <div>
       <PageHeader
@@ -109,20 +187,61 @@ export function VendorDetailPage() {
             <StatusBadge status={v.status} />
           </>
         }
-        description={`${v.code} · ${v.city}, ${v.country}`}
+        description={`${v.code} · ledger ${v.ledgerCode} · ${v.city}, ${v.country}`}
+        actions={
+          <ButtonLink to="/payments/new" search={{ vendorId: v.id }} icon={<Banknote aria-hidden="true" />}>
+            New payment
+          </ButtonLink>
+        }
       />
+      <section aria-label="Vendor balance" className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          { label: 'Invoiced to us', value: bal.billed, hint: 'Approved purchase invoices incl. VAT' },
+          { label: 'Paid', value: bal.paid, hint: `${data.payments.length} payment voucher(s)` },
+          { label: 'Payable now', value: bal.payable, hint: 'Invoiced − paid', strong: true },
+          {
+            label: 'Open POs not invoiced',
+            value: bal.openPoValue,
+            hint: `${bal.openPoCount} purchase order(s) committed`,
+          },
+        ].map((t) => (
+          <div
+            key={t.label}
+            className={
+              t.strong
+                ? 'rounded-xl bg-surface-inverse p-4 text-fg-inverse shadow-card'
+                : 'rounded-xl border border-border-subtle bg-surface p-4 shadow-card'
+            }
+          >
+            <p
+              className={
+                t.strong ? 'text-caption font-medium text-white/70' : 'text-caption font-medium text-fg-muted'
+              }
+            >
+              {t.label}
+            </p>
+            <p className="mt-1.5 text-[17px] font-semibold tabular-nums">
+              <Money amount={t.value} />
+            </p>
+            <p className={t.strong ? 'mt-1 text-caption text-white/70' : 'mt-1 text-caption text-fg-muted'}>
+              {t.hint}
+            </p>
+          </div>
+        ))}
+      </section>
       <div className="grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-1">
           <CardHeader title="Profile" />
           <CardBody>
             <DescriptionList
               items={[
+                { label: 'Payable ledger', value: <span className="font-mono">{v.ledgerCode}</span> },
                 { label: 'Contact', value: v.contactName },
                 { label: 'Email', value: v.contactEmail },
                 { label: 'Payment terms', value: `${v.paymentTermsDays} days` },
                 { label: 'Rating', value: <Rating value={v.rating} /> },
-                { label: 'Open bills', value: String(v.openBills) },
-                { label: 'Outstanding', value: <Money amount={v.outstanding} /> },
+                { label: 'Open purchase invoices', value: String(v.openBills) },
+                { label: 'Payable (approved)', value: <Money amount={bal.payable} /> },
               ]}
             />
           </CardBody>
@@ -140,7 +259,7 @@ export function VendorDetailPage() {
           </div>
         </Card>
         <Card className="xl:col-span-3">
-          <CardHeader title="Work order assignments" />
+          <CardHeader title="Job assignments" />
           <div className="mt-3">
             <DataTable
               caption="Assignments"
@@ -153,14 +272,40 @@ export function VendorDetailPage() {
           </div>
         </Card>
         <Card className="xl:col-span-3">
-          <CardHeader title="Bills" />
+          <CardHeader title="Purchase orders" description="Issued when the vendor is assigned to a job" />
+          <div className="mt-3">
+            <DataTable
+              caption="Purchase orders"
+              columns={poColumns}
+              rows={data.purchaseOrders}
+              rowKey={(p) => p.id}
+              onRowClick={(p) => void navigate({ to: '/purchase-orders/$id', params: { id: p.id } })}
+              emptyTitle="No purchase orders"
+            />
+          </div>
+        </Card>
+        <Card className="xl:col-span-3">
+          <CardHeader title="Purchase invoices" />
           <div className="mt-3">
             <DataTable
               caption="Vendor bills"
               columns={billColumns}
               rows={data.bills}
               rowKey={(b) => b.id}
-              emptyTitle="No bills"
+              onRowClick={(b) => void navigate({ to: '/vendor-bills/$id', params: { id: b.id } })}
+              emptyTitle="No purchase invoices"
+            />
+          </div>
+        </Card>
+        <Card className="xl:col-span-3">
+          <CardHeader title="Payments" description="Payment vouchers to this vendor" />
+          <div className="mt-3">
+            <DataTable
+              caption="Vendor payments"
+              columns={paymentColumns}
+              rows={data.payments}
+              rowKey={(p) => p.id}
+              emptyTitle="No payments yet"
             />
           </div>
         </Card>
