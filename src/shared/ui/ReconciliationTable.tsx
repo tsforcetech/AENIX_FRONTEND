@@ -38,7 +38,12 @@ export function ReconciliationTable({
             : `${result.mismatches} line${result.mismatches === 1 ? '' : 's'} need attention — ${expectedLabel}: ${result.expectedTotal}, ${actualLabel}: ${result.actualTotal}.`}
         </span>
       </div>
-      <div className="overflow-x-auto rounded-lg border border-border-subtle">
+      <div
+        className="overflow-x-auto rounded-lg border border-border-subtle"
+        tabIndex={0}
+        role="region"
+        aria-label={caption}
+      >
         <table className="w-full text-left text-body-s">
           <caption className="sr-only">{caption}</caption>
           <thead>

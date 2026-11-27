@@ -1,4 +1,4 @@
-import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
+import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { Info } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -335,10 +335,7 @@ export function NewInvoicePage() {
 
         <div className="flex flex-wrap items-center justify-end gap-2">
           <p className="mr-auto text-caption text-fg-muted">
-            Posting makes the invoice read-only. Corrections use a credit note.{' '}
-            <Link to="/invoices" className="text-brand hover:underline">
-              Back to invoices
-            </Link>
+            Posting makes the invoice read-only. Corrections use a credit note.
           </p>
           <ButtonLink to="/invoices" variant="secondary">
             Cancel
