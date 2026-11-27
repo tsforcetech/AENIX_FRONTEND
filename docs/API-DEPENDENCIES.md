@@ -37,6 +37,10 @@ Version 0.1 | 2026-11-23 | FE-P0-001 | Owner of requests: Claude · Contract own
 | API-DEP-30 | **Company profile & bank details** (secure settings, not in source code)                                                                                   | Settings, all documents                                                         | Who may edit; audit of changes                                                                                                                                                                                                                     | REQUESTED                                                                                                                                    |
 | API-DEP-14 | **Security headers** (CSP, frame-ancestors, HSTS)                                                                                                          | Allows the SPA to load correctly under a strict CSP                             | Who owns the header configuration (IIS vs API middleware)? Is a report-uri wanted?                                                                                                                                                                 | REQUESTED                                                                                                                                    |
 
+## Backend handoff
+
+The exact frontend → backend handoff of the FLOW-002 workflow changes (rules, formulas, postings, documents, import spec, proposed API and permissions, acceptance tests) is **HO-FLOW-002** in AENIX: [`docs/handoff/FE-BE-HANDOFF-FLOW-002.md`](https://github.com/tsforcetech/AENIX/blob/docs/flow-002-order-to-cash/docs/handoff/FE-BE-HANDOFF-FLOW-002.md) (AENIX PR #7).
+
 ## Prototype view-models (FE-PROTO-001)
 
 The clickable prototype uses **provisional** view-models in `src/domain/types.ts`, plus one `api.ts` adapter per module (see `docs/PROTOTYPE.md`). They show which fields the screens need, so Antigravity can use them as a **reference input** when designing contracts. They are **not** contracts and must not be treated as approved field names.
