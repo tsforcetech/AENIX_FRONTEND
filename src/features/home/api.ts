@@ -114,15 +114,17 @@ function buildOverview(): HomeOverview {
         tone: 'warning' as const,
         to: `/work-orders/${w.id}`,
       })),
-    ...db.workOrders
-      .filter((w) => w.grn?.status === 'Variance raised')
-      .map((w) => ({
-        id: `${w.id}-grn`,
-        title: `${w.grn!.number} does not match ${w.packingList?.number ?? 'the PL'}`,
-        detail: `${w.number} · ${customerName(w.customerId)}`,
-        tone: 'danger' as const,
-        to: `/work-orders/${w.id}`,
-      })),
+    ...db.workOrders.flatMap((w) =>
+      w.inbounds
+        .filter((ib) => ib.grn?.status === 'Variance raised')
+        .map((ib) => ({
+          id: `${w.id}-${ib.id}-grn`,
+          title: `${ib.grn!.number} does not match ${ib.packingList.number}`,
+          detail: `${w.number} · ${ib.number} · ${customerName(w.customerId)}`,
+          tone: 'danger' as const,
+          to: `/work-orders/${w.id}`,
+        })),
+    ),
     ...db.workOrders.flatMap((w) =>
       w.customerRequests
         .filter((r) => r.status === 'Variance raised')
@@ -134,15 +136,17 @@ function buildOverview(): HomeOverview {
           to: `/work-orders/${w.id}`,
         })),
     ),
-    ...db.workOrders
-      .filter((w) => w.packingList?.status === 'Sent to warehouse' && !w.grn)
-      .map((w) => ({
-        id: `${w.id}-nogrn`,
-        title: `${w.number} is waiting for the GRN`,
-        detail: `${w.packingList!.number} sent to warehouse · ${customerName(w.customerId)}`,
-        tone: 'warning' as const,
-        to: `/work-orders/${w.id}`,
-      })),
+    ...db.workOrders.flatMap((w) =>
+      w.inbounds
+        .filter((ib) => ib.packingList.status === 'Sent to warehouse' && !ib.grn)
+        .map((ib) => ({
+          id: `${w.id}-${ib.id}-nogrn`,
+          title: `${ib.number} expected — no GRN yet`,
+          detail: `${w.number} · ${ib.reference || ib.packingList.number} · due ${ib.expectedAt} · ${customerName(w.customerId)}`,
+          tone: (ib.expectedAt < today ? 'warning' : 'info') as 'warning' | 'info',
+          to: `/work-orders/${w.id}`,
+        })),
+    ),
     ...db.workOrders.flatMap((w) =>
       w.customerRequests
         .filter((r) => r.status === 'Sent to vendor' && !r.pod && r.requiredBy < today)

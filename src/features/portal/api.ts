@@ -7,6 +7,7 @@ import { PROTO_TODAY } from '@/prototype/seed';
 import { buildStatement, openInvoiceStats } from '@/features/customers/statement';
 import { reconcile } from '@/domain/reconcile';
 import { customerBalance } from '@/domain/balances';
+import { jobStock } from '@/domain/stock';
 import type { AppNotification, Attachment, DocLine, WorkOrder } from '@/domain/types';
 
 const where = (w: Pick<WorkOrder, 'origin' | 'destination'>) =>
@@ -50,12 +51,23 @@ function customerOverview(partyId: string) {
         number: w.number,
         location: where(w),
         status: w.status,
-        plNumber: w.packingList?.number,
-        plStatus: w.packingList?.status,
-        plLines: w.packingList?.lines.length ?? 0,
-        grnNumber: w.grn?.number,
-        grnStatus: w.grn?.status,
-        canUploadPl: !w.packingList || w.packingList.status === 'Draft',
+        /** Every inbound receipt (goods arrive many times on a storage job). Read-only for the customer. */
+        inbounds: [...w.inbounds]
+          .sort((a, b) => b.expectedAt.localeCompare(a.expectedAt))
+          .map((ib) => ({
+            id: ib.id,
+            number: ib.number,
+            reference: ib.reference,
+            expectedAt: ib.expectedAt,
+            plNumber: ib.packingList.number,
+            plStatus: ib.packingList.status,
+            plLines: ib.packingList.lines.length,
+            grnNumber: ib.grn?.number,
+            grnStatus: ib.grn?.status,
+          })),
+        /** Running stock (good units) on the job, from every GRN and delivered release. */
+        stock: jobStock(w).filter((x) => x.received > 0 || x.reserved > 0),
+        canUploadPl: w.status !== 'Draft',
       })),
     outstanding: stats.outstanding,
     overdue: stats.overdue,
@@ -200,18 +212,25 @@ export function useUploadPackingList(partyId: string | null) {
       workOrderId,
       file,
       lines,
+      reference,
+      expectedAt,
+      imported,
     }: {
       workOrderId: string;
       file: { name: string; size: number };
       lines: DocLine[];
+      reference: string;
+      expectedAt: string;
+      imported: boolean;
     }) => {
       const wo = protoDb.get().workOrders.find((w) => w.id === workOrderId);
       if (!partyId || !wo || wo.customerId !== partyId) throw new Error('Not found');
       if (!wo.serviceCategories.includes('Warehouse')) throw new Error('This job has no warehouse handling.');
-      if (wo.packingList && wo.packingList.status !== 'Draft')
-        throw new Error('A packing list has already been sent for this job.');
       if (lines.length === 0) throw new Error('Add at least one line.');
-      const number = wo.packingList?.number ?? `PL-${wo.number.replace(/^JOB-/, '')}`;
+      const seq = String(wo.inbounds.length + 1).padStart(2, '0');
+      const n = wo.number.replace(/^JOB-/, '');
+      const number = `PL-${n}-${seq}`;
+      const inboundNumber = `IN-${n}-${seq}`;
       const customer = lookupName.customer(partyId);
       const att = attachmentFrom(file, `${customer} (portal)`);
       protoDb.update((s) => ({
@@ -220,19 +239,30 @@ export function useUploadPackingList(partyId: string | null) {
           w.id === workOrderId
             ? {
                 ...w,
-                packingList: {
-                  number,
-                  status: 'Sent to warehouse' as const,
-                  sentAt: nowIso(),
-                  lines: lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
-                },
+                inbounds: [
+                  ...w.inbounds,
+                  {
+                    id: newId('ib'),
+                    number: inboundNumber,
+                    reference,
+                    expectedAt,
+                    packingList: {
+                      number,
+                      status: 'Sent to warehouse' as const,
+                      sentAt: nowIso(),
+                      source: imported ? ('Excel import' as const) : ('Customer portal' as const),
+                      attachment: att,
+                      lines: lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+                    },
+                  },
+                ],
               }
             : w,
         ),
         notifications: [
           staffNotice(
-            `Packing list ${number} uploaded by customer`,
-            `${customer} · ${wo.number} · ${att.fileName} (${lines.length} lines) — warehouse to expect goods`,
+            `Inbound ${inboundNumber} announced by customer`,
+            `${customer} · ${wo.number} · ${reference} · ${att.fileName} (${lines.length} lines) — warehouse to expect goods`,
             `/work-orders/${wo.id}`,
           ),
           ...s.notifications,
@@ -242,9 +272,9 @@ export function useUploadPackingList(partyId: string | null) {
         entity: 'Work order',
         entityId: wo.id,
         entityRef: wo.number,
-        action: `customer uploaded packing list ${number} (${att.fileName}) in the portal`,
+        action: `customer announced inbound ${inboundNumber} with packing list ${number} (${att.fileName}) in the portal`,
       });
-      return latency({ number }, 350);
+      return latency({ number, inboundNumber }, 350);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['portal'] });

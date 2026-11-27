@@ -6,7 +6,9 @@ import type {
   CustomerRequest,
   DocLine,
   Grn,
+  Inbound,
   Milestone,
+  PackingList,
   Pod,
   PriceLine,
   PurchaseOrder,
@@ -19,6 +21,7 @@ import type {
   WorkOrderStatus,
 } from '@/domain/types';
 import { reconcile } from '@/domain/reconcile';
+import { jobStock } from '@/domain/stock';
 import { milestoneLabels, primaryCategory, SERVICE_CATEGORIES } from '@/domain/workflow';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
@@ -32,8 +35,10 @@ export const PROTO_TODAY = '2026-11-23';
 
 /** Document status chips shown on lists (PL → GRN, request → POD). */
 export interface DocFlags {
-  awaitingGrn: boolean;
-  grnVariance: boolean;
+  /** Inbound receipts whose PL was sent but no GRN has come back yet. */
+  awaitingGrn: number;
+  /** Inbound receipts with an unresolved GRN variance. */
+  grnVariance: number;
   awaitingPod: number;
   podVariance: number;
 }
@@ -131,12 +136,22 @@ function sourceRef(wo: WorkOrder): string | undefined {
   return undefined;
 }
 
-export function grnResult(wo: Pick<WorkOrder, 'packingList' | 'grn'>) {
-  if (!wo.packingList || !wo.grn) return undefined;
+export function grnResult(ib: Pick<Inbound, 'packingList' | 'grn'>) {
+  if (!ib.grn) return undefined;
   return reconcile(
-    wo.packingList.lines,
-    wo.grn.lines.map((l) => ({ sku: l.sku, qty: l.receivedQty, damaged: l.damagedQty, remarks: l.remarks })),
+    ib.packingList.lines,
+    ib.grn.lines.map((l) => ({ sku: l.sku, qty: l.receivedQty, damaged: l.damagedQty, remarks: l.remarks })),
   );
+}
+
+export type InboundStage = 'Draft PL' | 'Expected' | 'GRN uploaded' | 'Verified' | 'Variance raised';
+
+/** Where one inbound receipt is in its PL → GRN → check cycle. */
+export function inboundStage(ib: Inbound): InboundStage {
+  if (!ib.grn) return ib.packingList.status === 'Sent to warehouse' ? 'Expected' : 'Draft PL';
+  if (ib.grn.status === 'Verified') return 'Verified';
+  if (ib.grn.status === 'Variance raised') return 'Variance raised';
+  return 'GRN uploaded';
 }
 
 export function podResult(req: CustomerRequest) {
@@ -148,10 +163,13 @@ export function podResult(req: CustomerRequest) {
 }
 
 export function docFlags(wo: WorkOrder): DocFlags {
-  const grn = grnResult(wo);
   return {
-    awaitingGrn: wo.packingList?.status === 'Sent to warehouse' && !wo.grn,
-    grnVariance: wo.grn?.status === 'Variance raised' || (!!grn && !grn.ok && wo.grn?.status !== 'Verified'),
+    awaitingGrn: wo.inbounds.filter((ib) => inboundStage(ib) === 'Expected').length,
+    grnVariance: wo.inbounds.filter(
+      (ib) =>
+        ib.grn?.status === 'Variance raised' ||
+        (!!ib.grn && ib.grn.status !== 'Verified' && !grnResult(ib)?.ok),
+    ).length,
     awaitingPod: wo.customerRequests.filter((r) => !r.pod && r.status !== 'Closed').length,
     podVariance: wo.customerRequests.filter(
       (r) => r.status === 'Variance raised' || (r.pod && r.status !== 'Closed' && !podResult(r)?.ok),
@@ -159,16 +177,14 @@ export function docFlags(wo: WorkOrder): DocFlags {
   };
 }
 
-/** Good (received − damaged) quantity per SKU available to release on a warehouse job, net of open/closed requests. */
+/** Good quantity per SKU still available to release (running stock across ALL inbounds and releases). */
 export function availableToRelease(wo: WorkOrder, excludeRequestId?: string): Map<string, number> {
-  const avail = new Map<string, number>();
-  for (const l of wo.grn?.lines ?? [])
-    avail.set(l.sku, (avail.get(l.sku) ?? 0) + l.receivedQty - l.damagedQty);
-  for (const r of wo.customerRequests) {
-    if (r.id === excludeRequestId) continue;
-    for (const l of r.lines) avail.set(l.sku, (avail.get(l.sku) ?? 0) - l.quantity);
-  }
-  return avail;
+  return new Map(jobStock(wo, excludeRequestId).map((s) => [s.sku, s.available]));
+}
+
+/** Release checks apply once the job has received goods on at least one GRN. */
+export function hasReceivedStock(wo: WorkOrder): boolean {
+  return wo.inbounds.some((ib) => !!ib.grn);
 }
 
 function toRow(wo: WorkOrder): WorkOrderRow {
@@ -276,6 +292,16 @@ function findOrThrow(id: string): WorkOrder {
   const wo = protoDb.get().workOrders.find((w) => w.id === id);
   if (!wo) throw new Error('Work order not found');
   return wo;
+}
+
+function findInbound(id: string, inboundId: string): Inbound {
+  const ib = findOrThrow(id).inbounds.find((x) => x.id === inboundId);
+  if (!ib) throw new Error('Inbound receipt not found');
+  return ib;
+}
+
+function patchInbound(id: string, inboundId: string, fn: (ib: Inbound) => Inbound): WorkOrder {
+  return patch(id, (w) => ({ ...w, inbounds: w.inbounds.map((x) => (x.id === inboundId ? fn(x) : x)) }));
 }
 
 export const workOrdersApi = {
@@ -441,13 +467,22 @@ export const workOrdersApi = {
       vendorAssignments: [],
       lines: input.lines.map((l) => ({ ...l, id: newId('ln') })),
       hasWarehouse: categories.includes('Warehouse') || input.hasWarehouse,
-      packingList: input.packingLines?.length
-        ? {
-            number: `PL-${next}`,
-            status: 'Draft',
-            lines: input.packingLines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
-          }
-        : undefined,
+      inbounds: input.packingLines?.length
+        ? [
+            {
+              id: newId('ib'),
+              number: `IN-${next}-01`,
+              reference: 'First consignment',
+              expectedAt: input.eta,
+              packingList: {
+                number: `PL-${next}-01`,
+                status: 'Draft',
+                source: 'Staff',
+                lines: input.packingLines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+              },
+            },
+          ]
+        : [],
       customerRequests: [],
       createdAt: nowIso(),
       eta: input.eta,
@@ -604,89 +639,136 @@ export const workOrdersApi = {
     return latency({ wo: findOrThrow(id), awaitingInvoice }, 250);
   },
 
-  // ---------- Documents: PL → GRN ----------
-  savePackingList(id: string, lines: DocLine[]): Promise<WorkOrder> {
+  // ---------- Documents: inbound receipts (many per job): PL → GRN ----------
+  addInbound(
+    id: string,
+    input: {
+      reference: string;
+      expectedAt: string;
+      lines: DocLine[];
+      attachment?: Attachment;
+      source: NonNullable<PackingList['source']>;
+      send: boolean;
+    },
+  ): Promise<Inbound> {
     const wo = findOrThrow(id);
-    if (wo.packingList?.status === 'Sent to warehouse')
-      return Promise.reject(new Error('The PL was already sent to the warehouse'));
-    const updated = patch(id, (w) => ({
-      ...w,
-      hasWarehouse: true,
+    if (!input.lines.length) return Promise.reject(new Error('Add at least one product line'));
+    const seq = wo.inbounds.length + 1;
+    const n = wo.number.split('-')[1];
+    const ib: Inbound = {
+      id: newId('ib'),
+      number: `IN-${n}-${String(seq).padStart(2, '0')}`,
+      reference: input.reference,
+      expectedAt: input.expectedAt,
       packingList: {
-        number: w.packingList?.number ?? `PL-${w.number.split('-')[1]}`,
-        status: 'Draft',
-        lines,
+        number: `PL-${n}-${String(seq).padStart(2, '0')}`,
+        status: input.send ? 'Sent to warehouse' : 'Draft',
+        sentAt: input.send ? nowIso() : undefined,
+        lines: input.lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+        attachment: input.attachment,
+        source: input.source,
       },
+    };
+    patch(id, (w) => {
+      const next = { ...w, hasWarehouse: true, inbounds: [...w.inbounds, ib] };
+      return input.send ? advanceIfCurrent(next, 'PL sent to warehouse') : next;
+    });
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `added inbound ${ib.number} (${ib.packingList.lines.length} PL lines${input.source === 'Excel import' ? ', imported from Excel' : ''})`,
+    });
+    return latency(ib, 200);
+  },
+
+  savePackingList(id: string, inboundId: string, lines: DocLine[]): Promise<WorkOrder> {
+    const ib = findInbound(id, inboundId);
+    if (ib.packingList.status === 'Sent to warehouse')
+      return Promise.reject(new Error('The PL was already sent to the warehouse'));
+    const updated = patchInbound(id, inboundId, (x) => ({
+      ...x,
+      packingList: { ...x.packingList, lines: lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })) },
     }));
     return latency(updated, 150);
   },
 
-  sendPackingList(id: string): Promise<WorkOrder> {
+  sendPackingList(id: string, inboundId: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (!wo.packingList?.lines.length)
-      return Promise.reject(new Error('Add at least one product line first'));
-    const updated = patch(id, (w) =>
-      advanceIfCurrent(
-        { ...w, packingList: { ...w.packingList!, status: 'Sent to warehouse', sentAt: nowIso() } },
-        'PL sent to warehouse',
-      ),
-    );
+    const ib = findInbound(id, inboundId);
+    if (!ib.packingList.lines.length) return Promise.reject(new Error('Add at least one product line first'));
+    patchInbound(id, inboundId, (x) => ({
+      ...x,
+      packingList: { ...x.packingList, status: 'Sent to warehouse', sentAt: nowIso() },
+    }));
+    const updated = patch(id, (w) => advanceIfCurrent(w, 'PL sent to warehouse'));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `sent ${wo.packingList.number} to the warehouse team`,
+      action: `sent ${ib.packingList.number} (${ib.number}) to the warehouse team`,
     });
     return latency(updated, 200);
   },
 
-  uploadGrn(id: string, grn: Omit<Grn, 'status'>): Promise<WorkOrder> {
+  uploadGrn(id: string, inboundId: string, grn: Omit<Grn, 'status'>): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (wo.packingList?.status !== 'Sent to warehouse')
+    const ib = findInbound(id, inboundId);
+    if (ib.packingList.status !== 'Sent to warehouse')
       return Promise.reject(new Error('Send the PL to the warehouse before uploading a GRN'));
-    const updated = patch(id, (w) =>
-      advanceIfCurrent({ ...w, grn: { ...grn, status: 'Uploaded' } }, 'GRN received'),
-    );
+    patchInbound(id, inboundId, (x) => ({
+      ...x,
+      grn: {
+        ...grn,
+        lines: grn.lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+        status: 'Uploaded',
+      },
+    }));
+    const updated = patch(id, (w) => advanceIfCurrent(w, 'GRN received'));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `uploaded ${grn.number}`,
+      action: `uploaded ${grn.number} for ${ib.number}`,
     });
     return latency(updated, 250);
   },
 
-  verifyGrn(id: string): Promise<WorkOrder> {
+  verifyGrn(id: string, inboundId: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (!wo.grn) return Promise.reject(new Error('No GRN uploaded'));
-    if (!grnResult(wo)?.ok)
+    const ib = findInbound(id, inboundId);
+    if (!ib.grn) return Promise.reject(new Error('No GRN uploaded'));
+    if (!grnResult(ib)?.ok)
       return Promise.reject(new Error('The GRN does not match the PL — raise a variance instead'));
-    const updated = patch(id, (w) =>
-      advanceIfCurrent({ ...w, grn: { ...w.grn!, status: 'Verified' } }, 'Goods stored'),
-    );
+    patchInbound(id, inboundId, (x) => ({ ...x, grn: { ...x.grn!, status: 'Verified' } }));
+    const updated = patch(id, (w) => advanceIfCurrent(w, 'Goods stored'));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `verified ${wo.grn.number} against the PL`,
+      action: `verified ${ib.grn.number} against ${ib.packingList.number}`,
     });
     return latency(updated, 200);
   },
 
-  raiseGrnVariance(id: string): Promise<WorkOrder> {
+  raiseGrnVariance(id: string, inboundId: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (!wo.grn) return Promise.reject(new Error('No GRN uploaded'));
-    const r = grnResult(wo);
-    const updated = patch(id, (w) => ({ ...w, grn: { ...w.grn!, status: 'Variance raised' } }));
+    const ib = findInbound(id, inboundId);
+    if (!ib.grn) return Promise.reject(new Error('No GRN uploaded'));
+    const r = grnResult(ib);
+    const updated = patchInbound(id, inboundId, (x) => ({
+      ...x,
+      grn: { ...x.grn!, status: 'Variance raised' },
+    }));
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `raised a GRN variance on ${wo.grn.number}`,
+      action: `raised a GRN variance on ${ib.grn.number} (${ib.number})`,
     });
     notify(
       `GRN variance on ${wo.number}`,
-      `${wo.grn.number}: ${r?.mismatches ?? 0} line(s) differ from ${wo.packingList?.number ?? 'the PL'}`,
+      `${ib.grn.number}: ${r?.mismatches ?? 0} line(s) differ from ${ib.packingList.number}`,
       `/work-orders/${id}`,
     );
     return latency(updated, 200);
@@ -700,12 +782,14 @@ export const workOrdersApi = {
     const db = protoDb.get();
     const wo = findOrThrow(id);
     if (!input.lines.length) return Promise.reject(new Error('Add at least one line'));
-    if (wo.serviceCategory === 'Warehouse' && wo.grn) {
+    if (hasReceivedStock(wo)) {
       const avail = availableToRelease(wo);
-      const over = input.lines.find((l) => l.quantity > (avail.get(l.sku) ?? 0));
+      const over = input.lines.find((l) => l.quantity > (avail.get(l.sku.trim().toUpperCase()) ?? 0));
       if (over)
         return Promise.reject(
-          new Error(`Only ${Math.max(0, avail.get(over.sku) ?? 0)} ${over.sku} available to release`),
+          new Error(
+            `Only ${Math.max(0, avail.get(over.sku.trim().toUpperCase()) ?? 0)} ${over.sku} available to release`,
+          ),
         );
     }
     const seq =
@@ -719,7 +803,7 @@ export const workOrdersApi = {
       requestedAt: nowIso(),
       requiredBy: input.requiredBy,
       deliverTo: input.deliverTo,
-      lines: input.lines,
+      lines: input.lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
       status: 'Open',
     };
     patch(id, (w) =>
@@ -959,11 +1043,11 @@ export function useCompleteWorkOrder() {
 }
 
 export type DocAction =
-  | { kind: 'savePl'; id: string; lines: DocLine[] }
-  | { kind: 'sendPl'; id: string }
-  | { kind: 'uploadGrn'; id: string; grn: Omit<Grn, 'status'> }
-  | { kind: 'verifyGrn'; id: string }
-  | { kind: 'grnVariance'; id: string }
+  | { kind: 'savePl'; id: string; inboundId: string; lines: DocLine[] }
+  | { kind: 'sendPl'; id: string; inboundId: string }
+  | { kind: 'uploadGrn'; id: string; inboundId: string; grn: Omit<Grn, 'status'> }
+  | { kind: 'verifyGrn'; id: string; inboundId: string }
+  | { kind: 'grnVariance'; id: string; inboundId: string }
   | { kind: 'sendRequest'; id: string; requestId: string; vendorId: string }
   | { kind: 'uploadPod'; id: string; requestId: string; pod: Pod }
   | { kind: 'closeRequest'; id: string; requestId: string }
@@ -975,15 +1059,15 @@ export function useDocAction() {
     mutationFn: (a: DocAction): Promise<WorkOrder> => {
       switch (a.kind) {
         case 'savePl':
-          return workOrdersApi.savePackingList(a.id, a.lines);
+          return workOrdersApi.savePackingList(a.id, a.inboundId, a.lines);
         case 'sendPl':
-          return workOrdersApi.sendPackingList(a.id);
+          return workOrdersApi.sendPackingList(a.id, a.inboundId);
         case 'uploadGrn':
-          return workOrdersApi.uploadGrn(a.id, a.grn);
+          return workOrdersApi.uploadGrn(a.id, a.inboundId, a.grn);
         case 'verifyGrn':
-          return workOrdersApi.verifyGrn(a.id);
+          return workOrdersApi.verifyGrn(a.id, a.inboundId);
         case 'grnVariance':
-          return workOrdersApi.raiseGrnVariance(a.id);
+          return workOrdersApi.raiseGrnVariance(a.id, a.inboundId);
         case 'sendRequest':
           return workOrdersApi.sendRequest(a.id, a.requestId, a.vendorId);
         case 'uploadPod':
@@ -994,6 +1078,15 @@ export function useDocAction() {
           return workOrdersApi.raiseRequestVariance(a.id, a.requestId);
       }
     },
+    onSuccess: invalidate,
+  });
+}
+
+export function useAddInbound() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: ({ id, ...input }: { id: string } & Parameters<typeof workOrdersApi.addInbound>[1]) =>
+      workOrdersApi.addInbound(id, input),
     onSuccess: invalidate,
   });
 }
@@ -1015,4 +1108,14 @@ export function toAttachment(file: File): Attachment {
     uploadedAt: nowIso(),
     uploadedBy: actor(),
   };
+}
+
+/** The job's warehouse vendor (for remembered GRN column mappings); falls back to the own warehouse team. */
+export function warehouseVendorOf(wo: Pick<WorkOrder, 'vendorAssignments'>): { id: string; name: string } {
+  const db = protoDb.get();
+  for (const a of wo.vendorAssignments) {
+    const v = db.vendors.find((x) => x.id === a.vendorId);
+    if (v?.category === 'Warehouse') return { id: v.id, name: v.name };
+  }
+  return { id: 'warehouse', name: 'the warehouse team' };
 }

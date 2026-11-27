@@ -1,4 +1,4 @@
-import { CheckCircle2, Upload } from 'lucide-react';
+import { CheckCircle2, FileSpreadsheet, Upload } from 'lucide-react';
 import { useId, useState } from 'react';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
@@ -7,6 +7,7 @@ import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { Dialog } from '@/shared/ui/Dialog';
 import { inputClasses, TextField } from '@/shared/ui/Field';
 import { DocRef, Money } from '@/shared/ui/Money';
+import { POD_FIELDS, SpreadsheetImport, type ImportedRow } from '@/shared/ui/SpreadsheetImport';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate } from '@/shared/utils/format';
 import {
@@ -204,6 +205,29 @@ function PodDialog({
   );
   const [remarks, setRemarks] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [imported, setImported] = useState<string | null>(null);
+
+  /** Vendor's delivery Excel → delivered quantities per requested SKU (missing SKUs = 0 delivered). */
+  const applyImport = (rows: ImportedRow[], f: { name: string; sizeKb: number }) => {
+    const q = new Map<string, number>();
+    const rm = new Map<string, string>();
+    for (const r of rows) {
+      const sku = String(r.sku ?? '')
+        .trim()
+        .toUpperCase();
+      if (!sku) continue;
+      q.set(sku, (q.get(sku) ?? 0) + (Number(r.deliveredQty) || 0));
+      if (r.remarks) rm.set(sku, String(r.remarks));
+    }
+    setQty(Object.fromEntries(req.lines.map((l) => [l.sku, q.get(l.sku.toUpperCase()) ?? 0])));
+    setRemarks(Object.fromEntries(req.lines.map((l) => [l.sku, rm.get(l.sku.toUpperCase()) ?? ''])));
+    const unknown = [...q.keys()].filter((k) => !req.lines.some((l) => l.sku.toUpperCase() === k));
+    setImported(
+      `${rows.length} rows imported from ${f.name}${unknown.length ? ` · ignored SKUs not on this request: ${unknown.join(', ')}` : ''}`,
+    );
+    if (!file) setFile({ name: f.name, size: f.sizeKb * 1024 });
+  };
 
   const submit = async () => {
     setError(null);
@@ -238,115 +262,144 @@ function PodDialog({
   };
 
   return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="lg"
-      title={`Upload POD — ${req.number}`}
-      description={`Deliver to ${req.deliverTo} · job ${req.jobRef}`}
-      footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button busy={upload.isPending} onClick={() => void submit()}>
-            Upload POD
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-5">
-        <div className="space-y-1.5">
-          <label htmlFor={fileId} className="text-body-s font-medium">
-            Signed POD <span className="text-brand">*</span>
-          </label>
-          <input
-            id={fileId}
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              setFile(f ? { name: f.name, size: f.size } : null);
-            }}
-            className="block w-full text-body-s file:mr-3 file:rounded-lg file:border-0 file:bg-surface-inverse file:px-3 file:py-2 file:text-caption file:font-medium file:text-fg-inverse"
-          />
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <TextField
-            label="POD number"
-            required
-            value={podNumber}
-            onChange={(e) => setPodNumber(e.target.value)}
-          />
-          <TextField
-            label="Received by"
-            required
-            value={receivedBy}
-            onChange={(e) => setReceivedBy(e.target.value)}
-          />
-        </div>
-        <fieldset>
-          <legend className="mb-2 text-body-s font-medium">Delivered quantities</legend>
-          <div className="overflow-x-auto rounded-lg border border-border-subtle">
-            <table className="w-full text-left text-body-s">
-              <thead>
-                <tr className="border-b border-border-subtle bg-canvas text-caption uppercase tracking-wide text-fg-muted">
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    SKU
-                  </th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">
-                    Requested
-                  </th>
-                  <th scope="col" className="px-3 py-2 text-right font-medium">
-                    Delivered
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    Remarks
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {req.lines.map((l) => (
-                  <tr key={l.sku} className="border-b border-border-subtle last:border-0">
-                    <td className="px-3 py-2">
-                      <span className="block font-mono text-[13px]">{l.sku}</span>
-                      <span className="block text-caption text-fg-muted">{l.description}</span>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {l.quantity} <span className="text-caption text-fg-muted">{l.uom}</span>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <input
-                        aria-label={`Delivered quantity for ${l.sku}`}
-                        type="number"
-                        min={0}
-                        inputMode="numeric"
-                        value={qty[l.sku] ?? 0}
-                        onChange={(e) => setQty((q) => ({ ...q, [l.sku]: Number(e.target.value) }))}
-                        className={`${inputClasses} h-9 w-24 text-right`}
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        aria-label={`Remarks for ${l.sku}`}
-                        value={remarks[l.sku] ?? ''}
-                        onChange={(e) => setRemarks((rm) => ({ ...rm, [l.sku]: e.target.value }))}
-                        placeholder="e.g. 2 refused, damaged"
-                        className={`${inputClasses} h-9`}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+    <>
+      <Dialog
+        open
+        onClose={onClose}
+        size="lg"
+        title={`Upload POD — ${req.number}`}
+        description={`Deliver to ${req.deliverTo} · job ${req.jobRef}`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button busy={upload.isPending} onClick={() => void submit()}>
+              Upload POD
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          <div className="space-y-1.5">
+            <label htmlFor={fileId} className="text-body-s font-medium">
+              Signed POD <span className="text-brand">*</span>
+            </label>
+            <input
+              id={fileId}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.xlsx,.csv"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                setFile(f ? { name: f.name, size: f.size } : null);
+              }}
+              className="block w-full text-body-s file:mr-3 file:rounded-lg file:border-0 file:bg-surface-inverse file:px-3 file:py-2 file:text-caption file:font-medium file:text-fg-inverse"
+            />
           </div>
-        </fieldset>
-        {error ? (
-          <p role="alert" className="rounded-lg bg-danger-subtle px-3 py-2 text-body-s text-danger">
-            {error}
-          </p>
-        ) : null}
-      </div>
-    </Dialog>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField
+              label="POD number"
+              required
+              value={podNumber}
+              onChange={(e) => setPodNumber(e.target.value)}
+            />
+            <TextField
+              label="Received by"
+              required
+              value={receivedBy}
+              onChange={(e) => setReceivedBy(e.target.value)}
+            />
+          </div>
+          <fieldset>
+            <legend className="sr-only">Delivered quantities</legend>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p aria-hidden="true" className="text-body-s font-medium">
+                Delivered quantities
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<FileSpreadsheet aria-hidden="true" />}
+                onClick={() => setImportOpen(true)}
+              >
+                Import POD from Excel
+              </Button>
+            </div>
+            {imported ? (
+              <p role="status" className="mb-2 text-caption text-success">
+                {imported}
+              </p>
+            ) : null}
+            <div className="overflow-x-auto rounded-lg border border-border-subtle">
+              <table className="w-full text-left text-body-s">
+                <thead>
+                  <tr className="border-b border-border-subtle bg-canvas text-caption uppercase tracking-wide text-fg-muted">
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      SKU
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                      Requested
+                    </th>
+                    <th scope="col" className="px-3 py-2 text-right font-medium">
+                      Delivered
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Remarks
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {req.lines.map((l) => (
+                    <tr key={l.sku} className="border-b border-border-subtle last:border-0">
+                      <td className="px-3 py-2">
+                        <span className="block font-mono text-[13px]">{l.sku}</span>
+                        <span className="block text-caption text-fg-muted">{l.description}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        {l.quantity} <span className="text-caption text-fg-muted">{l.uom}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <input
+                          aria-label={`Delivered quantity for ${l.sku}`}
+                          type="number"
+                          min={0}
+                          inputMode="numeric"
+                          value={qty[l.sku] ?? 0}
+                          onChange={(e) => setQty((q) => ({ ...q, [l.sku]: Number(e.target.value) }))}
+                          className={`${inputClasses} h-9 w-24 text-right`}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          aria-label={`Remarks for ${l.sku}`}
+                          value={remarks[l.sku] ?? ''}
+                          onChange={(e) => setRemarks((rm) => ({ ...rm, [l.sku]: e.target.value }))}
+                          placeholder="e.g. 2 refused, damaged"
+                          className={`${inputClasses} h-9`}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </fieldset>
+          {error ? (
+            <p role="alert" className="rounded-lg bg-danger-subtle px-3 py-2 text-body-s text-danger">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </Dialog>
+      <SpreadsheetImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="Import POD"
+        fields={POD_FIELDS}
+        templateKey={`POD:${partyId}`}
+        partyName="your company"
+        onImport={applyImport}
+      />
+    </>
   );
 }
