@@ -1,6 +1,7 @@
 import { createRoute } from '@tanstack/react-router';
 import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
-import { ModulePlaceholder } from '@/shared/ui/ModulePlaceholder';
+import { PurchaseOrderDetailPage } from './PurchaseOrderDetailPage';
+import { PurchaseOrdersListPage } from './PurchaseOrdersListPage';
 
 export function purchaseOrdersRoutes(parent: AppParentRoute) {
   return [
@@ -8,12 +9,12 @@ export function purchaseOrdersRoutes(parent: AppParentRoute) {
       getParentRoute: () => parent,
       path: 'purchase-orders',
       validateSearch: validateListSearch,
-      component: () => <ModulePlaceholder title="Purchase orders" />,
+      component: PurchaseOrdersListPage,
     }),
     createRoute({
       getParentRoute: () => parent,
       path: 'purchase-orders/$id',
-      component: () => <ModulePlaceholder title="Purchase order" />,
+      component: PurchaseOrderDetailPage,
     }),
   ] as const;
 }

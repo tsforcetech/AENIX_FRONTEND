@@ -67,7 +67,7 @@ export function InboundCard({ wo }: { wo: WorkOrderDetail }) {
     <Card>
       <CardHeader
         title="Inbound · product list → GRN"
-        description="Send the product list (PL) to the warehouse team, upload the GRN they return, and compare."
+        description="The customer’s product list (PL) goes to the warehouse team or vendor; upload the GRN they return and cross-check."
         actions={
           pl ? (
             <div className="flex items-center gap-2">
@@ -591,8 +591,8 @@ export function CustomerRequestsCard({ wo }: { wo: WorkOrderDetail }) {
   return (
     <Card>
       <CardHeader
-        title="Customer requests · request → POD"
-        description="Out / delivery requests from the customer, closed by the vendor’s or warehouse’s proof of delivery."
+        title="Out-bond / delivery requests · request → POD"
+        description="The customer’s out-bond or delivery requests, closed by the vendor’s or warehouse’s proof of delivery (cross-checked)."
         actions={
           !closed ? (
             <Button
@@ -733,7 +733,7 @@ function NewRequestDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
   const create = useCreateRequest();
   const toast = useToast();
   const known: DocLine[] = wo.packingList?.lines ?? [];
-  const avail = wo.serviceCategory === 'Warehouse' && wo.grn ? availableToRelease(wo) : undefined;
+  const avail = wo.serviceCategories.includes('Warehouse') && wo.grn ? availableToRelease(wo) : undefined;
   const [deliverTo, setDeliverTo] = useState('');
   const [requiredBy, setRequiredBy] = useState('2026-11-27');
   const [rows, setRows] = useState<DraftLine[]>(
@@ -1134,38 +1134,71 @@ function PodUploadDialog({
 // Purchase invoices drafted at completion
 // ---------------------------------------------------------------------------------------------
 
-export function PurchaseInvoicesCard({ wo }: { wo: WorkOrderDetail }) {
+/** Vendor purchase orders (issued at assignment) and the vendor invoices recorded against them. */
+export function PurchasingCard({ wo }: { wo: WorkOrderDetail }) {
   return (
     <Card>
-      <CardHeader title="Purchase invoices" description="Vendor bills for this job." />
+      <CardHeader
+        title="Purchase orders"
+        description="Issued to vendors at assignment; vendor invoices are matched to them."
+      />
       <CardBody>
-        {wo.purchaseInvoices.length === 0 ? (
+        {wo.purchaseOrders.length === 0 ? (
           <p className="text-body-s text-fg-muted">
-            {wo.status === 'Completed'
-              ? 'No vendor to bill on this job.'
-              : 'Drafted automatically for each assigned vendor when you mark the job completed.'}
+            No purchase order yet. Assigning a vendor issues a PO before the work starts.
           </p>
         ) : (
           <ul className="space-y-2">
-            {wo.purchaseInvoices.map((b) => (
-              <li key={b.id}>
-                <Link
-                  to="/vendor-bills/$id"
-                  params={{ id: b.id }}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle px-3 py-2.5 hover:bg-canvas"
-                >
-                  <span className="min-w-0">
-                    <DocRef>{b.number}</DocRef>
-                    <span className="block truncate text-caption text-fg-muted">{b.vendorName}</span>
-                  </span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <Money amount={b.amount + b.vat} className="text-body-s font-medium" />
-                    <StatusBadge status={b.status} />
-                    <ChevronRight aria-hidden="true" className="size-4 text-fg-muted" />
-                  </span>
-                </Link>
-              </li>
-            ))}
+            {wo.purchaseOrders.map((po) => {
+              const bill = po.vendorBillId
+                ? wo.purchaseInvoices.find((b) => b.id === po.vendorBillId)
+                : undefined;
+              return (
+                <li key={po.id} className="rounded-lg border border-border-subtle">
+                  <Link
+                    to="/purchase-orders/$id"
+                    params={{ id: po.id }}
+                    className="flex items-center justify-between gap-3 rounded-t-lg px-3 py-2.5 hover:bg-canvas"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <DocRef>{po.number}</DocRef>
+                        <StatusBadge status={po.status} />
+                      </span>
+                      <span className="mt-0.5 block text-caption text-fg-muted">
+                        {po.vendorName} · {po.serviceName}
+                      </span>
+                      <Money amount={po.amount} className="mt-0.5 block text-body-s font-medium" />
+                    </span>
+                    <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
+                  </Link>
+                  <div className="flex items-center justify-between gap-2 border-t border-border-subtle px-3 py-2 text-caption">
+                    {bill ? (
+                      <Link
+                        to="/vendor-bills/$id"
+                        params={{ id: bill.id }}
+                        className="text-fg-secondary hover:text-brand"
+                      >
+                        Vendor invoice <span className="font-mono font-medium text-brand">{bill.number}</span>
+                      </Link>
+                    ) : po.status === 'Cancelled' ? (
+                      <span className="text-fg-muted">Cancelled</span>
+                    ) : po.status === 'Completed' || po.status === 'Accepted' ? (
+                      <Link
+                        to="/vendor-bills/new"
+                        search={{ purchaseOrderId: po.id }}
+                        className="font-medium text-brand hover:underline"
+                      >
+                        Record vendor invoice
+                      </Link>
+                    ) : (
+                      <span className="text-fg-muted">Awaiting vendor acceptance</span>
+                    )}
+                    {bill ? <StatusBadge status={bill.status} /> : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </CardBody>

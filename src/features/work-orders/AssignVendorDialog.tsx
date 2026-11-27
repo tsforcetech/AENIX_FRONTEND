@@ -20,8 +20,8 @@ export function AssignVendorDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title="Assign vendor"
-      description={`${wo.number} · ${wo.origin} → ${wo.destination}`}
+      title="Assign vendor & issue PO"
+      description={`${wo.number} · a purchase order is issued to the vendor for the agreed cost`}
     >
       {open ? <AssignVendorForm wo={wo} onDone={onClose} /> : null}
     </Dialog>
@@ -54,8 +54,13 @@ function AssignVendorForm({ wo, onDone }: { wo: WorkOrderDetail; onDone: () => v
     assign.mutate(
       { id: wo.id, vendorId, serviceId, agreedCost: amount },
       {
-        onSuccess: () => {
-          toast({ title: 'Vendor assigned', body: 'The vendor has been requested for this service.' });
+        onSuccess: ({ po }) => {
+          const vendorName =
+            vendors.data?.find((v) => v.value === vendorId)?.label.split(' · ')[0] ?? 'the vendor';
+          toast({
+            title: `${po.number} issued to ${vendorName}`,
+            body: 'The purchase order fixes the agreed cost before the work starts.',
+          });
           onDone();
         },
       },
@@ -108,7 +113,7 @@ function AssignVendorForm({ wo, onDone }: { wo: WorkOrderDetail; onDone: () => v
           Cancel
         </Button>
         <Button busy={assign.isPending} onClick={submit}>
-          Assign vendor
+          Assign & issue PO
         </Button>
       </div>
     </div>
