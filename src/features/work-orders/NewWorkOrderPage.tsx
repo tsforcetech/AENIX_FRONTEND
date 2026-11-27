@@ -45,7 +45,9 @@ const CATEGORY_HINT: Record<ServiceCategory, string> = {
 const schema = z
   .object({
     customerId: z.string().min(1, 'Choose a customer'),
-    serviceCategory: z.enum(['Transport', 'Warehouse', 'Service']),
+    serviceCategories: z
+      .array(z.enum(['Transport', 'Warehouse', 'Service']))
+      .min(1, 'Choose at least one service type'),
     mode: z.enum(['Road', 'Sea', 'Air']),
     origin: z.string().trim().min(2, 'Enter the location').max(80),
     destination: z.string().trim().max(80),
@@ -61,7 +63,7 @@ const schema = z
     plLines: z.array(plLineSchema),
   })
   .superRefine((v, ctx) => {
-    if (v.serviceCategory !== 'Transport') return;
+    if (!v.serviceCategories.includes('Transport')) return;
     if (v.destination.length < 2)
       ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
     if (v.packages <= 0) ctx.addIssue({ code: 'custom', path: ['packages'], message: 'Must be more than 0' });
@@ -80,7 +82,7 @@ export function NewWorkOrderPage() {
   const services = useServiceOptions();
   if (prefill.error) return <StatusMessage kind="error" title="Could not load the source document" />;
   if (!prefill.data || !customers.data || !services.data)
-    return <StatusMessage kind="loading" title="Preparing work order…" />;
+    return <StatusMessage kind="loading" title="Preparing job…" />;
   return <WorkOrderForm prefill={prefill.data} />;
 }
 
@@ -100,7 +102,7 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
     resolver: zodResolver(schema),
     defaultValues: {
       customerId: prefill.customerId ?? '',
-      serviceCategory: prefill.serviceCategory ?? 'Transport',
+      serviceCategories: prefill.serviceCategories?.length ? prefill.serviceCategories : ['Transport'],
       mode: prefill.mode ?? 'Road',
       origin: prefill.origin ?? '',
       destination: prefill.destination ?? '',
@@ -119,10 +121,12 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
     },
   });
   const mode = useController({ control, name: 'mode' });
-  const category = useController({ control, name: 'serviceCategory' });
+  const category = useController({ control, name: 'serviceCategories' });
+  const selected = category.field.value ?? [];
   const plLines = useFieldArray({ control, name: 'plLines' });
-  const isTransport = category.field.value === 'Transport';
-  const isWarehouse = category.field.value === 'Warehouse';
+  const isTransport = selected.includes('Transport');
+  const isWarehouse = selected.includes('Warehouse') && !isTransport;
+  const includesWarehouse = selected.includes('Warehouse');
   const lines = useFieldArray({ control, name: 'lines' });
   const watchedLines = useWatch({ control, name: 'lines' });
   const totals = (watchedLines ?? []).reduce(
@@ -143,14 +147,14 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
         customerId: v.customerId,
         source: prefill.source,
         salesOrderId: prefill.salesOrderId,
-        serviceCategory: v.serviceCategory,
-        mode: v.serviceCategory === 'Transport' ? v.mode : undefined,
-        packingLines: v.serviceCategory === 'Warehouse' && v.plLines.length ? v.plLines : undefined,
+        serviceCategories: v.serviceCategories,
+        mode: v.serviceCategories.includes('Transport') ? v.mode : undefined,
+        packingLines: v.serviceCategories.includes('Warehouse') && v.plLines.length ? v.plLines : undefined,
         origin: v.origin,
-        destination: v.serviceCategory === 'Transport' ? v.destination : '',
+        destination: v.serviceCategories.includes('Transport') ? v.destination : '',
         eta: v.eta,
         priority: v.priority,
-        hasWarehouse: v.hasWarehouse,
+        hasWarehouse: v.serviceCategories.includes('Warehouse'),
         cargo: {
           description: v.description,
           packages: v.packages,
@@ -173,9 +177,9 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader
-        title="New work order"
-        crumbs={[{ label: 'Work orders', to: '/work-orders' }, { label: 'New' }]}
-        description="The work order is the job — transport, warehouse or a direct service. It carries scope, price and every milestone through to completion and invoicing."
+        title="New job (work order)"
+        crumbs={[{ label: 'Jobs', to: '/work-orders' }, { label: 'New' }]}
+        description="The job (work order) executes a confirmed sales order. It can combine transport, warehouse and direct services, and carries scope, price, vendor POs and milestones through to completion."
       />
 
       <div
@@ -190,8 +194,8 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
         />
         {sourceType === 'Direct' ? (
           <p>
-            <strong className="font-semibold">Direct work order</strong> — no enquiry, quotation or contract.
-            Pricing must follow the authorised rate rules; prices outside them need approval before the job is
+            <strong className="font-semibold">Direct job</strong> — no enquiry, quotation or contract. Pricing
+            must follow the authorised rate rules; prices outside them need approval before the job is
             confirmed.
           </p>
         ) : (
@@ -228,10 +232,13 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
           <CardHeader title="Customer & scope" />
           <CardBody className="grid gap-5 sm:grid-cols-2">
             <fieldset className="sm:col-span-2">
-              <legend className="mb-1.5 text-body-s font-medium">Service type</legend>
+              <legend className="mb-1.5 text-body-s font-medium">Services on this job</legend>
+              <p className="mb-2 text-caption text-fg-muted">
+                Select every service included — a job can combine transport, warehouse and other services.
+              </p>
               <div className="grid gap-2 sm:grid-cols-3">
                 {SERVICE_CATEGORIES.map((c) => {
-                  const checked = category.field.value === c;
+                  const checked = selected.includes(c);
                   return (
                     <label
                       key={c}
@@ -241,12 +248,18 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
                       )}
                     >
                       <input
-                        type="radio"
+                        type="checkbox"
                         className="sr-only"
                         name={category.field.name}
                         value={c}
                         checked={checked}
-                        onChange={() => category.field.onChange(c)}
+                        onChange={() =>
+                          category.field.onChange(
+                            checked
+                              ? selected.filter((x: ServiceCategory) => x !== c)
+                              : SERVICE_CATEGORIES.filter((x) => x === c || selected.includes(x)),
+                          )
+                        }
                       />
                       <span
                         className={clsx(
@@ -264,6 +277,11 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
                   );
                 })}
               </div>
+              {errors.serviceCategories ? (
+                <p role="alert" className="mt-1.5 text-caption font-medium text-danger">
+                  {errors.serviceCategories.message}
+                </p>
+              ) : null}
             </fieldset>
             <SelectField
               label="Customer"
@@ -347,21 +365,6 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
               ]}
               {...register('priority')}
             />
-            {isTransport ? (
-              <label className="flex items-start gap-3 rounded-lg border border-border p-3 text-body-s sm:col-span-2">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 accent-[var(--color-brand)]"
-                  {...register('hasWarehouse')}
-                />
-                <span>
-                  <span className="font-medium">Includes warehouse handling</span>
-                  <span className="block text-caption text-fg-muted">
-                    Receipt, storage or dispatch at JAFZA WH-1 will be linked to this job.
-                  </span>
-                </span>
-              </label>
-            ) : null}
           </CardBody>
         </Card>
 
@@ -407,7 +410,7 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
           </CardBody>
         </Card>
 
-        {isWarehouse ? (
+        {includesWarehouse ? (
           <Card>
             <CardHeader
               title="Product list (PL)"

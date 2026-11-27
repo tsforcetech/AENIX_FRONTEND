@@ -47,7 +47,7 @@ const columns: Column<WorkOrderRow>[] = [
       <div className="min-w-48">
         <p className="font-medium">{r.customerName}</p>
         <p className="mt-0.5 whitespace-nowrap text-caption text-fg-muted">
-          {r.serviceCategory === 'Transport' ? `${r.origin} → ${r.destination}` : r.origin}
+          {r.serviceCategories.includes('Transport') ? `${r.origin} → ${r.destination}` : r.origin}
         </p>
       </div>
     ),
@@ -61,6 +61,17 @@ const columns: Column<WorkOrderRow>[] = [
           <JobKindIcon category={r.serviceCategory} mode={r.mode} className="size-4 shrink-0 text-fg-muted" />
           {jobKindLabel(r.serviceCategory, r.mode)}
         </span>
+        {r.serviceCategories.length > 1 ? (
+          <span className="flex flex-wrap gap-1">
+            {r.serviceCategories
+              .filter((c) => c !== r.serviceCategory)
+              .map((c) => (
+                <Badge key={c} tone="neutral" dot={false}>
+                  + {serviceCategoryLabel[c]}
+                </Badge>
+              ))}
+          </span>
+        ) : null}
         <DocFlagChips flags={r.docFlags} />
       </div>
     ),
@@ -131,11 +142,11 @@ export function WorkOrdersListPage() {
   return (
     <div>
       <PageHeader
-        title="Work orders"
-        description="Every job — transport, warehouse or direct service — from sales order to completion. A work order is the job."
+        title="Jobs (work orders)"
+        description="Every job from a confirmed sales order to completion. A job can mix transport, warehouse and direct services; vendors work under purchase orders."
         actions={
           <ButtonLink to="/work-orders/new" icon={<Plus aria-hidden="true" />}>
-            New work order
+            New job
           </ButtonLink>
         }
       />
@@ -179,7 +190,7 @@ export function WorkOrdersListPage() {
           }
         />
         <DataTable
-          caption="Work orders"
+          caption="Jobs"
           columns={columns}
           rows={data?.items}
           rowKey={(r) => r.id}
