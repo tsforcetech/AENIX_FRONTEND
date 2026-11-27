@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import { Check, ChevronsUpDown } from 'lucide-react';
-import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { inputClasses } from './Field';
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { FieldShell, inputClasses } from './Field';
 
 export interface ComboOption {
   value: string;
@@ -181,5 +181,26 @@ export function Combobox({
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** Labelled combobox with error/hint (form field). */
+export function ComboboxField({
+  label,
+  error,
+  hint,
+  required,
+  className,
+  ...props
+}: Omit<Parameters<typeof Combobox>[0], 'id' | 'ariaLabel' | 'invalid' | 'describedBy'> & {
+  label: string;
+  error?: string;
+  hint?: ReactNode;
+  required?: boolean;
+}) {
+  return (
+    <FieldShell label={label} error={error} hint={hint} required={required} className={className}>
+      {({ id, describedBy }) => <Combobox id={id} invalid={!!error} describedBy={describedBy} {...props} />}
+    </FieldShell>
   );
 }

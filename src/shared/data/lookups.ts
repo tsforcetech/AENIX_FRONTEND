@@ -83,3 +83,43 @@ export function suggestServiceRate(
     unitPrice: cost !== undefined ? Math.round(cost * 1.2 * 100) / 100 : undefined,
   };
 }
+
+/** Rich options for type-ahead pickers (search by name, code, city; hint shows terms). */
+export function useCustomerComboOptions() {
+  return useQuery({
+    queryKey: ['lookups', 'customers', 'combo'],
+    staleTime: STALE,
+    queryFn: () =>
+      latency(
+        protoDb
+          .get()
+          .customers.filter((c) => c.status !== 'Inactive')
+          .map((c) => ({
+            value: c.id,
+            label: c.name,
+            hint: `${c.code} · ${c.city} · ${c.paymentTermsDays} days${c.status === 'On hold' ? ' · ON HOLD' : ''}`,
+            keywords: `${c.code} ${c.industry} ${c.contactName}`,
+          })),
+        60,
+      ),
+  });
+}
+
+export function useServiceComboOptions() {
+  return useQuery({
+    queryKey: ['lookups', 'services', 'combo'],
+    staleTime: STALE,
+    queryFn: () =>
+      latency(
+        protoDb.get().services.map((s) => ({
+          value: s.id,
+          label: s.name,
+          hint: `${s.code} · ${s.mode === 'Customs' ? 'Direct service' : s.mode} · per ${s.unit.toLowerCase()}`,
+          keywords: `${s.code} ${s.mode} ${s.description}`,
+          mode: s.mode,
+          unit: s.unit,
+        })),
+        60,
+      ),
+  });
+}
