@@ -10,7 +10,7 @@ import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { formatDate } from '@/shared/utils/format';
-import { locationText } from '@/features/sales-orders/commercial-ui';
+import { locationTextMulti } from '@/features/sales-orders/commercial-ui';
 import { useContract } from './api';
 import { remainingLabel } from './ContractsListPage';
 
@@ -163,7 +163,7 @@ export function ContractDetailPage() {
                       >
                         <DocRef>{w.number}</DocRef>
                         <span className="flex-1 truncate text-body-s">
-                          {locationText(w.serviceCategory, w.origin, w.destination)}
+                          {locationTextMulti(w.serviceCategories, w.origin, w.destination)}
                         </span>
                         <Money amount={w.revenue} className="text-body-s" />
                         <StatusBadge status={w.status} />

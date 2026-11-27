@@ -10,7 +10,7 @@ import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { formatDate } from '@/shared/utils/format';
-import { ServiceTypeCell, ServiceTypeFilter } from '@/features/sales-orders/commercial-ui';
+import { ServicesCell, ServiceTypeFilter } from '@/features/sales-orders/commercial-ui';
 import { useQuotations, type QuotationRow } from './api';
 
 const route = getRouteApi('/_app/quotations');
@@ -45,13 +45,13 @@ const columns: Column<QuotationRow>[] = [
     header: 'Service',
     cell: (r) => (
       <div>
-        <ServiceTypeCell
-          category={r.serviceCategory}
+        <ServicesCell
+          categories={r.serviceCategories}
           mode={r.mode}
           origin={r.origin}
           destination={r.destination}
         />
-        <p className="ml-6 text-caption text-fg-muted">{r.agreement}</p>
+        <p className="mt-0.5 text-caption text-fg-muted">{r.agreement} agreement</p>
       </div>
     ),
   },

@@ -1,13 +1,18 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { FileText, ShoppingCart, XCircle } from 'lucide-react';
-import { jobKindLabel } from '@/domain/workflow';
-import { locationLabel } from '@/features/sales-orders/commercial-ui';
+import { servicesLabel } from '@/domain/workflow';
+import {
+  locationLabel,
+  ServiceIcons,
+  ServiceTypePills,
+  siteFromNotes,
+  withoutSiteLines,
+} from '@/features/sales-orders/commercial-ui';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { DocRef } from '@/shared/ui/Money';
-import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
@@ -64,7 +69,7 @@ export function EnquiryDetailPage() {
                 variant="secondary"
                 icon={<ShoppingCart aria-hidden="true" />}
               >
-                Create sales order (direct)
+                Direct sales order
               </ButtonLink>
               <ButtonLink
                 to="/quotations/new"
@@ -80,13 +85,13 @@ export function EnquiryDetailPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card>
-            <CardHeader title={`${jobKindLabel(e.serviceCategory, e.mode)} request`} />
+            <CardHeader title="Request" description={servicesLabel(e.serviceCategories, e.mode)} />
             <CardBody>
               <div className="mb-6 flex items-center gap-4 rounded-xl bg-canvas p-4">
-                <span className="grid size-11 place-items-center rounded-xl bg-surface text-fg-secondary shadow-card">
-                  <JobKindIcon category={e.serviceCategory} mode={e.mode} className="size-5" />
+                <span className="grid h-11 min-w-11 place-items-center rounded-xl bg-surface px-2 text-fg-secondary shadow-card">
+                  <ServiceIcons categories={e.serviceCategories} mode={e.mode} className="size-5" />
                 </span>
-                {e.serviceCategory === 'Transport' ? (
+                {e.serviceCategories.includes('Transport') ? (
                   <div className="flex flex-1 flex-wrap items-center gap-x-6 gap-y-1">
                     <div>
                       <p className="text-caption text-fg-muted">From</p>
@@ -103,7 +108,9 @@ export function EnquiryDetailPage() {
                   </div>
                 ) : (
                   <div className="flex-1">
-                    <p className="text-caption text-fg-muted">{locationLabel(e.serviceCategory)}</p>
+                    <p className="text-caption text-fg-muted">
+                      {locationLabel(e.serviceCategories.includes('Warehouse') ? 'Warehouse' : 'Service')}
+                    </p>
                     <p className="font-semibold">{e.origin}</p>
                   </div>
                 )}
@@ -111,14 +118,26 @@ export function EnquiryDetailPage() {
               <DescriptionList
                 columns={3}
                 items={[
-                  { label: 'Service type', value: jobKindLabel(e.serviceCategory, e.mode) },
+                  {
+                    label: 'Services included',
+                    value: <ServiceTypePills categories={e.serviceCategories} mode={e.mode} />,
+                  },
+                  ...(e.serviceCategories.includes('Transport') && siteFromNotes(e.notes, 'Warehouse')
+                    ? [{ label: 'Warehouse / site', value: siteFromNotes(e.notes, 'Warehouse') }]
+                    : []),
+                  ...(siteFromNotes(e.notes, 'Service')
+                    ? [{ label: 'Service location', value: siteFromNotes(e.notes, 'Service') }]
+                    : []),
                   { label: 'Required by', value: formatDate(e.requiredBy) },
                   {
-                    label: e.serviceCategory === 'Warehouse' ? 'Handling unit' : 'Equipment',
+                    label: e.serviceCategories.includes('Transport') ? 'Equipment' : 'Handling unit',
                     value: e.cargo.equipment,
                   },
                   {
-                    label: e.serviceCategory === 'Service' ? 'Service' : 'Goods',
+                    label:
+                      e.serviceCategories.length === 1 && e.serviceCategory === 'Service'
+                        ? 'Service'
+                        : 'Goods',
                     value: e.cargo.description,
                   },
                   { label: 'Packages', value: formatNumber(e.cargo.packages) },
@@ -143,10 +162,12 @@ export function EnquiryDetailPage() {
               ))}
             </CardBody>
           </Card>
-          {e.notes ? (
+          {withoutSiteLines(e.notes) ? (
             <Card>
               <CardHeader title="Notes" />
-              <CardBody className="whitespace-pre-wrap text-body-s text-fg-secondary">{e.notes}</CardBody>
+              <CardBody className="whitespace-pre-wrap text-body-s text-fg-secondary">
+                {withoutSiteLines(e.notes)}
+              </CardBody>
             </Card>
           ) : null}
         </div>

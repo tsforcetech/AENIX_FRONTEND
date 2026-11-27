@@ -9,7 +9,7 @@ import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
 import { DocRef } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { formatDate, formatNumber } from '@/shared/utils/format';
-import { ServiceTypeCell, ServiceTypeFilter } from '@/features/sales-orders/commercial-ui';
+import { ServicesCell, ServiceTypeFilter } from '@/features/sales-orders/commercial-ui';
 import { useEnquiries, type EnquiryRow } from './api';
 
 const route = getRouteApi('/_app/enquiries');
@@ -40,8 +40,8 @@ const columns: Column<EnquiryRow>[] = [
     key: 'route',
     header: 'Service',
     cell: (r) => (
-      <ServiceTypeCell
-        category={r.serviceCategory}
+      <ServicesCell
+        categories={r.serviceCategories}
         mode={r.mode}
         origin={r.origin}
         destination={r.destination}
