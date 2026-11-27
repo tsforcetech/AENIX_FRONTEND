@@ -16,7 +16,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { useState } from 'react';
-import { jobKindLabel } from '@/domain/workflow';
+import { servicesLabel } from '@/domain/workflow';
 import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { useSession } from '@/shared/auth/session';
 import { ButtonLink } from '@/shared/ui/Button';
@@ -186,7 +186,7 @@ function Pipeline({ stages }: { stages: HomeOverview['pipeline'] }) {
         description="Where every customer request is right now — enquiry through to collected cash."
       />
       <CardBody>
-        <ol className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-7">
+        <ol className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
           {stages.map((s, i) => (
             <li key={s.key}>
               <Link
@@ -430,7 +430,7 @@ function ActiveShipments({
                       {s.destination ? `${s.origin} → ${s.destination}` : s.origin}
                     </span>
                     <span className="block truncate text-caption text-fg-muted">
-                      {jobKindLabel(s.serviceCategory, s.mode)} · {s.customer}
+                      {servicesLabel(s.serviceCategories, s.mode)} · {s.customer}
                     </span>
                   </span>
                   <span className="w-full sm:w-56">

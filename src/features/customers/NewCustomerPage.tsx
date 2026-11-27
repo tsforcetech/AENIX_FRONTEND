@@ -56,8 +56,11 @@ export function NewCustomerPage() {
   });
 
   const onSubmit = handleSubmit(async (v) => {
-    const c = await create.mutateAsync(v);
-    toast({ title: `${c.name} added`, body: `${c.code} is ready for enquiries and quotations.` });
+    const { customer: c, ledgerCode } = await create.mutateAsync(v);
+    toast({
+      title: `${c.name} added`,
+      body: `${c.code} created with its receivable ledger ${ledgerCode}. Ready for enquiries and quotations.`,
+    });
     void navigate({ to: '/customers/$id', params: { id: c.id } });
   });
 
@@ -66,7 +69,7 @@ export function NewCustomerPage() {
       <PageHeader
         title="New customer"
         crumbs={[{ label: 'Customers', to: '/customers' }, { label: 'New' }]}
-        description="Credit limit and terms apply to quotations and invoices."
+        description="Credit limit and terms apply to quotations and invoices. A receivable ledger account (1200-…) is created automatically."
       />
       <form onSubmit={onSubmit} noValidate className="space-y-6">
         <Card>

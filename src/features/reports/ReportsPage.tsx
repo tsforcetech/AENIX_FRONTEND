@@ -8,8 +8,9 @@ import { Tabs } from '@/shared/ui/Tabs';
 import { formatMoney, formatMoneyCompact } from '@/shared/utils/format';
 import { useReports, type ReportsData } from './api';
 import { AgeingBar, ChartTable, HorizontalBars, MarginLine, MonthlyBars } from './charts';
+import { CustomerBalancesReport } from './CustomerBalancesReport';
 
-type Tab = 'revenue' | 'customers' | 'lanes' | 'ageing';
+type Tab = 'revenue' | 'customers' | 'lanes' | 'ageing' | 'balances';
 
 export function ReportsPage() {
   const { data, isLoading, error } = useReports();
@@ -30,6 +31,7 @@ export function ReportsPage() {
             { value: 'customers', label: 'Top customers' },
             { value: 'lanes', label: 'Jobs by type & lanes' },
             { value: 'ageing', label: 'Receivables ageing' },
+            { value: 'balances', label: 'Customer balances' },
           ]}
         />
       </div>
@@ -57,6 +59,7 @@ const laneColumns: Column<ReportsData['lanes'][number]>[] = [
 ];
 
 function TabContent({ tab, data }: { tab: Tab; data: ReportsData }) {
+  if (tab === 'balances') return <CustomerBalancesReport rows={data.customerBalances} />;
   if (tab === 'revenue') {
     return (
       <div className="grid gap-6 xl:grid-cols-3">

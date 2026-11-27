@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import { AlertTriangle, CheckCircle2, FileText, MessageSquareWarning, Receipt } from 'lucide-react';
+import { CheckCircle2, FileText, MessageSquareWarning, Receipt, Scale, Wallet } from 'lucide-react';
 import { useState } from 'react';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
@@ -9,7 +9,7 @@ import { Dialog } from '@/shared/ui/Dialog';
 import { TextareaField } from '@/shared/ui/Field';
 import { KpiCard } from '@/shared/ui/KpiCard';
 import { JobKindIcon } from '@/shared/ui/ModeIcon';
-import { jobKindLabel } from '@/domain/workflow';
+import { servicesLabel } from '@/domain/workflow';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
@@ -24,6 +24,7 @@ import {
   useQuotationDecision,
   type CustomerApproval,
 } from './api';
+import { PackingListsCard } from './PackingListUpload';
 import { PortalDenied } from './PortalDenied';
 
 interface PortalInvoice {
@@ -70,22 +71,39 @@ export function CustomerPortalHome() {
         title={`Welcome, ${data.customerName}`}
         description="Your shipments, approvals and account at a glance."
       />
-      <section aria-label="Account summary" className="grid gap-4 sm:grid-cols-3">
+      <section aria-label="Account summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
-          label="Outstanding balance"
-          value={formatMoneyCompact(data.outstanding)}
+          label="Invoices outstanding"
+          value={formatMoneyCompact(data.balance.outstanding)}
           icon={<Receipt />}
-        />
-        <KpiCard
-          label="Overdue"
-          value={formatMoneyCompact(data.overdue)}
-          icon={<AlertTriangle />}
           footnote={
             data.overdue ? (
-              <span className="font-medium text-danger">Please arrange payment</span>
+              <span className="font-medium text-danger">
+                {formatMoneyCompact(data.overdue)} overdue — please arrange payment
+              </span>
             ) : (
               <span className="text-success">Nothing overdue</span>
             )
+          }
+        />
+        <KpiCard
+          label="Advances held"
+          value={formatMoneyCompact(data.balance.advances + data.balance.unallocated)}
+          icon={<Wallet />}
+          footnote={<span className="text-fg-muted">Paid in advance, applied to future invoices</span>}
+        />
+        <KpiCard
+          label="Net balance"
+          value={formatMoneyCompact(data.balance.balance)}
+          icon={<Scale />}
+          footnote={
+            <span className="text-fg-muted">
+              {data.balance.balance > 0
+                ? 'Amount due to AENIX'
+                : data.balance.balance < 0
+                  ? 'In your favour'
+                  : 'Settled'}
+            </span>
           }
         />
         <KpiCard
@@ -103,6 +121,7 @@ export function CustomerPortalHome() {
           }
         />
       </section>
+      <PackingListsCard partyId={partyId} jobs={data.warehouseJobs} />
       <div className="grid gap-6 xl:grid-cols-5">
         <Card className="xl:col-span-3">
           <CardHeader
@@ -126,7 +145,7 @@ export function CustomerPortalHome() {
                       </span>
                       <span className="mt-0.5 block truncate text-body-s font-medium">{s.lane}</span>
                       <span className="block text-caption text-fg-muted">
-                        {jobKindLabel(s.serviceCategory, s.mode)}
+                        {servicesLabel(s.serviceCategories, s.mode)}
                       </span>
                     </span>
                     <span className="w-full sm:w-56">
@@ -271,7 +290,7 @@ export function CustomerApprovalsPage() {
                   <StatusBadge status="Sent" />
                 </span>
               }
-              description={`${q.lane} · ${jobKindLabel(q.serviceCategory, q.mode)} · ${q.agreement} · valid until ${formatDate(q.validUntil)}`}
+              description={`${q.lane} · ${servicesLabel(q.serviceCategories, q.mode)} · ${q.agreement} · valid until ${formatDate(q.validUntil)}`}
               actions={
                 <>
                   <Button

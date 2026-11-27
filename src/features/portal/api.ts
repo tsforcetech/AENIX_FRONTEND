@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { billTotals, invoiceTotals, linesRevenue } from '@/domain/calc';
 import { useSession, type ActorType } from '@/shared/auth/session';
 import { lookupName } from '@/shared/data/lookups';
-import { latency, logActivity, protoDb } from '@/prototype/store';
+import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
 import { PROTO_TODAY } from '@/prototype/seed';
 import { buildStatement, openInvoiceStats } from '@/features/customers/statement';
 import { reconcile } from '@/domain/reconcile';
-import type { WorkOrder } from '@/domain/types';
+import { customerBalance } from '@/domain/balances';
+import type { AppNotification, Attachment, DocLine, WorkOrder } from '@/domain/types';
 
 const where = (w: Pick<WorkOrder, 'origin' | 'destination'>) =>
   w.destination ? `${w.origin} → ${w.destination}` : w.origin;
@@ -30,6 +31,32 @@ function customerOverview(partyId: string) {
   const stats = openInvoiceStats(invoices);
   return {
     customerName: lookupName.customer(partyId),
+    balance: customerBalance(partyId, {
+      salesOrders: db.salesOrders,
+      invoices: db.invoices,
+      collections: db.collections,
+    }),
+    /** The customer's jobs that include warehouse handling — the customer can upload the PL for these. */
+    warehouseJobs: db.workOrders
+      .filter(
+        (w) =>
+          w.customerId === partyId &&
+          w.serviceCategories.includes('Warehouse') &&
+          w.status !== 'Cancelled' &&
+          w.status !== 'Completed',
+      )
+      .map((w) => ({
+        id: w.id,
+        number: w.number,
+        location: where(w),
+        status: w.status,
+        plNumber: w.packingList?.number,
+        plStatus: w.packingList?.status,
+        plLines: w.packingList?.lines.length ?? 0,
+        grnNumber: w.grn?.number,
+        grnStatus: w.grn?.status,
+        canUploadPl: !w.packingList || w.packingList.status === 'Draft',
+      })),
     outstanding: stats.outstanding,
     overdue: stats.overdue,
     pendingApprovals: db.quotations.filter((q) => q.customerId === partyId && q.status === 'Sent').length,
@@ -54,6 +81,7 @@ function customerOverview(partyId: string) {
         id: w.id,
         number: w.number,
         serviceCategory: w.serviceCategory,
+        serviceCategories: w.serviceCategories,
         mode: w.mode,
         lane: where(w),
         status: w.status,
@@ -104,6 +132,7 @@ function customerApprovals(partyId: string) {
       version: q.version,
       lane: where(q),
       serviceCategory: q.serviceCategory,
+      serviceCategories: q.serviceCategories,
       mode: q.mode,
       agreement: q.agreement,
       validUntil: q.validUntil,
@@ -138,11 +167,93 @@ function customerInvoices(partyId: string) {
     statement: buildStatement(
       invoices,
       db.collections.filter((c) => c.customerId === partyId),
+      db.salesOrders.filter((o) => o.customerId === partyId),
     ),
   };
 }
 
 export type CustomerApproval = ReturnType<typeof customerApprovals>[number];
+export type CustomerOverview = ReturnType<typeof customerOverview>;
+
+function staffNotice(title: string, body: string, href: string): AppNotification {
+  return { id: newId('n'), at: nowIso(), title, body, read: false, href };
+}
+
+function attachmentFrom(file: { name: string; size: number }, by: string): Attachment {
+  return {
+    fileName: file.name,
+    sizeKb: Math.max(1, Math.round(file.size / 1024)),
+    uploadedAt: nowIso(),
+    uploadedBy: by,
+  };
+}
+
+/**
+ * Customer uploads the packing list (PL) for one of their warehouse jobs. Scope: the job must belong to the
+ * session party, include warehouse handling, and have no PL yet (or a draft). The file itself goes to the
+ * backend document store; the prototype keeps its name only.
+ */
+export function useUploadPackingList(partyId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      workOrderId,
+      file,
+      lines,
+    }: {
+      workOrderId: string;
+      file: { name: string; size: number };
+      lines: DocLine[];
+    }) => {
+      const wo = protoDb.get().workOrders.find((w) => w.id === workOrderId);
+      if (!partyId || !wo || wo.customerId !== partyId) throw new Error('Not found');
+      if (!wo.serviceCategories.includes('Warehouse')) throw new Error('This job has no warehouse handling.');
+      if (wo.packingList && wo.packingList.status !== 'Draft')
+        throw new Error('A packing list has already been sent for this job.');
+      if (lines.length === 0) throw new Error('Add at least one line.');
+      const number = wo.packingList?.number ?? `PL-${wo.number.replace(/^JOB-/, '')}`;
+      const customer = lookupName.customer(partyId);
+      const att = attachmentFrom(file, `${customer} (portal)`);
+      protoDb.update((s) => ({
+        ...s,
+        workOrders: s.workOrders.map((w) =>
+          w.id === workOrderId
+            ? {
+                ...w,
+                packingList: {
+                  number,
+                  status: 'Sent to warehouse' as const,
+                  sentAt: nowIso(),
+                  lines: lines.map((l) => ({ ...l, sku: l.sku.trim().toUpperCase() })),
+                },
+              }
+            : w,
+        ),
+        notifications: [
+          staffNotice(
+            `Packing list ${number} uploaded by customer`,
+            `${customer} · ${wo.number} · ${att.fileName} (${lines.length} lines) — warehouse to expect goods`,
+            `/work-orders/${wo.id}`,
+          ),
+          ...s.notifications,
+        ],
+      }));
+      logActivity({
+        entity: 'Work order',
+        entityId: wo.id,
+        entityRef: wo.number,
+        action: `customer uploaded packing list ${number} (${att.fileName}) in the portal`,
+      });
+      return latency({ number }, 350);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal'] });
+      void qc.invalidateQueries({ queryKey: ['work-orders'] });
+      void qc.invalidateQueries({ queryKey: ['warehouse'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
+    },
+  });
+}
 
 export function useCustomerPortalOverview(partyId: string | null) {
   return useQuery({
@@ -232,6 +343,7 @@ function vendorAssignments(partyId: string) {
         jobRef: wo.number,
         lane: where(wo),
         serviceCategory: wo.serviceCategory,
+        serviceCategories: wo.serviceCategories,
         mode: wo.mode,
         /** Customer requests on this job still waiting for a POD (read-only for the vendor). */
         podPending: wo.customerRequests.filter((r) => !r.pod && r.status !== 'Closed').length,
@@ -270,6 +382,178 @@ function vendorOverview(partyId: string) {
       ) / 100,
     recentAssignments: assignments.filter((a) => a.status !== 'Completed').slice(0, 5),
   };
+}
+
+function vendorPurchaseOrders(partyId: string) {
+  const db = protoDb.get();
+  return db.purchaseOrders
+    .filter((p) => p.vendorId === partyId)
+    .sort((a, b) => b.issuedAt.localeCompare(a.issuedAt))
+    .map((p) => {
+      const wo = db.workOrders.find((w) => w.id === p.workOrderId);
+      return {
+        id: p.id,
+        number: p.number,
+        jobRef: wo?.number ?? '—',
+        location: wo ? where(wo) : '—',
+        description: p.description,
+        issuedAt: p.issuedAt,
+        amount: p.amount,
+        total: Math.round(p.amount * (1 + p.vatRate) * 100) / 100,
+        status: p.status,
+        billNumber: db.vendorBills.find((b) => b.id === p.vendorBillId)?.number,
+      };
+    });
+}
+
+/** Customer out / delivery requests on jobs where this vendor is assigned (the vendor delivers and returns the POD). */
+function vendorRequests(partyId: string) {
+  const db = protoDb.get();
+  return db.workOrders
+    .filter((w) => w.vendorAssignments.some((a) => a.vendorId === partyId))
+    .flatMap((w) =>
+      w.customerRequests.map((r) => ({
+        id: r.id,
+        workOrderId: w.id,
+        number: r.number,
+        jobRef: w.number,
+        deliverTo: r.deliverTo,
+        requiredBy: r.requiredBy,
+        status: r.status,
+        lines: r.lines,
+        podNumber: r.pod?.number,
+        podBy: r.pod && r.pod.vendorId !== partyId ? 'another party' : undefined,
+        canUploadPod: !r.pod && (r.status === 'Open' || r.status === 'Sent to vendor'),
+      })),
+    )
+    .sort((a, b) => a.requiredBy.localeCompare(b.requiredBy));
+}
+
+export type VendorPoRow = ReturnType<typeof vendorPurchaseOrders>[number];
+export type VendorRequestRow = ReturnType<typeof vendorRequests>[number];
+
+export function useVendorPurchaseOrders(partyId: string | null) {
+  return useQuery({
+    queryKey: ['portal', 'vendor', partyId, 'purchase-orders'],
+    enabled: !!partyId,
+    queryFn: () => latency(vendorPurchaseOrders(partyId!)),
+  });
+}
+
+export function useVendorRequests(partyId: string | null) {
+  return useQuery({
+    queryKey: ['portal', 'vendor', partyId, 'requests'],
+    enabled: !!partyId,
+    queryFn: () => latency(vendorRequests(partyId!)),
+  });
+}
+
+/** Vendor accepts an issued purchase order addressed to them. */
+export function useAcceptPurchaseOrder(partyId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const po = protoDb.get().purchaseOrders.find((p) => p.id === id);
+      if (!partyId || !po || po.vendorId !== partyId) throw new Error('Not found');
+      if (po.status !== 'Issued') throw new Error('Only issued purchase orders can be accepted.');
+      protoDb.update((s) => ({
+        ...s,
+        purchaseOrders: s.purchaseOrders.map((p) =>
+          p.id === id ? { ...p, status: 'Accepted' as const } : p,
+        ),
+      }));
+      logActivity({
+        entity: 'Purchase order',
+        entityId: po.id,
+        entityRef: po.number,
+        action: 'vendor accepted the purchase order in the portal',
+      });
+      return latency(undefined, 250);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal'] });
+      void qc.invalidateQueries({ queryKey: ['purchase-orders'] });
+    },
+  });
+}
+
+/**
+ * Vendor uploads the POD for a customer request on a job they are assigned to. Scope: vendor must have an
+ * assignment on the job and the request must still be waiting for a POD. Staff then compare request vs POD.
+ */
+export function useUploadPod(partyId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      workOrderId: string;
+      requestId: string;
+      file: { name: string; size: number };
+      podNumber: string;
+      receivedBy: string;
+      lines: { sku: string; deliveredQty: number; remarks?: string }[];
+    }) => {
+      const wo = protoDb.get().workOrders.find((w) => w.id === input.workOrderId);
+      const req = wo?.customerRequests.find((r) => r.id === input.requestId);
+      if (!partyId || !wo || !req || !wo.vendorAssignments.some((a) => a.vendorId === partyId))
+        throw new Error('Not found');
+      if (req.pod) throw new Error('A POD has already been uploaded for this request.');
+      const vendor = lookupName.vendor(partyId);
+      const att = attachmentFrom(input.file, `${vendor} (portal)`);
+      const recon = reconcile(
+        req.lines,
+        input.lines.map((l) => ({ sku: l.sku, qty: l.deliveredQty, remarks: l.remarks })),
+      );
+      protoDb.update((s) => ({
+        ...s,
+        workOrders: s.workOrders.map((w) =>
+          w.id === wo.id
+            ? {
+                ...w,
+                customerRequests: w.customerRequests.map((r) =>
+                  r.id === req.id
+                    ? {
+                        ...r,
+                        status: 'Delivered' as const,
+                        pod: {
+                          number: input.podNumber,
+                          vendorId: partyId,
+                          deliveredAt: nowIso(),
+                          receivedBy: input.receivedBy,
+                          attachment: att,
+                          lines: input.lines,
+                        },
+                      }
+                    : r,
+                ),
+              }
+            : w,
+        ),
+        notifications: [
+          staffNotice(
+            recon.ok
+              ? `POD ${input.podNumber} uploaded — matches request`
+              : `POD ${input.podNumber} differs from request`,
+            `${vendor} · ${req.number} on ${wo.number}${recon.ok ? '' : ` · ${recon.mismatches} line(s) to check`}`,
+            `/work-orders/${wo.id}`,
+          ),
+          ...s.notifications,
+        ],
+      }));
+      logActivity({
+        entity: 'Work order',
+        entityId: wo.id,
+        entityRef: wo.number,
+        action: `vendor uploaded POD ${input.podNumber} for ${req.number} in the portal`,
+      });
+      return latency({ ok: recon.ok, mismatches: recon.mismatches }, 350);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal'] });
+      void qc.invalidateQueries({ queryKey: ['work-orders'] });
+      void qc.invalidateQueries({ queryKey: ['warehouse'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
+    },
+  });
 }
 
 export type VendorAssignmentRow = ReturnType<typeof vendorAssignments>[number];

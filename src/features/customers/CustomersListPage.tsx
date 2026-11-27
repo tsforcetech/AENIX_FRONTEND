@@ -54,6 +54,20 @@ const columns: Column<CustomerRow>[] = [
     cell: (r) => <Money amount={r.outstanding} muted={r.outstanding === 0} />,
   },
   {
+    key: 'net',
+    header: 'Net balance',
+    align: 'right',
+    cell: (r) => (
+      <span title={r.netBalance < 0 ? 'Advance / credit held for the customer' : undefined}>
+        <Money
+          amount={r.netBalance}
+          muted={r.netBalance === 0}
+          className={r.netBalance > 0 ? 'font-semibold text-fg' : r.netBalance < 0 ? 'text-success' : ''}
+        />
+      </span>
+    ),
+  },
+  {
     key: 'used',
     header: 'Credit used',
     hideOnMobile: true,

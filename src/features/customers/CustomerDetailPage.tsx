@@ -1,27 +1,27 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { AlertTriangle, CircleDollarSign, Plus, Receipt, Truck, Wallet } from 'lucide-react';
+import { FileText, Plus, Wallet } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
-import { KpiCard } from '@/shared/ui/KpiCard';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { Tabs } from '@/shared/ui/Tabs';
 import { formatDate, formatMoneyCompact } from '@/shared/utils/format';
+import { BalanceTiles, SalesOrderBalanceTable } from './AccountBalance';
 import { useCustomer, type CustomerDetail } from './api';
 import { StatementTable } from './StatementTable';
 
 const route = getRouteApi('/_app/customers/$id');
 
-type Tab = 'profile' | 'activity' | 'statement';
+type Tab = 'balance' | 'profile' | 'activity' | 'statement';
 
 export function CustomerDetailPage() {
   const { id } = route.useParams();
   const { data, isLoading, error } = useCustomer(id);
-  const [tab, setTab] = useState<Tab>('profile');
+  const [tab, setTab] = useState<Tab>('balance');
 
   if (error)
     return (
@@ -32,7 +32,7 @@ export function CustomerDetailPage() {
       />
     );
   if (isLoading || !data) return <StatusMessage kind="loading" title="Loading customer…" />;
-  const { customer: c, kpis } = data;
+  const { customer: c, kpis, balance } = data;
 
   return (
     <div>
@@ -40,54 +40,39 @@ export function CustomerDetailPage() {
         crumbs={[{ label: 'Customers', to: '/customers' }, { label: c.code }]}
         title={c.name}
         meta={<StatusBadge status={c.status} />}
-        description={`${c.code} · ${c.industry} · ${c.city}, ${c.country}`}
+        description={`${c.code} · ledger ${c.ledgerCode} · ${c.industry} · ${c.city}, ${c.country}`}
         actions={
           <>
             <ButtonLink to="/enquiries/new" variant="secondary" icon={<Plus aria-hidden="true" />}>
               New enquiry
             </ButtonLink>
             <ButtonLink
+              to="/invoices/new"
+              search={{ customerId: c.id }}
+              variant="secondary"
+              icon={<FileText aria-hidden="true" />}
+            >
+              Create invoice
+            </ButtonLink>
+            <ButtonLink
               to="/collections/new"
               search={{ customerId: c.id }}
               icon={<Wallet aria-hidden="true" />}
             >
-              Record collection
+              New receipt
             </ButtonLink>
           </>
         }
       />
 
-      <section aria-label="Account summary" className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          label="Outstanding"
-          value={formatMoneyCompact(kpis.outstanding)}
-          icon={<Receipt />}
-          footnote={
-            <span className="text-fg-muted">
-              {c.creditUsedPct}% of {formatMoneyCompact(c.creditLimit)} limit
-            </span>
-          }
-        />
-        <KpiCard
-          label="Overdue"
-          value={formatMoneyCompact(kpis.overdue)}
-          icon={<AlertTriangle />}
-          footnote={
-            kpis.overdue ? (
-              <span className="font-medium text-danger">Follow up required</span>
-            ) : (
-              <span className="text-success">Nothing overdue</span>
-            )
-          }
-        />
-        <KpiCard label="Jobs this year" value={String(kpis.jobsThisYear)} icon={<Truck />} />
-        <KpiCard
-          label="Invoiced revenue"
-          value={formatMoneyCompact(kpis.revenue)}
-          icon={<CircleDollarSign />}
-          footnote={<span className="text-fg-muted">Excl. VAT · 2026</span>}
-        />
-      </section>
+      <BalanceTiles balance={balance} />
+      <p className="-mt-3 mb-6 text-caption text-fg-muted">
+        {kpis.jobsThisYear} jobs this year · invoiced revenue {formatMoneyCompact(kpis.revenue)} excl. VAT ·
+        credit used {c.creditUsedPct}% of {formatMoneyCompact(c.creditLimit)}
+        {kpis.overdue ? (
+          <span className="font-medium text-danger"> · {formatMoneyCompact(kpis.overdue)} overdue</span>
+        ) : null}
+      </p>
 
       <Card>
         <div className="px-5 pt-3">
@@ -96,6 +81,7 @@ export function CustomerDetailPage() {
             value={tab}
             onChange={(v) => setTab(v as Tab)}
             items={[
+              { value: 'balance', label: 'Balance by sales order', count: balance.salesOrders.length },
               { value: 'profile', label: 'Profile' },
               {
                 value: 'activity',
@@ -110,12 +96,17 @@ export function CustomerDetailPage() {
             ]}
           />
         </div>
+        {tab === 'balance' ? <SalesOrderBalanceTable balance={balance} /> : null}
         {tab === 'profile' ? (
           <CardBody>
             <DescriptionList
               columns={3}
               items={[
                 { label: 'Customer code', value: c.code },
+                {
+                  label: 'Receivable ledger',
+                  value: <span className="font-mono">{c.ledgerCode}</span>,
+                },
                 { label: 'Industry', value: c.industry },
                 { label: 'Location', value: `${c.city}, ${c.country}` },
                 { label: 'TRN', value: <span className="font-mono">{c.trnMasked}</span> },
