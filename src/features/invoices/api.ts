@@ -1,3 +1,4 @@
+import { nextDocNumber, seqOf } from '@/domain/numbering';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { daysBetween, invoiceTotals } from '@/domain/calc';
 import { customerBalance } from '@/domain/balances';
@@ -170,10 +171,12 @@ export const invoicesApi = {
     if (sos.some((x) => !x || x.customerId !== input.customerId))
       return Promise.reject(new Error('All sales orders must belong to the selected customer'));
     const jobs = db.workOrders.filter((w) => w.salesOrderId && soIds.includes(w.salesOrderId));
-    const next = Math.max(3000, ...db.invoices.map((i) => Number(i.number.split('-')[1]) || 0)) + 1;
     const inv: Invoice = {
       id: newId('inv'),
-      number: `INV-${next}`,
+      number: nextDocNumber(
+        db.invoices.map((i) => i.number),
+        db.company.invoicePrefix,
+      ),
       customerId: input.customerId,
       workOrderId: jobs.length === 1 ? jobs[0]!.id : undefined,
       salesOrderIds: soIds,
@@ -258,7 +261,7 @@ export const invoicesApi = {
     const { outstanding } = invoiceTotals(inv);
     const net = Math.round((outstanding / 1.05) * 100) / 100;
     const vat = Math.round((outstanding - net) * 100) / 100;
-    const cnNo = `CN-${inv.number.split('-')[1]}`;
+    const cnNo = `CN${String(seqOf(inv.number)).padStart(3, '0')}`;
     postJournal({
       date: PROTO_TODAY,
       source: 'Manual',

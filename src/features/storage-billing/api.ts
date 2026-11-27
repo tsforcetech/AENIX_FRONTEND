@@ -1,3 +1,4 @@
+import { nextDocNumber } from '@/domain/numbering';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Invoice, StorageBillingRun } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
@@ -103,12 +104,14 @@ export const storageBillingApi = {
     if (!run) return Promise.reject(new Error('Run not found'));
     if (run.status === 'Invoiced' || run.invoiceId)
       return Promise.reject(new Error('This run is already invoiced'));
-    const next = Math.max(...db.invoices.map((i) => Number(i.number.split('-')[1]))) + 1;
     const terms = db.customers.find((c) => c.id === run.customerId)?.paymentTermsDays ?? 30;
     const due = new Date(Date.parse(`${TODAY}T00:00:00Z`) + terms * 86_400_000).toISOString().slice(0, 10);
     const invoice: Invoice = {
       id: newId('inv'),
-      number: `INV-${next}`,
+      number: nextDocNumber(
+        db.invoices.map((i) => i.number),
+        db.company.invoicePrefix,
+      ),
       customerId: run.customerId,
       storageRunId: run.id,
       issueDate: TODAY,

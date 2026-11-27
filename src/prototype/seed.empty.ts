@@ -29,3 +29,17 @@ export const notifications: typeof Seed.notifications = [];
 export const monthlyRevenue: typeof Seed.monthlyRevenue = [];
 export const staffUsers: typeof Seed.staffUsers = [];
 export const prototypeLoginHint: typeof Seed.prototypeLoginHint = '';
+export const company: typeof Seed.company = {
+  legalName: '',
+  tagline: '',
+  website: '',
+  trn: '',
+  officeAddress: [],
+  registeredAddress: [],
+  phone: '',
+  email: '',
+  licenseNo: '',
+  bank: { bankName: '', accountName: '', accountNumber: '', iban: '', swift: '' },
+  invoicePrefix: 'AEN',
+  grnPrefix: 'GRN',
+};

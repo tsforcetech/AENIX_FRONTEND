@@ -33,6 +33,8 @@ export interface Customer {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
+  /** Postal address line printed on invoices, e.g. "P.O. Box 31076, Sharjah, United Arab Emirates". */
+  postalAddress?: string;
   creditLimit: number;
   paymentTermsDays: number;
   status: 'Active' | 'On hold' | 'Inactive';
@@ -257,6 +259,13 @@ export interface DocLine {
   description: string;
   quantity: number;
   uom: string;
+  /** Optional detail carried on warehouse documents (vendor GRN / customer GRN / ASN). */
+  barcode?: string;
+  batch?: string;
+  productionDate?: IsoDate;
+  expiryDate?: IsoDate;
+  /** Volume of the line in cubic metres (item cube × quantity). */
+  cbm?: number;
 }
 
 /** Uploaded document metadata (the file itself is stored by the backend; prototype keeps the name only). */
@@ -285,6 +294,15 @@ export interface Inbound {
   /** Customer reference: ASN, container, AWB or truck number. */
   reference: string;
   expectedAt: IsoDate;
+  /** Shipment header as on the vendor's Received Goods Report. */
+  asnNo?: string;
+  boeNo?: string;
+  containerNo?: string;
+  sealNo?: string;
+  blNo?: string;
+  supplierName?: string;
+  /** Warehouse location, e.g. "Dubai Industrial City". */
+  location?: string;
   packingList: PackingList;
   grn?: Grn;
 }
@@ -294,8 +312,23 @@ export interface Grn {
   number: string;
   receivedAt: IsoDateTime;
   attachment?: Attachment;
-  lines: { sku: string; receivedQty: number; damagedQty: number; remarks?: string }[];
+  lines: {
+    sku: string;
+    receivedQty: number;
+    damagedQty: number;
+    remarks?: string;
+    batch?: string;
+    productionDate?: IsoDate;
+    expiryDate?: IsoDate;
+    cbm?: number;
+  }[];
   status: 'Uploaded' | 'Verified' | 'Variance raised';
+  /** Vendor warehouse receiving times (as on the vendor's Received Goods Report). */
+  receivingStart?: IsoDateTime;
+  receivingEnd?: IsoDateTime;
+  /** Customer-facing GRN issued by Aenix from this receipt (e.g. AEN061 layout). */
+  customerGrnNumber?: string;
+  customerGrnIssuedAt?: IsoDateTime;
 }
 
 /** Proof of delivery returned by the vendor / warehouse for a customer request. */
@@ -349,13 +382,20 @@ export interface StockMovement {
   reference: string;
 }
 
+/** How storage is charged: area per period (dry storage by sq.ft), pallet-days or CBM-days. */
+export type StorageBasis = 'Sq.ft per period' | 'Pallet-day' | 'CBM-day';
+
 export interface StorageBillingRun {
   id: Id;
   number: string;
   customerId: Id;
   periodFrom: IsoDate;
   periodTo: IsoDate;
+  /** Charging basis; defaults to Pallet-day for older runs. */
+  basis?: StorageBasis;
+  /** Quantity in basis units (sq.ft, pallet-days or CBM-days). Name kept for compatibility. */
   palletDays: number;
+  /** Rate per basis unit. Name kept for compatibility. */
   ratePerPalletDay: number;
   status: 'Draft' | 'Invoiced';
   invoiceId?: Id;
@@ -366,6 +406,8 @@ export type InvoiceStatus = 'Draft' | 'Posted' | 'Partially paid' | 'Paid' | 'Ov
 
 export interface InvoiceLine {
   id: Id;
+  /** Unit of measure shown on the tax invoice (e.g. Sq.ft, Hour, Truck). */
+  uom?: string;
   /** Sales order this line bills (one invoice can cover several sales orders of the same customer). */
   salesOrderId?: Id;
   description: string;
@@ -517,4 +559,22 @@ export interface AppNotification {
   body: string;
   read: boolean;
   href?: string;
+}
+
+// ---------- Company profile (document header / footer) ----------
+export interface CompanyProfile {
+  legalName: string;
+  tagline: string;
+  website: string;
+  trn: string;
+  /** Office address printed on tax invoices. */
+  officeAddress: string[];
+  /** Registered address (used on warehouse documents such as GRNs). */
+  registeredAddress: string[];
+  phone: string;
+  email: string;
+  licenseNo: string;
+  bank: { bankName: string; accountName: string; accountNumber: string; iban: string; swift: string };
+  invoicePrefix: string;
+  grnPrefix: string;
 }

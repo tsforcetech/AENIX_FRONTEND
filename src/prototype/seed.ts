@@ -28,6 +28,7 @@ import type {
   VendorPayment,
   Milestone,
   SalesOrder,
+  CompanyProfile,
   ServiceCategory,
 } from '@/domain/types';
 import { categoriesFromLines, milestoneLabels, primaryCategory } from '@/domain/workflow';
@@ -76,6 +77,7 @@ function c(
     city,
     country,
     trnMasked: `1000•••••••${String(100 + n * 7).slice(-3)}`,
+    postalAddress: `P.O. Box ${30000 + n * 1117}, ${city}, ${country}`,
     contactName,
     contactEmail: `${contactName.split(' ').slice(-1)[0]!.toLowerCase()}@${slug}.example`,
     contactPhone: `+971 5• ••• ${String(1000 + n * 37).slice(-4)}`,
@@ -134,6 +136,8 @@ export const services: Service[] = [
   s(8, 'Handling in / out', 'Warehouse', 'Pallet', 'Receiving, put-away and dispatch handling'),
   s(9, 'Last-mile delivery', 'Road', 'Drop', 'Urban delivery within emirate'),
   s(10, 'Cargo insurance', 'Customs', 'Shipment', 'All-risk cover on declared value'),
+  s(11, 'Dry storage', 'Warehouse', 'Sq.ft', 'Dry storage charged by floor area per period'),
+  s(12, '3 Ton forklift / handling', 'Warehouse', 'Hour', 'Forklift and labour charged by the hour'),
 ];
 
 function s(n: number, name: string, mode: Service['mode'], unit: string, description: string): Service {
@@ -153,6 +157,8 @@ export const vendorRates: VendorRate[] = [
   r(10, 'ven-7', 'svc-7', 'JAFZA', 'JAFZA', 'Pallet-day', 2.2),
   r(11, 'ven-7', 'svc-8', 'JAFZA', 'JAFZA', 'Pallet', 12),
   r(12, 'ven-2', 'svc-9', 'Dubai', 'Dubai', 'Drop', 85),
+  r(13, 'ven-7', 'svc-11', 'JAFZA', 'JAFZA', 'Sq.ft', 4.2),
+  r(14, 'ven-7', 'svc-12', 'JAFZA', 'JAFZA', 'Hour', 75),
 ];
 
 function r(
@@ -613,7 +619,7 @@ for (const f of flows) {
     wo.invoiceId = invId;
     const inv: Invoice = {
       id: invId,
-      number: `INV-${invSeq}`,
+      number: `AEN0${String(invSeq).slice(-2)}`,
       customerId: wo.customerId,
       workOrderId: woId,
       salesOrderIds: [soId],
@@ -1205,6 +1211,17 @@ export const storageRuns: StorageBillingRun[] = [
     status: 'Draft',
   },
   {
+    id: 'sbr-5',
+    number: 'SBR-2026-11-06',
+    customerId: 'cus-6',
+    periodFrom: '2026-11-01',
+    periodTo: '2026-11-30',
+    basis: 'Sq.ft per period',
+    palletDays: 2600,
+    ratePerPalletDay: 5.5,
+    status: 'Draft',
+  },
+  {
     id: 'sbr-4',
     number: 'SBR-2026-11-07',
     customerId: 'cus-7',
@@ -1219,7 +1236,7 @@ export const storageRuns: StorageBillingRun[] = [
 invoices.push(
   {
     id: 'inv-3021',
-    number: 'INV-3021',
+    number: 'AEN021',
     customerId: 'cus-3',
     storageRunId: 'sbr-1',
     issueDate: '2026-11-01',
@@ -1238,7 +1255,7 @@ invoices.push(
   },
   {
     id: 'inv-3020',
-    number: 'INV-3020',
+    number: 'AEN020',
     customerId: 'cus-6',
     storageRunId: 'sbr-2',
     issueDate: '2026-11-01',
@@ -1447,7 +1464,7 @@ export const notifications: AppNotification[] = [
     id: 'n2',
     at: dt(22, 17),
     title: 'Invoice overdue',
-    body: 'INV-3024 · Skyline Electronics FZE is 8 days overdue',
+    body: 'AEN024 · Skyline Electronics FZE is 8 days overdue',
     read: false,
     href: '/invoices/inv-3024',
   },
@@ -1719,3 +1736,33 @@ export const ledgerAccounts: LedgerAccount[] = [
     active: true,
   })),
 ];
+
+/**
+ * Company profile used on tax invoices and GRNs (from the owner's documents, 2026-11-27).
+ * Bank details are PLACEHOLDERS in the prototype — real values are configured in Settings
+ * and are never committed to a public repository.
+ */
+export const company: CompanyProfile = {
+  legalName: 'Aenix LLC',
+  tagline: 'The Network Behind Your Logistics',
+  website: 'www.aenix.ae',
+  trn: '105399983300003',
+  officeAddress: [
+    'Office no. R01, GBH Business Center,',
+    'Al Rasheed Rd, Al Muteena,',
+    'Deira, Dubai, United Arab Emirates',
+  ],
+  registeredAddress: ['Sharjah Media City (Shams), Al Messaned, Al Bataeh,', 'Sharjah, United Arab Emirates'],
+  phone: '+971 4 397 5844',
+  email: 'info@aenix.ae',
+  licenseNo: '2644224.01',
+  bank: {
+    bankName: 'Bank name (set in Settings)',
+    accountName: 'AENIX LLC',
+    accountNumber: '•••• •••• ••••',
+    iban: 'AE•• •••• •••• •••• •••• •••',
+    swift: '••••••••',
+  },
+  invoicePrefix: 'AEN',
+  grnPrefix: 'GRN',
+};

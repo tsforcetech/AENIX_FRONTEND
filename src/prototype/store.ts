@@ -21,6 +21,7 @@ function initialState() {
     ledgerAccounts: structuredClone(seed.ledgerAccounts),
     /** Remembered Excel column mappings, keyed `${docType}:${partyId}` (prototype; backend later). */
     importTemplates: {} as Record<string, Record<string, string>>,
+    company: structuredClone(seed.company),
     contracts: structuredClone(seed.contracts),
     workOrders: structuredClone(seed.workOrders),
     stockItems: structuredClone(seed.stockItems),
@@ -43,7 +44,7 @@ export type ProtoDb = ReturnType<typeof initialState>;
  * is kept in this tab's sessionStorage so a reload does not lose the demo. Never used outside
  * prototype mode; real sessions follow ADR-004 and never touch web storage.
  */
-const STORAGE_KEY = 'aenix-prototype-db-v4'; // bump when the sample schema changes
+const STORAGE_KEY = 'aenix-prototype-db-v5'; // bump when the sample schema changes
 
 function load(): ProtoDb {
   if (!PROTOTYPE_MODE) return initialState();
