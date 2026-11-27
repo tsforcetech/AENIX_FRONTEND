@@ -69,6 +69,23 @@ flowchart LR
 
 A GRN is **verified** only when it matches. A request is **closed** only when its POD matches. Otherwise a **variance is raised** for follow-up (claim or credit note; approver to be defined).
 
+## 4a. Warehouse documents (from the owner's real documents, 2026-11-27)
+
+| Document                                                      | Source           | What the system keeps / produces                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Vendor GRN** — e.g. RHS Logistics "Received Goods Report"   | Warehouse vendor | Header: ASN #, BOE, container no./key, seal, BL, supplier, receiving times. Lines: SKU, description, **Qty Exp / Qty Rec / Dam Qty**, item cube & **CBM**, **production / expiry date, batch**. Imported from Excel with column mapping (RHS headers auto-map), compared with the PL |
+| **Customer GRN** — Aenix "Goods Receipt Note" (AEN061 layout) | Aenix → customer | Issued from an uploaded vendor GRN: To customer, inbound date, location; **Batch No, Barcode, Description, Qty Box, Volume (CBM)**, total boxes / total CBM; numbered GRN###                                                                                                         |
+| Inbounds and releases repeat                                  | —                | A warehouse job holds **many inbounds** (each PL → GRN) and **many releases** (each request → POD); running stock per SKU = received good − delivered; a release cannot exceed available stock                                                                                       |
+
+## 4b. Tax invoice format (owner's AEN078)
+
+- Numbering **AEN###** (prefix configurable in Settings → Company).
+- Company block: logo + tagline, legal name, office address, phone, email, **TRN**.
+- Customer block: name, **Attn, mobile, email, P.O. Box address, TRN**; invoice no., invoice date, due date.
+- Lines: **Description · Cur · UOM · Quantity · Unit price · Sub total · VAT · Total incl. VAT**; footer "Total Amount Payable AED".
+- **Bank details** block (from Settings; not stored in the code repository); "system-generated, no signature" footer.
+- Storage is charged by **sq.ft per period** (e.g. "Dry Storage (1-Oct-26 to 30-Oct-26)", 2,600 sq.ft × 5.50), **pallet-day** or **CBM-day**; handling (e.g. 3-ton forklift) **per hour**.
+
 ## 5. Accounts
 
 | Document                          | Posting (illustrative, pending accountant sign-off)                                                             |

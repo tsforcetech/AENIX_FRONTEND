@@ -31,3 +31,44 @@ describe('spreadsheet import helpers', () => {
     });
   });
 });
+
+describe('owner document formats', () => {
+  it('maps the RHS Logistics "Received Goods Report" columns', () => {
+    const rhs = [
+      'SKU',
+      'Description',
+      'Qty Exp',
+      'Qty Rec',
+      'Dam Qty',
+      'Item Cube',
+      'Item Cube *Qtyrecevd',
+      'Prod. Date',
+      'Expiry Date',
+      'Batch',
+      'Status',
+    ];
+    const pl = guessMapping(rhs, PL_FIELDS);
+    expect(pl).toMatchObject({
+      sku: 0,
+      description: 1,
+      quantity: 2,
+      cbm: 6,
+      productionDate: 7,
+      expiryDate: 8,
+      batch: 9,
+    });
+    const grn = guessMapping(rhs, GRN_FIELDS);
+    expect(grn).toMatchObject({ sku: 0, receivedQty: 3, damagedQty: 4, cbm: 6, expiryDate: 8, batch: 9 });
+  });
+
+  it('maps the Aenix customer GRN columns', () => {
+    const aen = ['Batch No', 'Barcode', 'Description', 'Qty Box', 'Volume (CBM)'];
+    expect(guessMapping(aen, PL_FIELDS)).toMatchObject({
+      sku: 1,
+      description: 2,
+      quantity: 3,
+      batch: 0,
+      cbm: 4,
+    });
+  });
+});

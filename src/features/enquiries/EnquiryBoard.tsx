@@ -327,11 +327,16 @@ function EnquiryCard({
           params={{ id: row.id }}
           onKeyDown={onKeyDown}
           aria-describedby={`card-meta-${row.id}`}
-          aria-label={`${row.number}, ${row.customerName}, ${row.status}${picked ? ', picked up' : ''}`}
           className="min-w-0 rounded-sm after:absolute after:inset-0 after:content-['']"
         >
+          {/* Accessible name = the visible text (WCAG 2.5.3) plus screen-reader-only status. */}
           <DocRef>{row.number}</DocRef>
+          <span className="sr-only">, </span>
           <span className="mt-0.5 block truncate text-body-s font-semibold text-fg">{row.customerName}</span>
+          <span className="sr-only">
+            , {row.status}
+            {picked ? ', picked up' : ''}
+          </span>
         </Link>
         <span className="relative z-10 flex shrink-0 items-center gap-1">
           {!final ? (

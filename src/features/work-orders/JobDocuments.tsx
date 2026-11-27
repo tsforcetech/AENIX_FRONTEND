@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronRight,
   FileSpreadsheet,
+  FileText,
   PackageCheck,
   Plus,
   Send,
@@ -14,7 +15,9 @@ import {
 import { useId, useState } from 'react';
 import { jobStock } from '@/domain/stock';
 import type { CustomerRequest, DocLine, Inbound } from '@/domain/types';
+import { useProtoDb } from '@/prototype/store';
 import { AttachmentChip } from '@/shared/ui/Attachment';
+import { Logo } from '@/shared/ui/Logo';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
@@ -44,6 +47,7 @@ import {
   warehouseVendorOf,
   type DocAction,
   type InboundStage,
+  type InboundHeader,
   type WorkOrderDetail,
 } from './api';
 
@@ -258,6 +262,7 @@ function InboundItem({
   const [expanded, setExpanded] = useState(defaultOpen);
   const [editPl, setEditPl] = useState(false);
   const [grnOpen, setGrnOpen] = useState(false);
+  const [docOpen, setDocOpen] = useState(false);
   const pl = ib.packingList;
   const grn = ib.grn;
   const stage = inboundStage(ib);
@@ -413,11 +418,32 @@ function InboundItem({
                   )}
                 </div>
               ) : null}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-canvas px-3 py-2">
+                <span className="text-caption text-fg-muted">
+                  {grn.customerGrnNumber
+                    ? `Customer GRN ${grn.customerGrnNumber} issued ${formatDateTime(grn.customerGrnIssuedAt ?? '')}`
+                    : 'Send the customer Aenix’s own GRN for this receipt.'}
+                </span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<FileText aria-hidden="true" />}
+                  busy={pending}
+                  onClick={() => {
+                    if (grn.customerGrnNumber) return setDocOpen(true);
+                    run({ kind: 'issueCustomerGrn', id: wo.id, inboundId: ib.id }, 'Customer GRN issued');
+                    setDocOpen(true);
+                  }}
+                >
+                  {grn.customerGrnNumber ? 'View customer GRN' : 'Issue customer GRN'}
+                </Button>
+              </div>
             </section>
           ) : null}
         </div>
       ) : null}
 
+      {docOpen && grn ? <CustomerGrnDialog wo={wo} ib={ib} onClose={() => setDocOpen(false)} /> : null}
       {editPl ? <PlEditorDialog wo={wo} ib={ib} onClose={() => setEditPl(false)} /> : null}
       {grnOpen ? <GrnUploadDialog wo={wo} ib={ib} onClose={() => setGrnOpen(false)} /> : null}
     </li>
@@ -458,7 +484,14 @@ function LinesTable({ lines, caption }: { lines: DocLine[]; caption: string }) {
   );
 }
 
-type DraftLine = { sku: string; description: string; quantity: string; uom: string };
+type DraftLine = {
+  sku: string;
+  description: string;
+  quantity: string;
+  uom: string;
+  /** Optional detail carried from the customer's or vendor's Excel. */
+  extra?: Pick<DocLine, 'barcode' | 'batch' | 'productionDate' | 'expiryDate' | 'cbm'>;
+};
 
 const blankLine = (): DraftLine => ({ sku: '', description: '', quantity: '1', uom: 'Ctn' });
 
@@ -475,6 +508,7 @@ function cleanPlLines(lines: DraftLine[]): DocLine[] | string {
     description: l.description.trim() || l.sku.trim().toUpperCase(),
     quantity: Math.round(Number(l.quantity)),
     uom: l.uom.trim() || 'Pcs',
+    ...l.extra,
   }));
 }
 
@@ -488,11 +522,21 @@ function plRowsToDraft(rows: ImportedRow[]): DraftLine[] {
     if (!sku) continue;
     const prev = map.get(sku);
     const qty = Number(r.quantity) || 0;
+    const cbm = (prev?.extra?.cbm ?? 0) + (Number(r.cbm) || 0);
     map.set(sku, {
       sku,
       description: prev?.description || String(r.description ?? ''),
       quantity: String((Number(prev?.quantity) || 0) + qty),
       uom: prev?.uom || String(r.uom ?? 'Pcs'),
+      // Repeated SKUs are merged (quantities and CBM added); first batch/dates are kept.
+      extra: {
+        barcode: prev?.extra?.barcode ?? (r.barcode ? String(r.barcode) : undefined),
+        batch: prev?.extra?.batch ?? (r.batch ? String(r.batch) : undefined),
+        productionDate:
+          prev?.extra?.productionDate ?? (r.productionDate ? String(r.productionDate) : undefined),
+        expiryDate: prev?.extra?.expiryDate ?? (r.expiryDate ? String(r.expiryDate) : undefined),
+        cbm: cbm ? Math.round(cbm * 10000) / 10000 : undefined,
+      },
     });
   }
   return [...map.values()];
@@ -587,6 +631,7 @@ function NewInboundDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
   const toast = useToast();
   const [reference, setReference] = useState('');
   const [expectedAt, setExpectedAt] = useState('2026-11-30');
+  const [header, setHeader] = useState<InboundHeader>({});
   const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
   const [file, setFile] = useState<{ name: string; sizeKb: number }>();
   const [send, setSend] = useState(true);
@@ -606,6 +651,7 @@ function NewInboundDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
         expectedAt,
         lines: clean,
         send,
+        header,
         source: file ? 'Excel import' : 'Staff',
         attachment: file
           ? {
@@ -667,6 +713,32 @@ function NewInboundDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
               onChange={(e) => setExpectedAt(e.target.value)}
             />
           </div>
+          <details className="rounded-lg border border-border-subtle px-3 py-2">
+            <summary className="cursor-pointer text-body-s font-medium">
+              Shipment details{' '}
+              <span className="font-normal text-fg-muted">— ASN, BOE, container, seal, BL (optional)</span>
+            </summary>
+            <div className="mt-3 grid gap-3 pb-1 sm:grid-cols-3">
+              {(
+                [
+                  ['asnNo', 'ASN #'],
+                  ['boeNo', 'BOE (bill of entry)'],
+                  ['containerNo', 'Container no.'],
+                  ['sealNo', 'Seal no.'],
+                  ['blNo', 'BL / AWB no.'],
+                  ['supplierName', 'Supplier'],
+                  ['location', 'Warehouse location'],
+                ] as const
+              ).map(([k, label]) => (
+                <TextField
+                  key={k}
+                  label={label}
+                  value={header[k] ?? ''}
+                  onChange={(e) => setHeader((h) => ({ ...h, [k]: e.target.value || undefined }))}
+                />
+              ))}
+            </div>
+          </details>
           {file ? (
             <p className="flex items-center gap-2 text-caption text-fg-muted">
               <FileSpreadsheet aria-hidden="true" className="size-4 text-success" /> Imported from {file.name}{' '}
@@ -818,7 +890,14 @@ const asAttachment = (f: { name: string; sizeKb: number }) => ({
   uploadedBy: 'Staff',
 });
 
-type GrnRow = { sku: string; expected: number; received: string; damaged: string; remarks: string };
+type GrnRow = {
+  sku: string;
+  expected: number;
+  received: string;
+  damaged: string;
+  remarks: string;
+  extra?: { batch?: string; productionDate?: string; expiryDate?: string; cbm?: number };
+};
 
 function GrnUploadDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound; onClose: () => void }) {
   const { run, pending } = useRun();
@@ -843,7 +922,10 @@ function GrnUploadDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
 
   const applyImport = (data: ImportedRow[], f: { name: string; sizeKb: number }) => {
-    const bySku = new Map<string, { received: number; damaged: number; remarks: string }>();
+    const bySku = new Map<
+      string,
+      { received: number; damaged: number; remarks: string; extra: NonNullable<GrnRow['extra']> }
+    >();
     for (const r of data) {
       const sku = String(r.sku ?? '')
         .trim()
@@ -854,6 +936,13 @@ function GrnUploadDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound
         received: (prev?.received ?? 0) + (Number(r.receivedQty) || 0),
         damaged: (prev?.damaged ?? 0) + (Number(r.damagedQty) || 0),
         remarks: [prev?.remarks, r.remarks ? String(r.remarks) : ''].filter(Boolean).join('; '),
+        extra: {
+          batch: prev?.extra.batch ?? (r.batch ? String(r.batch) : undefined),
+          productionDate:
+            prev?.extra.productionDate ?? (r.productionDate ? String(r.productionDate) : undefined),
+          expiryDate: prev?.extra.expiryDate ?? (r.expiryDate ? String(r.expiryDate) : undefined),
+          cbm: (prev?.extra.cbm ?? 0) + (Number(r.cbm) || 0) || undefined,
+        },
       });
     }
     const next: GrnRow[] = pl.lines.map((l) => {
@@ -865,6 +954,7 @@ function GrnUploadDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound
         received: String(g?.received ?? 0), // missing in the GRN file = not received
         damaged: String(g?.damaged ?? 0),
         remarks: g?.remarks ?? '',
+        extra: g?.extra,
       };
     });
     for (const [sku, g] of bySku)
@@ -907,6 +997,7 @@ function GrnUploadDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound
             receivedQty: Math.round(Number(r.received) || 0),
             damagedQty: Math.round(Number(r.damaged) || 0),
             remarks: r.remarks.trim() || undefined,
+            ...r.extra,
           })),
         },
       },
@@ -1814,5 +1905,108 @@ export function PurchasingCard({ wo }: { wo: WorkOrderDetail }) {
         )}
       </CardBody>
     </Card>
+  );
+}
+
+/** Aenix's own Goods Receipt Note to the customer — owner's AEN061 layout. */
+function CustomerGrnDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound; onClose: () => void }) {
+  const company = useProtoDb((db) => db.company);
+  const grn = ib.grn!;
+  const lines = grn.lines
+    .map((g) => {
+      const pl = ib.packingList.lines.find((l) => l.sku === g.sku);
+      return {
+        batch: g.batch ?? pl?.batch ?? ib.reference,
+        barcode: pl?.barcode ?? g.sku,
+        description: pl?.description ?? g.sku,
+        qty: g.receivedQty - g.damagedQty,
+        cbm: g.cbm ?? pl?.cbm,
+      };
+    })
+    .filter((l) => l.qty > 0);
+  const totalQty = lines.reduce((s, l) => s + l.qty, 0);
+  const totalCbm = Math.round(lines.reduce((s, l) => s + (l.cbm ?? 0), 0) * 10000) / 10000;
+  const cell = 'border border-[#1a1a1a] px-2 py-1';
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      size="lg"
+      title={`Customer GRN ${grn.customerGrnNumber ?? ''}`}
+      description="Preview of the document sent to the customer. The PDF and stamp come from the AENIX backend."
+    >
+      <article aria-label="Goods receipt note" className="bg-white px-6 py-5 text-[12px] text-[#1a1a1a]">
+        <p className="text-caption">{company.website}</p>
+        <div aria-hidden="true" className="mt-2 h-2 bg-[#9a2119]" />
+        <header className="flex flex-wrap items-start justify-between gap-4 pt-5">
+          <div>
+            <Logo height={40} />
+            <p className="mt-1 text-[10px] font-semibold">{company.tagline}</p>
+          </div>
+          <div className="max-w-xs text-[11px] leading-[1.35]">
+            <p className="text-[13px] font-semibold text-[#9a2119]">{company.legalName}</p>
+            {company.registeredAddress.map((l) => (
+              <p key={l}>{l}</p>
+            ))}
+            <p>{company.phone}</p>
+          </div>
+        </header>
+        <div className="mt-8 flex flex-wrap justify-between gap-4">
+          <div>
+            <p className="font-semibold">To</p>
+            <p className="font-semibold">{wo.customerName}</p>
+          </div>
+          <dl className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 text-right">
+            <dt className="font-semibold">GRN No:</dt>
+            <dd>{grn.customerGrnNumber}</dd>
+            <dt className="font-semibold">Inbound Date:</dt>
+            <dd>{formatDate(grn.receivedAt)}</dd>
+            <dt className="font-semibold">Location:</dt>
+            <dd>{ib.location ?? wo.origin}</dd>
+            {ib.containerNo ? (
+              <>
+                <dt className="font-semibold">Container:</dt>
+                <dd>{ib.containerNo}</dd>
+              </>
+            ) : null}
+          </dl>
+        </div>
+        <h3 className="my-4 text-center font-semibold text-[#9a2119] underline">Goods Receipt Note</h3>
+        <div className="overflow-x-auto" role="region" aria-label="GRN lines" tabIndex={0}>
+          <table className="w-full min-w-[560px] border-collapse">
+            <thead>
+              <tr>
+                {['Batch No', 'Barcode', 'Description', 'Qty Box', 'Volume (CBM)'].map((h) => (
+                  <th key={h} scope="col" className={`${cell} text-center font-semibold`}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.barcode}>
+                  <td className={cell}>{l.batch}</td>
+                  <td className={cell}>{l.barcode}</td>
+                  <td className={cell}>{l.description}</td>
+                  <td className={`${cell} text-center tabular-nums`}>{l.qty}</td>
+                  <td className={`${cell} text-center tabular-nums`}>{l.cbm ?? '—'}</td>
+                </tr>
+              ))}
+              <tr>
+                <td className={`${cell} text-center font-semibold`} colSpan={3}>
+                  Total CBM
+                </td>
+                <td className={`${cell} text-center font-semibold tabular-nums`}>{totalQty}</td>
+                <td className={`${cell} text-center font-semibold tabular-nums`}>{totalCbm || '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-10 text-center text-[11px]">
+          This is a system-generated document and does not require a signature.
+        </p>
+      </article>
+    </Dialog>
   );
 }

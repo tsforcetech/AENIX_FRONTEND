@@ -20,6 +20,7 @@ import type {
   WorkOrder,
   WorkOrderStatus,
 } from '@/domain/types';
+import { nextDocNumber } from '@/domain/numbering';
 import { reconcile } from '@/domain/reconcile';
 import { jobStock } from '@/domain/stock';
 import { milestoneLabels, primaryCategory, SERVICE_CATEGORIES } from '@/domain/workflow';
@@ -649,6 +650,8 @@ export const workOrdersApi = {
       attachment?: Attachment;
       source: NonNullable<PackingList['source']>;
       send: boolean;
+      /** Shipment header (ASN, BOE, container, seal, BL, supplier, location). */
+      header?: InboundHeader;
     },
   ): Promise<Inbound> {
     const wo = findOrThrow(id);
@@ -660,6 +663,7 @@ export const workOrdersApi = {
       number: `IN-${n}-${String(seq).padStart(2, '0')}`,
       reference: input.reference,
       expectedAt: input.expectedAt,
+      ...input.header,
       packingList: {
         number: `PL-${n}-${String(seq).padStart(2, '0')}`,
         status: input.send ? 'Sent to warehouse' : 'Draft',
@@ -707,6 +711,28 @@ export const workOrdersApi = {
       entityId: id,
       entityRef: wo.number,
       action: `sent ${ib.packingList.number} (${ib.number}) to the warehouse team`,
+    });
+    return latency(updated, 200);
+  },
+
+  /** Issue Aenix's own GRN to the customer (AEN061 layout) from an uploaded vendor GRN. */
+  issueCustomerGrn(id: string, inboundId: string): Promise<WorkOrder> {
+    const wo = findOrThrow(id);
+    const ib = findInbound(id, inboundId);
+    if (!ib.grn) return Promise.reject(new Error('Upload the vendor GRN first'));
+    if (ib.grn.customerGrnNumber) return latency(wo, 100);
+    const db = protoDb.get();
+    const existing = db.workOrders.flatMap((w) => w.inbounds.map((x) => x.grn?.customerGrnNumber ?? ''));
+    const number = nextDocNumber(existing, db.company.grnPrefix, 3, 60);
+    const updated = patchInbound(id, inboundId, (x) => ({
+      ...x,
+      grn: { ...x.grn!, customerGrnNumber: number, customerGrnIssuedAt: nowIso() },
+    }));
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `issued customer GRN ${number} for ${ib.number}`,
     });
     return latency(updated, 200);
   },
@@ -1042,12 +1068,17 @@ export function useCompleteWorkOrder() {
   return useMutation({ mutationFn: (id: string) => workOrdersApi.complete(id), onSuccess: invalidate });
 }
 
+export type InboundHeader = Partial<
+  Pick<Inbound, 'asnNo' | 'boeNo' | 'containerNo' | 'sealNo' | 'blNo' | 'supplierName' | 'location'>
+>;
+
 export type DocAction =
   | { kind: 'savePl'; id: string; inboundId: string; lines: DocLine[] }
   | { kind: 'sendPl'; id: string; inboundId: string }
   | { kind: 'uploadGrn'; id: string; inboundId: string; grn: Omit<Grn, 'status'> }
   | { kind: 'verifyGrn'; id: string; inboundId: string }
   | { kind: 'grnVariance'; id: string; inboundId: string }
+  | { kind: 'issueCustomerGrn'; id: string; inboundId: string }
   | { kind: 'sendRequest'; id: string; requestId: string; vendorId: string }
   | { kind: 'uploadPod'; id: string; requestId: string; pod: Pod }
   | { kind: 'closeRequest'; id: string; requestId: string }
@@ -1068,6 +1099,8 @@ export function useDocAction() {
           return workOrdersApi.verifyGrn(a.id, a.inboundId);
         case 'grnVariance':
           return workOrdersApi.raiseGrnVariance(a.id, a.inboundId);
+        case 'issueCustomerGrn':
+          return workOrdersApi.issueCustomerGrn(a.id, a.inboundId);
         case 'sendRequest':
           return workOrdersApi.sendRequest(a.id, a.requestId, a.vendorId);
         case 'uploadPod':

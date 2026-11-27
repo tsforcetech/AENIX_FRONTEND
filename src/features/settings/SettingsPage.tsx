@@ -6,10 +6,12 @@ import { Badge, StatusBadge } from '@/shared/ui/Badge';
 import { Button } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
-import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { Tabs } from '@/shared/ui/Tabs';
 import { staffUsers } from '@/prototype/seed';
+import { protoDb, useProtoDb } from '@/prototype/store';
+import { TextareaField, TextField } from '@/shared/ui/Field';
+import { useToast } from '@/shared/ui/Toast';
 
 type Tab = 'users' | 'roles' | 'company' | 'notifications';
 
@@ -154,30 +156,7 @@ export function SettingsPage() {
         </Card>
       ) : null}
       {tab === 'roles' ? <RolesMatrix /> : null}
-      {tab === 'company' ? (
-        <Card>
-          <CardHeader
-            title="Company profile"
-            description="Placeholder values — confirmed during onboarding"
-          />
-          <CardBody>
-            <DescriptionList
-              columns={3}
-              items={[
-                { label: 'Legal name', value: 'AENIX (legal entity name pending)' },
-                { label: 'VAT TRN', value: <span className="font-mono">1000•••••••••42</span> },
-                { label: 'Base currency', value: 'AED — UAE dirham' },
-                { label: 'Time zone', value: 'Asia/Dubai (UTC+4)' },
-                { label: 'VAT rate', value: '5% standard' },
-                { label: 'Financial year', value: 'January – December' },
-                { label: 'Warehouse', value: 'JAFZA WH-1' },
-                { label: 'Language', value: 'English' },
-                { label: 'Address', value: 'To be confirmed' },
-              ]}
-            />
-          </CardBody>
-        </Card>
-      ) : null}
+      {tab === 'company' ? <CompanyProfileForm /> : null}
       {tab === 'notifications' ? <NotificationPrefs /> : null}
     </div>
   );
@@ -337,5 +316,96 @@ function NotificationPrefs() {
         </table>
       </div>
     </Card>
+  );
+}
+
+/** Company profile printed on tax invoices and GRNs. Bank details stay in Settings, never in code. */
+function CompanyProfileForm() {
+  const company = useProtoDb((db) => db.company);
+  const [draft, setDraft] = useState(company);
+  const toast = useToast();
+  const text = (label: string, value: string, set: (v: string) => void, hint?: string) => (
+    <TextField label={label} value={value} hint={hint} onChange={(e) => set(e.target.value)} />
+  );
+  const lines = (label: string, value: string[], set: (v: string[]) => void) => (
+    <TextareaField
+      label={label}
+      rows={3}
+      value={value.join('\n')}
+      onChange={(e) => set(e.target.value.split('\n'))}
+    />
+  );
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader
+          title="Company profile"
+          description="Printed on tax invoices (office address) and GRNs (registered address)."
+        />
+        <CardBody className="grid gap-5 sm:grid-cols-2">
+          {text('Legal name', draft.legalName, (v) => setDraft({ ...draft, legalName: v }))}
+          {text('VAT TRN', draft.trn, (v) => setDraft({ ...draft, trn: v }))}
+          {text('Tagline', draft.tagline, (v) => setDraft({ ...draft, tagline: v }))}
+          {text('Website', draft.website, (v) => setDraft({ ...draft, website: v }))}
+          {text('Phone', draft.phone, (v) => setDraft({ ...draft, phone: v }))}
+          {text('Email', draft.email, (v) => setDraft({ ...draft, email: v }))}
+          {lines('Office address (tax invoice)', draft.officeAddress, (v) =>
+            setDraft({ ...draft, officeAddress: v }),
+          )}
+          {lines('Registered address (GRN)', draft.registeredAddress, (v) =>
+            setDraft({ ...draft, registeredAddress: v }),
+          )}
+          {text('Trade licence no.', draft.licenseNo, (v) => setDraft({ ...draft, licenseNo: v }))}
+          <div className="grid grid-cols-2 gap-4">
+            {text(
+              'Invoice prefix',
+              draft.invoicePrefix,
+              (v) => setDraft({ ...draft, invoicePrefix: v.toUpperCase() }),
+              'e.g. AEN → AEN079',
+            )}
+            {text('GRN prefix', draft.grnPrefix, (v) => setDraft({ ...draft, grnPrefix: v.toUpperCase() }))}
+          </div>
+        </CardBody>
+      </Card>
+      <Card>
+        <CardHeader
+          title="Bank details on invoices"
+          description="Shown in the Bank Details block of every tax invoice."
+        />
+        <CardBody className="grid gap-5 sm:grid-cols-2">
+          {text('Bank name', draft.bank.bankName, (v) =>
+            setDraft({ ...draft, bank: { ...draft.bank, bankName: v } }),
+          )}
+          {text('Account name', draft.bank.accountName, (v) =>
+            setDraft({ ...draft, bank: { ...draft.bank, accountName: v } }),
+          )}
+          {text('Account number', draft.bank.accountNumber, (v) =>
+            setDraft({ ...draft, bank: { ...draft.bank, accountNumber: v } }),
+          )}
+          {text('IBAN', draft.bank.iban, (v) => setDraft({ ...draft, bank: { ...draft.bank, iban: v } }))}
+          {text('SWIFT', draft.bank.swift, (v) => setDraft({ ...draft, bank: { ...draft.bank, swift: v } }))}
+        </CardBody>
+      </Card>
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={() => setDraft(company)}>
+          Reset
+        </Button>
+        <Button
+          onClick={() => {
+            protoDb.update((db) => ({
+              ...db,
+              company: {
+                ...draft,
+                officeAddress: draft.officeAddress.filter(Boolean),
+                registeredAddress: draft.registeredAddress.filter(Boolean),
+              },
+            }));
+            toast({ title: 'Company profile saved', body: 'New invoices and GRNs use these details.' });
+          }}
+        >
+          Save company profile
+        </Button>
+      </div>
+    </div>
   );
 }

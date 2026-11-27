@@ -489,6 +489,23 @@ export function SpreadsheetImport({
   );
 }
 
+const DETAIL_FIELDS: ImportField[] = [
+  { key: 'barcode', label: 'Barcode', aliases: ['barcode', 'ean', 'upc', 'gtin'] },
+  { key: 'batch', label: 'Batch', aliases: ['batch', 'batch no', 'lot', 'lot no'] },
+  {
+    key: 'productionDate',
+    label: 'Production date',
+    aliases: ['prod date', 'prod. date', 'production date', 'mfg date', 'manufacturing date'],
+  },
+  { key: 'expiryDate', label: 'Expiry date', aliases: ['expiry date', 'expiry', 'exp date', 'best before'] },
+  {
+    key: 'cbm',
+    label: 'Volume (CBM)',
+    type: 'number',
+    aliases: ['volume (cbm)', 'cbm', 'volume', 'item cube qtyrecevd', 'item cube qtyreceived', 'total cbm'],
+  },
+];
+
 /** Standard field sets for warehouse documents. */
 export const PL_FIELDS: ImportField[] = [
   {
@@ -507,9 +524,20 @@ export const PL_FIELDS: ImportField[] = [
     label: 'Quantity',
     required: true,
     type: 'number',
-    aliases: ['qty', 'quantity', 'pcs', 'units', 'expected qty', 'ordered qty'],
+    aliases: [
+      'qty exp',
+      'qty expected',
+      'qty box',
+      'qty',
+      'quantity',
+      'pcs',
+      'units',
+      'expected qty',
+      'ordered qty',
+    ],
   },
   { key: 'uom', label: 'Unit', aliases: ['uom', 'unit', 'units of measure', 'pack'] },
+  ...DETAIL_FIELDS,
 ];
 
 export const GRN_FIELDS: ImportField[] = [
@@ -524,15 +552,25 @@ export const GRN_FIELDS: ImportField[] = [
     label: 'Received quantity',
     required: true,
     type: 'number',
-    aliases: ['received', 'received qty', 'qty received', 'grn qty', 'actual qty', 'qty'],
+    aliases: [
+      'qty rec',
+      'qty received',
+      'received',
+      'received qty',
+      'grn qty',
+      'actual qty',
+      'qty box',
+      'qty',
+    ],
   },
   {
     key: 'damagedQty',
     label: 'Damaged quantity',
     type: 'number',
-    aliases: ['damaged', 'damaged qty', 'damage', 'rejected', 'bad qty'],
+    aliases: ['dam qty', 'damaged', 'damaged qty', 'damage', 'rejected', 'bad qty'],
   },
   { key: 'remarks', label: 'Remarks', aliases: ['remarks', 'remark', 'comments', 'comment', 'notes'] },
+  ...DETAIL_FIELDS.filter((f) => f.key !== 'barcode'),
 ];
 
 export const POD_FIELDS: ImportField[] = [

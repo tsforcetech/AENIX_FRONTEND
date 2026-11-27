@@ -47,3 +47,28 @@ Append-only. Each entry: date, work package, branch/PR/SHAs, what changed, tests
 - **Process note:** three of the four helpers hit a usage limit in their final checks. The orchestrating session reviewed their diffs (scope and safety scan), ran lint, Prettier and typecheck, committed them, and fixed the integration issues found by the e2e crawl: keyboard-focusable scroll regions, and a link-in-text contrast issue.
 - **Tests (local):** format, lint, typecheck clean; unit 25/25; build ok; e2e **61 passed**, 2 skipped (desktop-only shortcuts on mobile), incl. a crawl of every screen with 0 WCAG 2.1 AA violations; production bundle has no sample data and denies by default.
 - **Next gate:** owner review; DOBIS change request; accountant sign-off on the chart of accounts and postings; Antigravity contracts for API-DEP-16…26.
+
+### 2026-11-27 — UX and document alignment (on PR #3)
+
+- **Owner requests:**
+  - an enquiry Kanban board;
+  - easy, keyboard-friendly quotation and sales-order entry;
+  - PL/GRN/POD arrive as Excel, so import them with column mapping;
+  - in/out are repeated (many inbounds and outbounds per warehouse job);
+  - align with the uploaded RHS GRN, Aenix customer GRN (AEN061) and tax invoice (AEN078) formats.
+- **Delivered:**
+  - **Enquiries:** Kanban (drag-and-drop plus keyboard, Won/Lost rules).
+  - **Entry screens:**
+    - a type-ahead customer/service combobox;
+    - a keyboard-first price grid (Enter, arrows, Ctrl+Del, Alt+N) with rate-card suggestions;
+    - Ctrl+S / Ctrl+Enter, a sticky totals bar, and `?` help.
+  - **Excel/CSV import** with remembered per-party mapping (RHS and Aenix headers auto-map); `read-excel-file` pinned at 9.3.14 and lazy-loaded.
+  - **Warehouse jobs:** many inbounds and outbounds per job, running stock per SKU, release guard, and the inbound shipment header (ASN/BOE/container/seal/BL).
+  - **Documents:** customer GRN document (AEN061 layout); tax invoice in the AEN078 layout with AEN numbering.
+  - **Storage billing** by sq.ft / pallet-day / CBM-day, with an hourly handling service.
+  - **Settings → Company:** company profile incl. bank details. Bank values are placeholders in source.
+- **Tests (local):** format/lint/typecheck clean; unit 33/33; build ok; e2e 61 passed, 2 skipped (crawl incl. Kanban, 0 WCAG 2.1 AA violations).
+- **Open:**
+  - owner to confirm bank details stay out of the public demo, and which address goes on invoices vs GRNs;
+  - FEFO/batch stock tracking;
+  - server-side PDF and stamp.
