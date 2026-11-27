@@ -6,7 +6,7 @@ import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { KpiCard } from '@/shared/ui/KpiCard';
 import { JobKindIcon } from '@/shared/ui/ModeIcon';
-import { jobKindLabel } from '@/domain/workflow';
+import { servicesLabel } from '@/domain/workflow';
 import { Badge } from '@/shared/ui/Badge';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -23,6 +23,7 @@ import {
   type VendorBillRow,
 } from './api';
 import { PortalDenied } from './PortalDenied';
+import { VendorDeliveryRequestsCard, VendorPurchaseOrdersCard } from './VendorPoPod';
 
 export function VendorPortalHome() {
   const partyId = usePortalParty('vendor');
@@ -71,7 +72,7 @@ export function VendorPortalHome() {
                     <DocRef>{a.jobRef}</DocRef>
                     <span className="block truncate text-body-s font-medium">{a.lane}</span>
                     <span className="block text-caption text-fg-muted">
-                      {jobKindLabel(a.serviceCategory, a.mode)} · {a.service}
+                      {servicesLabel(a.serviceCategories, a.mode)} · {a.service}
                     </span>
                     {a.podPending > 0 ? (
                       <span className="mt-1 inline-block">
@@ -117,7 +118,7 @@ export function VendorAssignmentsPage() {
           <span>
             <span className="block whitespace-nowrap">{a.lane}</span>
             <span className="block text-caption text-fg-muted">
-              {jobKindLabel(a.serviceCategory, a.mode)}
+              {servicesLabel(a.serviceCategories, a.mode)}
             </span>
           </span>
         </span>
@@ -186,19 +187,26 @@ export function VendorAssignmentsPage() {
   return (
     <div>
       <PageHeader
-        title="Assignments"
-        description="Services AENIX has assigned to you. Accept new requests and confirm completion."
+        title="Assignments, POs & deliveries"
+        description="Services AENIX has assigned to you, your purchase orders, and delivery requests that need a POD."
       />
-      <Card>
-        <DataTable
-          caption="Your assignments"
-          columns={columns}
-          rows={data}
-          rowKey={(a) => a.id}
-          loading={isLoading}
-          emptyTitle="No assignments"
-        />
-      </Card>
+      <div className="space-y-6">
+        <Card>
+          <CardHeader title="Assignments" description="Accept new requests and confirm completion." />
+          <div className="mt-3">
+            <DataTable
+              caption="Your assignments"
+              columns={columns}
+              rows={data}
+              rowKey={(a) => a.id}
+              loading={isLoading}
+              emptyTitle="No assignments"
+            />
+          </div>
+        </Card>
+        <VendorPurchaseOrdersCard partyId={partyId} />
+        <VendorDeliveryRequestsCard partyId={partyId} />
+      </div>
     </div>
   );
 }

@@ -6,6 +6,8 @@ import { DataTable, Pagination, type Column } from '@/shared/ui/DataTable';
 import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { ButtonLink } from '@/shared/ui/Button';
+import { Plus } from 'lucide-react';
 import { useVendors, type VendorRow } from './api';
 import { Rating } from './Rating';
 
@@ -84,6 +86,11 @@ export function VendorsListPage() {
       <PageHeader
         title="Vendors"
         description="Carriers, shipping lines, airlines, brokers and warehouses you buy services from."
+        actions={
+          <ButtonLink to="/vendors/new" icon={<Plus aria-hidden="true" />}>
+            New vendor
+          </ButtonLink>
+        }
       />
       <Card>
         <ListToolbar
