@@ -599,6 +599,7 @@ for (const f of flows) {
     })),
     lines: woLines,
     hasWarehouse: !!f.wo.warehouse,
+    inbounds: [],
     customerRequests: [],
     createdAt: dt(f.day + 1),
     eta: ['Completed', 'Delivered'].includes(f.wo.status)
@@ -654,6 +655,7 @@ workOrders.push({
   vendorAssignments: [],
   lines: [line('svc-1', 'FTL JAFZA → Dubai Silicon Oasis', 1, 'Truck', 1100, 700)],
   hasWarehouse: true,
+  inbounds: [],
   customerRequests: [],
   createdAt: dt(23, 10),
   eta: d(26),
@@ -747,29 +749,55 @@ workOrders.push({
     line('svc-8', 'Handling out', 18, 'Pallet', 18, 12),
   ],
   hasWarehouse: true,
-  packingList: {
-    number: 'PL-2052',
-    status: 'Sent to warehouse',
-    sentAt: dt(16, 10),
-    lines: [
-      { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 160, uom: 'Pcs' },
-      { sku: 'HRG-COAT-L', description: 'Winter coats — L', quantity: 140, uom: 'Pcs' },
-      { sku: 'HRG-SCRF-01', description: 'Wool scarves', quantity: 220, uom: 'Pcs' },
-      { sku: 'HRG-BOOT-42', description: 'Boots size 42', quantity: 120, uom: 'Pairs' },
-    ],
-  },
-  grn: {
-    number: 'GRN-5530',
-    receivedAt: dt(18, 14),
-    attachment: att('GRN-5530_signed.pdf', 18, 15, 'Thomas Reid'),
-    lines: [
-      { sku: 'HRG-COAT-M', receivedQty: 160, damagedQty: 0 },
-      { sku: 'HRG-COAT-L', receivedQty: 132, damagedQty: 0, remarks: '8 pcs missing from carton 14' },
-      { sku: 'HRG-SCRF-01', receivedQty: 220, damagedQty: 6, remarks: 'Water damage on 6 pcs' },
-      { sku: 'HRG-BOOT-42', receivedQty: 120, damagedQty: 0 },
-    ],
-    status: 'Variance raised',
-  },
+  inbounds: [
+    {
+      id: 'ib-2052-1',
+      number: 'IN-2052-01',
+      reference: 'ASN / container — first consignment',
+      expectedAt: d(16),
+      packingList: {
+        number: 'PL-2052',
+        status: 'Sent to warehouse',
+        sentAt: dt(16, 10),
+        lines: [
+          { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 160, uom: 'Pcs' },
+          { sku: 'HRG-COAT-L', description: 'Winter coats — L', quantity: 140, uom: 'Pcs' },
+          { sku: 'HRG-SCRF-01', description: 'Wool scarves', quantity: 220, uom: 'Pcs' },
+          { sku: 'HRG-BOOT-42', description: 'Boots size 42', quantity: 120, uom: 'Pairs' },
+        ],
+      },
+      grn: {
+        number: 'GRN-5530',
+        receivedAt: dt(18, 14),
+        attachment: att('GRN-5530_signed.pdf', 18, 15, 'Thomas Reid'),
+        lines: [
+          { sku: 'HRG-COAT-M', receivedQty: 160, damagedQty: 0 },
+          { sku: 'HRG-COAT-L', receivedQty: 132, damagedQty: 0, remarks: '8 pcs missing from carton 14' },
+          { sku: 'HRG-SCRF-01', receivedQty: 220, damagedQty: 6, remarks: 'Water damage on 6 pcs' },
+          { sku: 'HRG-BOOT-42', receivedQty: 120, damagedQty: 0 },
+        ],
+        status: 'Variance raised',
+      },
+    },
+    {
+      id: 'ib-2052-2',
+      number: 'IN-2052-02',
+      reference: 'Container TGHU 551023-7 — second consignment',
+      expectedAt: d(28),
+      packingList: {
+        number: 'PL-2052-02',
+        status: 'Sent to warehouse',
+        sentAt: dt(23, 11),
+        source: 'Customer portal',
+        attachment: att('Horizon_ASN_Nov-W4.xlsx', 23, 11, 'Customer portal — Daniel Brooks', 34),
+        lines: [
+          { sku: 'HRG-COAT-M', description: 'Winter coats — M', quantity: 80, uom: 'Pcs' },
+          { sku: 'HRG-GLOV-01', description: 'Leather gloves', quantity: 300, uom: 'Pairs' },
+          { sku: 'HRG-BOOT-42', description: 'Boots size 42', quantity: 60, uom: 'Pairs' },
+        ],
+      },
+    },
+  ],
   customerRequests: [
     {
       id: 'cr-0301',
@@ -831,25 +859,33 @@ workOrders.push({
     line('svc-9', 'Last-mile delivery', 4, 'Drop', 120, 85),
   ],
   hasWarehouse: true,
-  packingList: {
-    number: 'PL-2053',
-    status: 'Sent to warehouse',
-    sentAt: dt(9, 11),
-    lines: [
-      { sku: 'SKE-MON-24', description: 'Monitors 24"', quantity: 120, uom: 'Unit' },
-      { sku: 'SKE-DOCK-01', description: 'Docking stations', quantity: 180, uom: 'Unit' },
-    ],
-  },
-  grn: {
-    number: 'GRN-5524',
-    receivedAt: dt(10, 12),
-    attachment: att('GRN-5524.pdf', 10, 13, 'Thomas Reid', 180),
-    lines: [
-      { sku: 'SKE-MON-24', receivedQty: 120, damagedQty: 0 },
-      { sku: 'SKE-DOCK-01', receivedQty: 180, damagedQty: 0 },
-    ],
-    status: 'Verified',
-  },
+  inbounds: [
+    {
+      id: 'ib-2053-1',
+      number: 'IN-2053-01',
+      reference: 'ASN / container — first consignment',
+      expectedAt: d(10),
+      packingList: {
+        number: 'PL-2053',
+        status: 'Sent to warehouse',
+        sentAt: dt(9, 11),
+        lines: [
+          { sku: 'SKE-MON-24', description: 'Monitors 24"', quantity: 120, uom: 'Unit' },
+          { sku: 'SKE-DOCK-01', description: 'Docking stations', quantity: 180, uom: 'Unit' },
+        ],
+      },
+      grn: {
+        number: 'GRN-5524',
+        receivedAt: dt(10, 12),
+        attachment: att('GRN-5524.pdf', 10, 13, 'Thomas Reid', 180),
+        lines: [
+          { sku: 'SKE-MON-24', receivedQty: 120, damagedQty: 0 },
+          { sku: 'SKE-DOCK-01', receivedQty: 180, damagedQty: 0 },
+        ],
+        status: 'Verified',
+      },
+    },
+  ],
   customerRequests: [
     {
       id: 'cr-0297',
@@ -934,6 +970,7 @@ workOrders.push({
   ],
   lines: [line('svc-6', 'Import customs clearance — medical devices', 1, 'Declaration', 650, 350)],
   hasWarehouse: false,
+  inbounds: [],
   customerRequests: [],
   purchaseInvoiceIds: ['bill-2054-0'],
   completedAt: dt(21, 12),
@@ -1529,7 +1566,7 @@ export const prototypeLoginHint: string = 'aisha.khan@aenix.example';
   for (const wo of workOrders) {
     const extra = [
       wo.serviceCategory,
-      ...(wo.hasWarehouse || wo.packingList ? (['Warehouse'] as const) : []),
+      ...(wo.hasWarehouse || wo.inbounds.length ? (['Warehouse'] as const) : []),
     ];
     wo.serviceCategories = categoriesFromLines(wo.lines, modeOf, extra);
     wo.serviceCategory = primaryCategory(wo.serviceCategories);

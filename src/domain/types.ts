@@ -236,10 +236,12 @@ export interface WorkOrder {
   lines: PriceLine[];
   hasWarehouse: boolean;
   invoiceId?: Id;
-  /** Warehouse inbound: product list sent to the warehouse team, and the GRN they return. */
-  packingList?: PackingList;
-  grn?: Grn;
-  /** Customer out / delivery requests, each closed by a vendor or warehouse POD. */
+  /**
+   * Warehouse inbound receipts. Goods are stored over time, so a job can have MANY inbounds,
+   * each with its own product list (PL / ASN) and the GRN the warehouse returns.
+   */
+  inbounds: Inbound[];
+  /** Customer out-bond / release requests (MANY over time), each closed by a vendor or warehouse POD. */
   customerRequests: CustomerRequest[];
   /** Purchase invoices (vendor bills) drafted when the job is completed. */
   purchaseInvoiceIds?: Id[];
@@ -265,12 +267,26 @@ export interface Attachment {
   uploadedBy: string;
 }
 
-/** Product list (PL) sent to the warehouse team so they know what to expect. */
+/** Product list (PL / ASN) sent to the warehouse team so they know what to expect. */
 export interface PackingList {
   number: string;
   status: 'Draft' | 'Sent to warehouse';
   sentAt?: IsoDateTime;
   lines: DocLine[];
+  /** Original file (e.g. the customer's Excel) when the lines were imported. */
+  attachment?: Attachment;
+  source?: 'Staff' | 'Customer portal' | 'Excel import';
+}
+
+/** One inbound receipt: a consignment arriving at the warehouse (PL → GRN → check). */
+export interface Inbound {
+  id: Id;
+  number: string;
+  /** Customer reference: ASN, container, AWB or truck number. */
+  reference: string;
+  expectedAt: IsoDate;
+  packingList: PackingList;
+  grn?: Grn;
 }
 
 /** Goods received note returned by the warehouse team and uploaded against the job. */
