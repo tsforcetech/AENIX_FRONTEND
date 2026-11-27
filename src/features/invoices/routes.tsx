@@ -1,3 +1,4 @@
+import { ModulePlaceholder } from '@/shared/ui/ModulePlaceholder';
 import { createRoute } from '@tanstack/react-router';
 import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
 import { InvoiceDetailPage } from './InvoiceDetailPage';
@@ -10,6 +11,16 @@ export function invoicesRoutes(parent: AppParentRoute) {
       path: 'invoices',
       validateSearch: validateListSearch,
       component: InvoicesListPage,
+    }),
+    createRoute({
+      getParentRoute: () => parent,
+      path: 'invoices/new',
+      validateSearch: (s: Record<string, unknown>): { customerId?: string; salesOrderId?: string } => ({
+        customerId: typeof s.customerId === 'string' && s.customerId ? s.customerId.slice(0, 64) : undefined,
+        salesOrderId:
+          typeof s.salesOrderId === 'string' && s.salesOrderId ? s.salesOrderId.slice(0, 64) : undefined,
+      }),
+      component: () => <ModulePlaceholder title="New customer invoice" />,
     }),
     createRoute({ getParentRoute: () => parent, path: 'invoices/$id', component: InvoiceDetailPage }),
   ] as const;

@@ -18,8 +18,10 @@ const staffQuickCreate: QuickCreate[] = [
   { label: 'New enquiry', to: '/enquiries/new' },
   { label: 'New quotation', to: '/quotations/new' },
   { label: 'New sales order', to: '/sales-orders/new' },
-  { label: 'New work order', to: '/work-orders/new' },
-  { label: 'Record collection', to: '/collections/new' },
+  { label: 'New job (work order)', to: '/work-orders/new' },
+  { label: 'New customer invoice', to: '/invoices/new' },
+  { label: 'New receipt', to: '/collections/new' },
+  { label: 'New payment', to: '/payments/new' },
 ];
 
 export function AppShell({ principal }: { principal: SessionPrincipal }) {

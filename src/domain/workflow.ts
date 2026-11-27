@@ -55,3 +55,37 @@ export const serviceCategoryLabel: Record<ServiceCategory, string> = {
 export function jobKindLabel(category: ServiceCategory, mode?: TransportMode): string {
   return category === 'Transport' ? `${mode ?? 'Road'} transport` : serviceCategoryLabel[category];
 }
+
+/** Service master mode → service type: Road/Sea/Air are transport, Warehouse is warehouse, anything else is a direct service. */
+export function categoryOfServiceMode(mode: string): ServiceCategory {
+  if (mode === 'Road' || mode === 'Sea' || mode === 'Air') return 'Transport';
+  if (mode === 'Warehouse') return 'Warehouse';
+  return 'Service';
+}
+
+/**
+ * Every service type a multi-service order/job contains, in a stable order.
+ * `serviceModeOf` maps a serviceId to the service master's mode.
+ */
+export function categoriesFromLines(
+  lines: { serviceId: string }[],
+  serviceModeOf: (serviceId: string) => string | undefined,
+  extra: ServiceCategory[] = [],
+): ServiceCategory[] {
+  const set = new Set<ServiceCategory>(extra);
+  for (const l of lines) {
+    const m = serviceModeOf(l.serviceId);
+    if (m) set.add(categoryOfServiceMode(m));
+  }
+  return SERVICE_CATEGORIES.filter((c) => set.has(c));
+}
+
+/** Primary type for icons/labels: transport if included, else warehouse, else direct service. */
+export function primaryCategory(categories: ServiceCategory[]): ServiceCategory {
+  return SERVICE_CATEGORIES.find((c) => categories.includes(c)) ?? 'Service';
+}
+
+/** e.g. "Sea transport + Warehouse + Direct service". */
+export function servicesLabel(categories: ServiceCategory[], mode?: TransportMode): string {
+  return categories.map((c) => jobKindLabel(c, mode)).join(' + ');
+}

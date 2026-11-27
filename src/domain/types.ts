@@ -37,6 +37,8 @@ export interface Customer {
   paymentTermsDays: number;
   status: 'Active' | 'On hold' | 'Inactive';
   createdAt: IsoDate;
+  /** Sub-ledger under Accounts receivable, created automatically with the customer. */
+  ledgerAccountId: Id;
 }
 
 export type VendorCategory = 'Transporter' | 'Shipping line' | 'Airline' | 'Customs broker' | 'Warehouse';
@@ -53,6 +55,8 @@ export interface Vendor {
   rating: 1 | 2 | 3 | 4 | 5;
   paymentTermsDays: number;
   status: 'Active' | 'On hold' | 'Inactive';
+  /** Sub-ledger under Accounts payable, created automatically with the vendor. */
+  ledgerAccountId: Id;
 }
 
 export interface Service {
@@ -91,7 +95,10 @@ export interface Enquiry {
   id: Id;
   number: string;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   /** Transport only. */
   mode?: TransportMode;
   serviceIds: Id[];
@@ -124,7 +131,10 @@ export interface Quotation {
   version: number;
   enquiryId?: Id;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   /** Transport only. */
   mode?: TransportMode;
   origin: string;
@@ -149,7 +159,10 @@ export interface SalesOrder {
   id: Id;
   number: string;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   mode?: TransportMode;
   enquiryId?: Id;
   quotationId?: Id;
@@ -196,6 +209,8 @@ export interface VendorAssignment {
   serviceId: Id;
   agreedCost: number;
   status: 'Requested' | 'Accepted' | 'Completed';
+  /** Purchase order issued to the vendor when assigned (industry standard: PO before the work). */
+  purchaseOrderId?: Id;
 }
 
 /** Work Order IS the Job (AENIX business rule). */
@@ -203,7 +218,10 @@ export interface WorkOrder {
   id: Id;
   number: string;
   customerId: Id;
+  /** Primary type (icon/label). */
   serviceCategory: ServiceCategory;
+  /** Every service type included — one order can mix transport, warehouse and other services. */
+  serviceCategories: ServiceCategory[];
   salesOrderId?: Id;
   source: { type: 'Sales order' | 'Quotation' | 'Contract' | 'Direct'; refId?: Id };
   /** Transport only. */
@@ -332,6 +350,8 @@ export type InvoiceStatus = 'Draft' | 'Posted' | 'Partially paid' | 'Paid' | 'Ov
 
 export interface InvoiceLine {
   id: Id;
+  /** Sales order this line bills (one invoice can cover several sales orders of the same customer). */
+  salesOrderId?: Id;
   description: string;
   quantity: number;
   unitPrice: number;
@@ -344,6 +364,8 @@ export interface Invoice {
   customerId: Id;
   workOrderId?: Id;
   storageRunId?: Id;
+  /** Sales orders billed by this invoice. */
+  salesOrderIds?: Id[];
   issueDate: IsoDate;
   dueDate: IsoDate;
   lines: InvoiceLine[];
@@ -359,6 +381,8 @@ export interface VendorBill {
   vendorRef: string;
   vendorId: Id;
   workOrderId?: Id;
+  /** Purchase order this vendor invoice is matched to (3-way match: PO vs GRN/POD vs invoice). */
+  purchaseOrderId?: Id;
   billDate: IsoDate;
   dueDate: IsoDate;
   amount: number;
@@ -378,19 +402,73 @@ export interface Collection {
   amount: number;
   reference: string;
   chequeDate?: IsoDate;
-  allocations: { invoiceId: Id; amount: number }[];
-  status: 'Unallocated' | 'Allocated' | 'PDC pending' | 'Bounced';
+  /** Allocated to an invoice, or held as an advance against a sales order. */
+  allocations: { invoiceId?: Id; salesOrderId?: Id; amount: number }[];
+  status: 'Unallocated' | 'Allocated' | 'Advance' | 'PDC pending' | 'Bounced';
 }
 
 export interface JournalEntry {
   id: Id;
   number: string;
   date: IsoDate;
-  source: 'Invoice' | 'Vendor bill' | 'Collection' | 'Manual' | 'Storage billing';
+  source: 'Invoice' | 'Vendor bill' | 'Collection' | 'Payment' | 'Manual' | 'Storage billing';
   reference: string;
   memo: string;
   lines: { account: string; debit: number; credit: number }[];
   status: 'Posted' | 'Reversed';
+}
+
+// ---------- Procurement & payables ----------
+export type PurchaseOrderStatus = 'Draft' | 'Issued' | 'Accepted' | 'Completed' | 'Billed' | 'Cancelled';
+
+/** Vendor purchase order, issued per vendor assignment on a job BEFORE the work starts. */
+export interface PurchaseOrder {
+  id: Id;
+  number: string;
+  vendorId: Id;
+  workOrderId: Id;
+  salesOrderId?: Id;
+  serviceId: Id;
+  description: string;
+  amount: number;
+  vatRate: number;
+  issuedAt: IsoDateTime;
+  status: PurchaseOrderStatus;
+  vendorBillId?: Id;
+}
+
+/** Payment voucher: money paid to a vendor, allocated to purchase invoices (bills). */
+export interface VendorPayment {
+  id: Id;
+  number: string;
+  vendorId: Id;
+  date: IsoDate;
+  method: PaymentMethod;
+  amount: number;
+  reference: string;
+  chequeDate?: IsoDate;
+  allocations: { billId: Id; amount: number }[];
+  status: 'Posted' | 'PDC issued' | 'Cancelled';
+}
+
+// ---------- Chart of accounts ----------
+export type AccountGroup = 'Assets' | 'Liabilities' | 'Equity' | 'Income' | 'Expenses';
+
+/**
+ * Ledger account. Groups organise the chart; ledgers take postings. Customer and vendor
+ * sub-ledgers sit under the Accounts receivable / payable control accounts and are created
+ * automatically with the party. Pending accountant sign-off (Phase 8).
+ */
+export interface LedgerAccount {
+  id: Id;
+  code: string;
+  name: string;
+  group: AccountGroup;
+  kind: 'Group' | 'Ledger';
+  parentId?: Id;
+  party?: { type: 'Customer' | 'Vendor'; id: Id };
+  system: boolean;
+  active: boolean;
 }
 
 // ---------- Cross-cutting ----------
@@ -407,7 +485,10 @@ export interface ActivityEvent {
     | 'Warehouse'
     | 'Invoice'
     | 'Collection'
-    | 'Vendor bill';
+    | 'Vendor bill'
+    | 'Purchase order'
+    | 'Payment'
+    | 'Ledger';
   entityId: Id;
   entityRef: string;
   action: string;

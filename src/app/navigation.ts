@@ -11,6 +11,8 @@ import {
   MessageSquareText,
   Receipt,
   Settings,
+  ShoppingBag,
+  Banknote,
   ShoppingCart,
   Tags,
   Truck,
@@ -46,7 +48,8 @@ export const staffNavigation: NavGroup[] = [
   {
     label: 'Operations',
     items: [
-      { label: 'Work orders', to: '/work-orders', icon: Truck, phase: 4 },
+      { label: 'Jobs (work orders)', to: '/work-orders', icon: Truck, phase: 4 },
+      { label: 'Purchase orders', to: '/purchase-orders', icon: ShoppingBag, phase: 4 },
       { label: 'Warehouse', to: '/warehouse', icon: Warehouse, phase: 5 },
       { label: 'Storage billing', to: '/storage-billing', icon: Boxes, phase: 6 },
     ],
@@ -56,7 +59,8 @@ export const staffNavigation: NavGroup[] = [
     items: [
       { label: 'Invoices', to: '/invoices', icon: Receipt, phase: 7 },
       { label: 'Purchase invoices', to: '/vendor-bills', icon: ClipboardList, phase: 7 },
-      { label: 'Collections', to: '/collections', icon: Wallet, phase: 7 },
+      { label: 'Receipts', to: '/collections', icon: Wallet, phase: 7 },
+      { label: 'Payments', to: '/payments', icon: Banknote, phase: 7 },
       { label: 'Accounting', to: '/accounting', icon: Landmark, phase: 8 },
     ],
   },

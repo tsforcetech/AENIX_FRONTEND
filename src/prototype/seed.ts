@@ -23,11 +23,14 @@ import type {
   VendorRate,
   WorkOrder,
   WorkOrderStatus,
+  LedgerAccount,
+  PurchaseOrder,
+  VendorPayment,
   Milestone,
   SalesOrder,
   ServiceCategory,
 } from '@/domain/types';
-import { milestoneLabels } from '@/domain/workflow';
+import { categoriesFromLines, milestoneLabels, primaryCategory } from '@/domain/workflow';
 import { invoiceTotals } from '@/domain/calc';
 
 /** Fixed "today" so the prototype looks the same for every reviewer. */
@@ -80,6 +83,7 @@ function c(
     paymentTermsDays,
     status,
     createdAt: `2026-0${(n % 9) + 1}-1${n % 9}`,
+    ledgerAccountId: `la-cus-${n}`,
   };
 }
 
@@ -115,6 +119,7 @@ function v(
     rating,
     paymentTermsDays: 30,
     status: 'Active',
+    ledgerAccountId: `la-ven-${n}`,
   };
 }
 
@@ -511,6 +516,7 @@ for (const f of flows) {
     number: `ENQ-${f.n}`,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     mode: lane.mode,
     serviceIds: [...new Set(lane.lines().map((l) => l.serviceId))],
     origin: lane.origin,
@@ -532,6 +538,7 @@ for (const f of flows) {
     enquiryId,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     mode: lane.mode,
     origin: lane.origin,
     destination: lane.destination,
@@ -554,6 +561,7 @@ for (const f of flows) {
     number: `SO-${soSeq}`,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     mode: lane.mode,
     enquiryId,
     quotationId,
@@ -572,6 +580,7 @@ for (const f of flows) {
     number: `JOB-${woSeq}`,
     customerId: `cus-${f.customer}`,
     serviceCategory: 'Transport',
+    serviceCategories: ['Transport'],
     salesOrderId: soId,
     source: { type: 'Sales order', refId: soId },
     mode: lane.mode,
@@ -606,10 +615,12 @@ for (const f of flows) {
       number: `INV-${invSeq}`,
       customerId: wo.customerId,
       workOrderId: woId,
+      salesOrderIds: [soId],
       issueDate: d(Math.min(f.day + 2, 23)),
       dueDate: f.inv.status === 'Overdue' ? d(15) : addDays(d(Math.min(f.day + 2, 23)), 30),
       lines: woLines.map((l) => ({
         id: `${l.id}-inv`,
+        salesOrderId: soId,
         description: l.description,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
@@ -638,6 +649,7 @@ workOrders.push({
   status: 'Draft',
   priority: 'High',
   serviceCategory: 'Transport',
+  serviceCategories: ['Transport'],
   milestones: milestones('Road', 'Draft', 23),
   vendorAssignments: [],
   lines: [line('svc-1', 'FTL JAFZA → Dubai Silicon Oasis', 1, 'Truck', 1100, 700)],
@@ -662,6 +674,7 @@ enquiries.push(
     number: 'ENQ-1085',
     customerId: 'cus-5',
     serviceCategory: 'Warehouse',
+    serviceCategories: ['Warehouse'],
     serviceIds: ['svc-7', 'svc-8'],
     origin: 'JAFZA WH-1',
     destination: '',
@@ -677,6 +690,7 @@ enquiries.push(
     number: 'ENQ-1086',
     customerId: 'cus-6',
     serviceCategory: 'Service',
+    serviceCategories: ['Service'],
     serviceIds: ['svc-6'],
     origin: 'Jebel Ali Port',
     destination: '',
@@ -695,6 +709,7 @@ salesOrders.push({
   number: 'SO-5110',
   customerId: 'cus-3',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   customerPoRef: 'HRG-PO-77812',
   orderDate: d(15),
   origin: 'JAFZA WH-1',
@@ -713,6 +728,7 @@ workOrders.push({
   number: 'JOB-2052',
   customerId: 'cus-3',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   salesOrderId: 'so-5110',
   source: { type: 'Sales order', refId: 'so-5110' },
   origin: 'JAFZA WH-1',
@@ -779,6 +795,7 @@ salesOrders.push({
   number: 'SO-5111',
   customerId: 'cus-7',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   customerPoRef: 'SKE-4471',
   orderDate: d(9),
   origin: 'JAFZA WH-1',
@@ -796,6 +813,7 @@ workOrders.push({
   number: 'JOB-2053',
   customerId: 'cus-7',
   serviceCategory: 'Warehouse',
+  serviceCategories: ['Warehouse'],
   salesOrderId: 'so-5111',
   source: { type: 'Sales order', refId: 'so-5111' },
   origin: 'JAFZA WH-1',
@@ -887,6 +905,7 @@ salesOrders.push({
   number: 'SO-5112',
   customerId: 'cus-4',
   serviceCategory: 'Service',
+  serviceCategories: ['Service'],
   customerPoRef: 'CMS-PO-2290',
   orderDate: d(19),
   origin: 'DXB Cargo Village',
@@ -901,6 +920,7 @@ workOrders.push({
   number: 'JOB-2054',
   customerId: 'cus-4',
   serviceCategory: 'Service',
+  serviceCategories: ['Service'],
   salesOrderId: 'so-5112',
   source: { type: 'Sales order', refId: 'so-5112' },
   origin: 'DXB Cargo Village',
@@ -1483,3 +1503,182 @@ export const staffUsers: {
 
 /** Prefilled prototype sign-in identifier (login page). */
 export const prototypeLoginHint: string = 'aisha.khan@aenix.example';
+
+// ---------- FLOW-002: industry-standard order-to-cash (owner decision 2026-11-27) ----------
+
+// 1) Multi-service: every order/job lists ALL service types from its lines (one order can mix
+//    transport, warehouse and other services). The primary type drives icons/labels.
+{
+  const modeOf = (serviceId: string) => services.find((x) => x.id === serviceId)?.mode;
+  for (const so of salesOrders) {
+    so.serviceCategories = categoriesFromLines(so.lines, modeOf, [so.serviceCategory]);
+    so.serviceCategory = primaryCategory(so.serviceCategories);
+  }
+  for (const q of quotations) {
+    q.serviceCategories = categoriesFromLines(q.lines, modeOf, [q.serviceCategory]);
+    q.serviceCategory = primaryCategory(q.serviceCategories);
+  }
+  for (const e of enquiries) {
+    e.serviceCategories = categoriesFromLines(
+      e.serviceIds.map((serviceId) => ({ serviceId })),
+      modeOf,
+      [e.serviceCategory],
+    );
+    e.serviceCategory = primaryCategory(e.serviceCategories);
+  }
+  for (const wo of workOrders) {
+    const extra = [
+      wo.serviceCategory,
+      ...(wo.hasWarehouse || wo.packingList ? (['Warehouse'] as const) : []),
+    ];
+    wo.serviceCategories = categoriesFromLines(wo.lines, modeOf, extra);
+    wo.serviceCategory = primaryCategory(wo.serviceCategories);
+  }
+}
+
+// 2) Vendor purchase orders — issued when the vendor is assigned (before the work).
+export const purchaseOrders: PurchaseOrder[] = [];
+{
+  let poSeq = 6100;
+  for (const wo of workOrders) {
+    for (const va of wo.vendorAssignments) {
+      poSeq += 1;
+      const bill = vendorBills.find(
+        (b) => b.workOrderId === wo.id && b.vendorId === va.vendorId && !b.purchaseOrderId,
+      );
+      const po: PurchaseOrder = {
+        id: `po-${poSeq}`,
+        number: `PO-${poSeq}`,
+        vendorId: va.vendorId,
+        workOrderId: wo.id,
+        salesOrderId: wo.salesOrderId,
+        serviceId: va.serviceId,
+        description: services.find((x) => x.id === va.serviceId)?.name ?? 'Service',
+        amount: va.agreedCost,
+        vatRate: 0.05,
+        issuedAt: wo.createdAt,
+        status: bill
+          ? 'Billed'
+          : va.status === 'Completed'
+            ? 'Completed'
+            : va.status === 'Accepted'
+              ? 'Accepted'
+              : 'Issued',
+        vendorBillId: bill?.id,
+      };
+      if (bill) bill.purchaseOrderId = po.id;
+      va.purchaseOrderId = po.id;
+      purchaseOrders.push(po);
+    }
+  }
+}
+
+// 3) A customer advance received against a sales order (no invoice yet).
+collections.push({
+  id: 'rc-adv-1',
+  number: 'RCPT-4422',
+  customerId: 'cus-3',
+  date: '2026-11-17',
+  method: 'Bank transfer',
+  amount: 1000,
+  reference: 'TRX991207 — advance for SO-5110',
+  allocations: [{ salesOrderId: 'so-5110', amount: 1000 }],
+  status: 'Advance',
+});
+
+// 4) Payment vouchers for vendor bills that are (partly) paid.
+export const vendorPayments: VendorPayment[] = vendorBills
+  .filter((b) => b.paid > 0)
+  .map((b, i) => ({
+    id: `pv-${i + 1}`,
+    number: `PV-${3300 + i}`,
+    vendorId: b.vendorId,
+    date: addDays(b.billDate, 10 + i),
+    method: 'Bank transfer' as const,
+    amount: b.paid,
+    reference: `TT${770100 + i * 13}`,
+    allocations: [{ billId: b.id, amount: b.paid }],
+    status: 'Posted' as const,
+  }));
+
+// 5) Chart of accounts (illustrative; pending accountant sign-off). Customers/vendors get
+//    automatic sub-ledgers under Accounts receivable / payable.
+const grp = (
+  id: string,
+  code: string,
+  name: string,
+  group: LedgerAccount['group'],
+  parentId?: string,
+): LedgerAccount => ({
+  id,
+  code,
+  name,
+  group,
+  kind: 'Group',
+  parentId,
+  system: true,
+  active: true,
+});
+const led = (
+  id: string,
+  code: string,
+  name: string,
+  group: LedgerAccount['group'],
+  parentId: string,
+  system = true,
+): LedgerAccount => ({
+  id,
+  code,
+  name,
+  group,
+  kind: 'Ledger',
+  parentId,
+  system,
+  active: true,
+});
+export const ledgerAccounts: LedgerAccount[] = [
+  grp('g-assets', '1000', 'Assets', 'Assets'),
+  grp('g-cash', '1100', 'Cash and bank', 'Assets', 'g-assets'),
+  led('la-1110', '1110', 'Bank — current account', 'Assets', 'g-cash'),
+  led('la-1120', '1120', 'Petty cash', 'Assets', 'g-cash', false),
+  led('la-1130', '1130', 'PDC received (cheques in hand)', 'Assets', 'g-cash'),
+  grp('g-ar', '1200', 'Accounts receivable', 'Assets', 'g-assets'),
+  led('la-1300', '1300', 'VAT input recoverable', 'Assets', 'g-assets'),
+  grp('g-liab', '2000', 'Liabilities', 'Liabilities'),
+  grp('g-ap', '2100', 'Accounts payable', 'Liabilities', 'g-liab'),
+  led('la-2200', '2200', 'VAT output payable', 'Liabilities', 'g-liab'),
+  led('la-2300', '2300', 'Customer advances', 'Liabilities', 'g-liab'),
+  led('la-2400', '2400', 'Accrued job costs', 'Liabilities', 'g-liab'),
+  grp('g-eq', '3000', 'Equity', 'Equity'),
+  led('la-3100', '3100', 'Share capital', 'Equity', 'g-eq'),
+  grp('g-inc', '4000', 'Income', 'Income'),
+  led('la-4100', '4100', 'Freight revenue', 'Income', 'g-inc'),
+  led('la-4200', '4200', 'Storage & handling revenue', 'Income', 'g-inc'),
+  led('la-4300', '4300', 'Customs & other services revenue', 'Income', 'g-inc'),
+  grp('g-exp', '5000', 'Expenses', 'Expenses'),
+  led('la-5100', '5100', 'Direct job costs — subcontracted', 'Expenses', 'g-exp'),
+  led('la-6100', '6100', 'Office rent', 'Expenses', 'g-exp', false),
+  led('la-6200', '6200', 'Salaries', 'Expenses', 'g-exp', false),
+  ...customers.map((c, i): LedgerAccount => ({
+    id: c.ledgerAccountId,
+    code: `1200-${String(i + 1).padStart(3, '0')}`,
+    name: c.name,
+    group: 'Assets',
+    kind: 'Ledger',
+    parentId: 'g-ar',
+    party: { type: 'Customer', id: c.id },
+    system: true,
+    active: true,
+  })),
+  ...vendors.map((v, i): LedgerAccount => ({
+    id: v.ledgerAccountId,
+    code: `2100-${String(i + 1).padStart(3, '0')}`,
+    name: v.name,
+    group: 'Liabilities',
+    kind: 'Ledger',
+    parentId: 'g-ap',
+    party: { type: 'Vendor', id: v.id },
+    system: true,
+    active: true,
+  })),
+];

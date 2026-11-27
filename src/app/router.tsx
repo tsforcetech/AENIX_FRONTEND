@@ -4,6 +4,8 @@ import { HomePage } from '@/features/home/HomePage';
 import { enquiriesRoutes } from '@/features/enquiries/routes';
 import { quotationsRoutes } from '@/features/quotations/routes';
 import { salesOrdersRoutes } from '@/features/sales-orders/routes';
+import { purchaseOrdersRoutes } from '@/features/purchase-orders/routes';
+import { paymentsRoutes } from '@/features/payments/routes';
 import { contractsRoutes } from '@/features/contracts/routes';
 import { workOrdersRoutes } from '@/features/work-orders/routes';
 import { warehouseRoutes } from '@/features/warehouse/routes';
@@ -40,6 +42,8 @@ const routeTree = rootRoute.addChildren([
     ...enquiriesRoutes(p),
     ...quotationsRoutes(p),
     ...salesOrdersRoutes(p),
+    ...purchaseOrdersRoutes(p),
+    ...paymentsRoutes(p),
     ...contractsRoutes(p),
     ...workOrdersRoutes(p),
     ...warehouseRoutes(p),
