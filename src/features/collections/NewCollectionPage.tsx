@@ -14,7 +14,8 @@ import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatMoney } from '@/shared/utils/format';
-import { collectionsApi, useCreateCollection, useOpenInvoices } from './api';
+import { collectionsApi, useCreateCollection, useCustomerBalance, useOpenInvoices } from './api';
+import { BalanceSummary } from './BalanceSummary';
 
 const route = getRouteApi('/_app/collections/new');
 const METHODS: PaymentMethod[] = ['Bank transfer', 'Cheque', 'PDC', 'Cash', 'Card'];
@@ -35,6 +36,8 @@ const schema = z
         amount: z.coerce.number({ error: 'Enter a number' }).min(0, 'Cannot be negative'),
       }),
     ),
+    advanceSalesOrderId: z.string().optional(),
+    advanceAmount: z.coerce.number({ error: 'Enter a number' }).min(0, 'Cannot be negative'),
   })
   .superRefine((v, ctx) => {
     if ((v.method === 'PDC' || v.method === 'Cheque') && !v.chequeDate) {
@@ -49,7 +52,10 @@ const schema = z
         });
       }
     });
-    const total = round2(v.allocations.reduce((s, a) => s + a.amount, 0));
+    if (v.advanceAmount > 0 && !v.advanceSalesOrderId) {
+      ctx.addIssue({ code: 'custom', path: ['advanceSalesOrderId'], message: 'Choose the sales order' });
+    }
+    const total = round2(v.allocations.reduce((s, a) => s + a.amount, 0) + (v.advanceAmount || 0));
     if (total > v.amount + 0.005) {
       ctx.addIssue({
         code: 'custom',
@@ -71,9 +77,10 @@ export function NewCollectionPage() {
   const presetCustomer = useMemo(
     () =>
       (search.invoiceId ? collectionsApi.invoiceCustomer(search.invoiceId) : undefined) ??
+      (search.salesOrderId ? collectionsApi.salesOrderCustomer(search.salesOrderId) : undefined) ??
       search.customerId ??
       '',
-    [search.invoiceId, search.customerId],
+    [search.invoiceId, search.salesOrderId, search.customerId],
   );
 
   const {
@@ -92,6 +99,8 @@ export function NewCollectionPage() {
       reference: '',
       amount: '',
       allocations: [],
+      advanceSalesOrderId: search.salesOrderId ?? '',
+      advanceAmount: '',
     },
   });
   const { fields, replace } = useFieldArray({ control, name: 'allocations' });
@@ -99,8 +108,11 @@ export function NewCollectionPage() {
   const method = useWatch({ control, name: 'method' });
   const amount = Number(useWatch({ control, name: 'amount' })) || 0;
   const allocs = useWatch({ control, name: 'allocations' });
-  const allocated = round2((allocs ?? []).reduce((s, a) => s + (Number(a.amount) || 0), 0));
+  const advanceAmount = Number(useWatch({ control, name: 'advanceAmount' })) || 0;
+  const allocated = round2((allocs ?? []).reduce((s, a) => s + (Number(a.amount) || 0), 0) + advanceAmount);
   const open = useOpenInvoices(customerId || undefined);
+  const balance = useCustomerBalance(customerId || undefined);
+  const advanceOrders = (balance.data?.salesOrders ?? []).filter((o) => o.status !== 'Cancelled');
 
   // Re-apply the preset customer once the async option list has rendered (native <select>).
   useEffect(() => {
@@ -138,16 +150,23 @@ export function NewCollectionPage() {
       reference: v.reference,
       chequeDate: v.method === 'PDC' || v.method === 'Cheque' ? v.chequeDate : undefined,
       amount: v.amount,
-      allocations: v.allocations
-        .filter((a) => a.amount > 0)
-        .map((a) => ({ invoiceId: a.invoiceId, amount: round2(a.amount) })),
+      allocations: [
+        ...v.allocations
+          .filter((a) => a.amount > 0)
+          .map((a) => ({ invoiceId: a.invoiceId, amount: round2(a.amount) })),
+        ...(v.advanceAmount > 0 && v.advanceSalesOrderId
+          ? [{ salesOrderId: v.advanceSalesOrderId, amount: round2(v.advanceAmount) }]
+          : []),
+      ],
     });
     toast({
       title: `${col.number} recorded`,
       body:
         col.status === 'PDC pending'
           ? 'PDC held until it clears — invoices not yet updated.'
-          : `${formatMoney(col.amount)} received`,
+          : col.status === 'Advance'
+            ? `${formatMoney(col.amount)} held as a sales-order advance`
+            : `${formatMoney(col.amount)} received`,
     });
     void navigate({ to: '/collections' });
   });
@@ -158,11 +177,12 @@ export function NewCollectionPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <PageHeader
-        title="Record collection"
-        crumbs={[{ label: 'Collections', to: '/collections' }, { label: 'New' }]}
-        description="Record a customer receipt and allocate it to open invoices."
+        title="New receipt"
+        crumbs={[{ label: 'Receipts', to: '/collections' }, { label: 'New' }]}
+        description="Record money received from a customer. Allocate it to open invoices, or hold it as an advance against a sales order."
       />
       <form onSubmit={onSubmit} noValidate className="space-y-6">
+        {customerId ? <BalanceSummary balance={balance.data} loading={balance.isLoading} /> : null}
         <Card>
           <CardHeader title="Receipt" />
           <CardBody className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
@@ -339,7 +359,7 @@ export function NewCollectionPage() {
                 </dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-fg-muted">Allocated</dt>
+                <dt className="text-fg-muted">Allocated (incl. advance)</dt>
                 <dd>
                   <Money amount={allocated} />
                 </dd>
@@ -361,6 +381,36 @@ export function NewCollectionPage() {
                 {errors.allocations.message ?? errors.allocations.root?.message}
               </p>
             ) : null}
+          </CardBody>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Advance against a sales order"
+            description="For money received before the order is invoiced. It is applied to the invoice later."
+          />
+          <CardBody className="grid gap-5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+            <SelectField
+              label="Sales order"
+              placeholder={customerId ? 'No advance' : 'Choose a customer first'}
+              disabled={!customerId}
+              options={advanceOrders.map((o) => ({
+                value: o.salesOrderId,
+                label: `${o.number} · order ${formatMoney(o.orderValue)} · not invoiced ${formatMoney(o.notInvoiced)}${o.advance ? ` · advance held ${formatMoney(o.advance)}` : ''}`,
+              }))}
+              error={errors.advanceSalesOrderId?.message}
+              {...register('advanceSalesOrderId')}
+            />
+            <TextField
+              label="Advance amount (AED)"
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min={0}
+              disabled={!customerId}
+              error={errors.advanceAmount?.message}
+              {...register('advanceAmount')}
+            />
           </CardBody>
         </Card>
 

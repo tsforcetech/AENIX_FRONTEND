@@ -1,3 +1,4 @@
+import { protoDb } from '@/prototype/store';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { Download, FileMinus2, Lock, Send, Trash2, Wallet } from 'lucide-react';
 import { useState } from 'react';
@@ -43,7 +44,7 @@ export function InvoiceDetailPage() {
         crumbs={[{ label: 'Invoices', to: '/invoices' }, { label: inv.number }]}
         title={inv.number}
         meta={<StatusBadge status={inv.status} />}
-        description={`${inv.customerName} · ${inv.sourceType === 'Job' ? `work order ${inv.sourceLabel}` : inv.sourceType === 'Storage' ? `storage run ${inv.sourceLabel}` : 'manual invoice'}`}
+        description={`${inv.customerName} · ${inv.salesOrders.length ? `sales order${inv.salesOrders.length > 1 ? 's' : ''} ${inv.salesOrders.map((x) => x.number).join(', ')}` : inv.sourceType === 'Storage' ? `storage run ${inv.sourceLabel}` : inv.sourceType === 'Job' ? `job ${inv.sourceLabel}` : 'manual invoice'}`}
       />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
         <TaxInvoiceDocument inv={inv} />
@@ -107,13 +108,28 @@ function TaxInvoiceDocument({ inv }: { inv: InvoiceDetail }) {
           <div className="sm:text-right">
             <p className="text-caption font-medium uppercase tracking-wide text-fg-muted">Payment terms</p>
             <p className="mt-1 text-body-s">{inv.customer.paymentTermsDays} days net</p>
-            {inv.sourceType === 'Job' && inv.workOrderId ? (
+            {inv.salesOrders.length ? (
+              <div className="mt-1 flex flex-wrap gap-x-3 sm:justify-end">
+                <span className="sr-only">Billed sales orders:</span>
+                {inv.salesOrders.map((so) => (
+                  <Link
+                    key={so.id}
+                    to="/sales-orders/$id"
+                    params={{ id: so.id }}
+                    className="text-body-s font-medium text-brand hover:underline"
+                  >
+                    Sales order {so.number}
+                  </Link>
+                ))}
+              </div>
+            ) : null}
+            {inv.workOrderId ? (
               <Link
                 to="/work-orders/$id"
                 params={{ id: inv.workOrderId }}
                 className="mt-1 inline-block text-body-s font-medium text-brand hover:underline"
               >
-                View work order {inv.sourceLabel}
+                View job {protoJobNumber(inv.workOrderId)}
               </Link>
             ) : null}
             {inv.sourceType === 'Storage' ? (
@@ -132,6 +148,11 @@ function TaxInvoiceDocument({ inv }: { inv: InvoiceDetail }) {
             <caption className="sr-only">Invoice lines</caption>
             <thead>
               <tr className="border-y border-border-subtle bg-canvas/60 text-caption uppercase tracking-wide text-fg-muted">
+                {inv.salesOrders.length > 1 ? (
+                  <th scope="col" className="px-3 py-2 text-left font-medium">
+                    Sales order
+                  </th>
+                ) : null}
                 <th scope="col" className="px-3 py-2 text-left font-medium">
                   Description
                 </th>
@@ -152,6 +173,11 @@ function TaxInvoiceDocument({ inv }: { inv: InvoiceDetail }) {
             <tbody>
               {inv.lines.map((l) => (
                 <tr key={l.id} className="border-b border-border-subtle">
+                  {inv.salesOrders.length > 1 ? (
+                    <td className="whitespace-nowrap px-3 py-3 font-mono text-[13px]">
+                      {inv.salesOrders.find((x) => x.id === l.salesOrderId)?.number ?? '—'}
+                    </td>
+                  ) : null}
                   <td className="px-3 py-3">{l.description}</td>
                   <td className="px-3 py-3 text-right tabular-nums">{formatNumber(l.quantity)}</td>
                   <td className="px-3 py-3 text-right">
@@ -409,4 +435,8 @@ function InvoiceSidePanel({ inv }: { inv: InvoiceDetail }) {
       </Dialog>
     </div>
   );
+}
+
+function protoJobNumber(id: string): string {
+  return protoDb.get().workOrders.find((w) => w.id === id)?.number ?? id;
 }

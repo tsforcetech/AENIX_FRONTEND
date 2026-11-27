@@ -1,21 +1,19 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { BadgeCheck, Banknote, Lock } from 'lucide-react';
-import { useState } from 'react';
 import { jobKindLabel } from '@/domain/workflow';
 import { Badge, StatusBadge } from '@/shared/ui/Badge';
 import { JobKindIcon } from '@/shared/ui/ModeIcon';
-import { Button } from '@/shared/ui/Button';
+import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
-import { Dialog } from '@/shared/ui/Dialog';
-import { TextField } from '@/shared/ui/Field';
 import { Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
-import { formatDate, formatMoney } from '@/shared/utils/format';
-import { useApproveBill, useRecordBillPayment, useVendorBill, type VendorBillRow } from './api';
+import { formatDate } from '@/shared/utils/format';
+import { useApproveBill, useVendorBill, type VendorBillRow } from './api';
+import { MatchPanel } from './MatchPanel';
 import { VarianceTag } from './VarianceTag';
 
 const route = getRouteApi('/_app/vendor-bills/$id');
@@ -24,11 +22,7 @@ export function VendorBillDetailPage() {
   const { id } = route.useParams();
   const { data: b, isLoading, error } = useVendorBill(id);
   const approve = useApproveBill();
-  const pay = useRecordBillPayment();
   const toast = useToast();
-  const [payOpen, setPayOpen] = useState(false);
-  const [payAmount, setPayAmount] = useState('');
-  const [payError, setPayError] = useState<string>();
 
   if (error)
     return (
@@ -41,22 +35,6 @@ export function VendorBillDetailPage() {
   if (isLoading || !b) return <StatusMessage kind="loading" title="Loading purchase invoice…" />;
 
   const payable = b.status === 'Approved' || b.status === 'Partially paid' || b.status === 'Overdue';
-
-  const submitPayment = () => {
-    const amt = Number(payAmount);
-    if (!Number.isFinite(amt) || amt <= 0) return setPayError('Enter an amount greater than 0');
-    if (amt > b.outstanding + 0.005)
-      return setPayError(`Cannot exceed outstanding ${formatMoney(b.outstanding)}`);
-    pay.mutate(
-      { id: b.id, amount: Math.round(amt * 100) / 100 },
-      {
-        onSuccess: () => {
-          setPayOpen(false);
-          toast({ title: `Payment recorded on ${b.number}`, body: formatMoney(amt) });
-        },
-      },
-    );
-  };
 
   return (
     <div>
@@ -91,16 +69,13 @@ export function VendorBillDetailPage() {
               </Button>
             ) : null}
             {payable ? (
-              <Button
+              <ButtonLink
+                to="/payments/new"
+                search={{ vendorId: b.vendorId, billId: b.id }}
                 icon={<Banknote aria-hidden="true" />}
-                onClick={() => {
-                  setPayAmount(String(b.outstanding));
-                  setPayError(undefined);
-                  setPayOpen(true);
-                }}
               >
                 Record payment
-              </Button>
+              </ButtonLink>
             ) : null}
           </>
         }
@@ -163,6 +138,20 @@ export function VendorBillDetailPage() {
                     ),
                   },
                   { label: 'Job status', value: b.jobStatus ? <StatusBadge status={b.jobStatus} /> : '—' },
+                  {
+                    label: 'Purchase order',
+                    value: b.po ? (
+                      <Link
+                        to="/purchase-orders/$id"
+                        params={{ id: b.po.id }}
+                        className="font-mono text-brand hover:underline"
+                      >
+                        {b.po.number}
+                      </Link>
+                    ) : (
+                      'Not matched to a PO'
+                    ),
+                  },
                 ]}
               />
             </CardBody>
@@ -207,7 +196,11 @@ export function VendorBillDetailPage() {
             </CardBody>
           </Card>
 
-          {b.evidence && b.jobCategory !== 'Service' ? <EvidenceCard b={b} /> : null}
+          {b.match && b.po ? (
+            <MatchPanel match={b.match} poNumber={b.po.number} />
+          ) : b.evidence && b.jobCategory !== 'Service' ? (
+            <EvidenceCard b={b} />
+          ) : null}
         </div>
 
         <div className="space-y-6">
@@ -256,38 +249,6 @@ export function VendorBillDetailPage() {
           </Card>
         </div>
       </div>
-
-      <Dialog
-        open={payOpen}
-        onClose={() => setPayOpen(false)}
-        title={`Record payment — ${b.number}`}
-        description={`Outstanding ${formatMoney(b.outstanding)} to ${b.vendorName}`}
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setPayOpen(false)}>
-              Cancel
-            </Button>
-            <Button busy={pay.isPending} onClick={submitPayment}>
-              Record payment
-            </Button>
-          </>
-        }
-      >
-        <TextField
-          label="Amount (AED)"
-          type="number"
-          inputMode="decimal"
-          step="0.01"
-          required
-          value={payAmount}
-          error={payError}
-          hint="Partial payments are allowed."
-          onChange={(e) => {
-            setPayAmount(e.target.value);
-            setPayError(undefined);
-          }}
-        />
-      </Dialog>
     </div>
   );
 }
