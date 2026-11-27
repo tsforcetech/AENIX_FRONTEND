@@ -30,8 +30,15 @@ export interface VendorBillRow extends VendorBill {
   draftedAtCompletion: boolean;
   /** Delivery evidence on the linked job, so AP can check before approving. */
   evidence?: {
-    packingList?: { number: string; status: string };
-    grn?: { number: string; status: string };
+    /** Every inbound receipt on the job: its PL and the GRN returned for it. */
+    inbounds: {
+      id: string;
+      number: string;
+      plNumber: string;
+      plStatus: string;
+      grnNumber?: string;
+      grnStatus?: string;
+    }[];
     requests: { id: string; number: string; status: string; podNumber?: string }[];
   };
   total: number;
@@ -60,17 +67,26 @@ export interface ThreeWayMatch {
 export function proofOfWork(wo: WorkOrder | undefined): ThreeWayMatch['proof'] {
   if (!wo) return [{ label: 'Job', detail: 'Not linked to a job', ok: false }];
   const proof: ThreeWayMatch['proof'] = [];
-  if (wo.packingList || wo.grn || wo.serviceCategories.includes('Warehouse')) {
+  for (const ib of wo.inbounds) {
     proof.push(
-      wo.grn
-        ? { label: `GRN ${wo.grn.number}`, detail: wo.grn.status, ok: wo.grn.status === 'Verified' }
+      ib.grn
+        ? {
+            label: `GRN ${ib.grn.number} (${ib.number})`,
+            detail: ib.grn.status,
+            ok: ib.grn.status === 'Verified',
+          }
         : {
-            label: 'GRN',
-            detail: wo.packingList ? `Not received (PL ${wo.packingList.number} sent)` : 'Not received',
+            label: `GRN for ${ib.number}`,
+            detail:
+              ib.packingList.status === 'Sent to warehouse'
+                ? `Not received (PL ${ib.packingList.number} sent)`
+                : 'PL not sent yet',
             ok: false,
           },
     );
   }
+  if (!wo.inbounds.length && wo.serviceCategories.includes('Warehouse'))
+    proof.push({ label: 'GRN', detail: 'No inbound receipt recorded', ok: false });
   for (const r of wo.customerRequests) {
     proof.push({
       label: `POD for ${r.number}`,
@@ -132,10 +148,14 @@ function toRow(b: VendorBill): VendorBillRow {
       (wo.purchaseInvoiceIds?.includes(b.id) ?? true),
     evidence: wo
       ? {
-          packingList: wo.packingList
-            ? { number: wo.packingList.number, status: wo.packingList.status }
-            : undefined,
-          grn: wo.grn ? { number: wo.grn.number, status: wo.grn.status } : undefined,
+          inbounds: wo.inbounds.map((ib) => ({
+            id: ib.id,
+            number: ib.number,
+            plNumber: ib.packingList.number,
+            plStatus: ib.packingList.status,
+            grnNumber: ib.grn?.number,
+            grnStatus: ib.grn?.status,
+          })),
           requests: wo.customerRequests.map((r) => ({
             id: r.id,
             number: r.number,

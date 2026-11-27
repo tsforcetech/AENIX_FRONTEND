@@ -34,7 +34,7 @@ import {
   useWorkOrderAction,
   type WorkOrderDetail,
 } from './api';
-import { CustomerRequestsCard, InboundCard, PurchasingCard } from './JobDocuments';
+import { CustomerRequestsCard, InboundCard, JobStockCard, PurchasingCard } from './JobDocuments';
 import { AssignVendorDialog } from './AssignVendorDialog';
 import { SourceBadge } from './SourceBadge';
 
@@ -207,8 +207,11 @@ export function WorkOrderDetailPage() {
             </CardBody>
           </Card>
 
-          {wo.serviceCategories.includes('Warehouse') || wo.hasWarehouse || wo.packingList ? (
-            <InboundCard wo={wo} />
+          {wo.serviceCategories.includes('Warehouse') || wo.hasWarehouse || wo.inbounds.length ? (
+            <>
+              <JobStockCard wo={wo} />
+              <InboundCard wo={wo} />
+            </>
           ) : null}
 
           <CustomerRequestsCard wo={wo} />
@@ -456,8 +459,12 @@ function CompleteDialog({
   const flags = docFlags(wo);
   const toBill = wo.purchaseOrders.filter((p) => !p.vendorBillId && p.status !== 'Cancelled');
   const warnings = [
-    flags.grnVariance ? 'The GRN does not match the product list (variance unresolved).' : null,
-    flags.awaitingGrn ? 'The PL was sent but no GRN has been uploaded.' : null,
+    flags.grnVariance
+      ? `${flags.grnVariance} inbound GRN${flags.grnVariance === 1 ? '' : 's'} do not match the product list (variance unresolved).`
+      : null,
+    flags.awaitingGrn
+      ? `${flags.awaitingGrn} inbound${flags.awaitingGrn === 1 ? '' : 's'} sent to the warehouse with no GRN uploaded yet.`
+      : null,
     flags.awaitingPod ? `${flags.awaitingPod} customer request(s) have no POD yet.` : null,
     flags.podVariance ? `${flags.podVariance} POD(s) do not match the request.` : null,
   ].filter((w): w is string => !!w);

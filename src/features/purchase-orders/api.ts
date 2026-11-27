@@ -2,13 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { billTotals } from '@/domain/calc';
 import type {
   CustomerRequest,
-  Grn,
-  PackingList,
   PurchaseOrder,
   PurchaseOrderStatus,
   ServiceCategory,
   TransportMode,
   VendorBill,
+  Inbound,
 } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
@@ -64,22 +63,18 @@ function toRow(po: PurchaseOrder): PurchaseOrderRow {
   };
 }
 
-/** Proof of work for the job: inbound GRN (if a PL exists) and POD per customer request. */
-function proofFor(wo: {
-  packingList?: PackingList;
-  grn?: Grn;
-  customerRequests: CustomerRequest[];
-}): ProofItem[] {
+/** Proof of work for the job: the GRN of EVERY inbound receipt and the POD of every customer request. */
+function proofFor(wo: { inbounds: Inbound[]; customerRequests: CustomerRequest[] }): ProofItem[] {
   const items: ProofItem[] = [];
-  if (wo.packingList) {
-    const r = grnResult(wo);
+  for (const ib of wo.inbounds) {
+    const r = grnResult(ib);
     items.push({
       kind: 'GRN',
-      label: wo.grn
-        ? `${wo.grn.number} vs ${wo.packingList.number}`
-        : `${wo.packingList.number} — no GRN yet`,
-      status: wo.grn ? (r?.ok ? 'Match' : wo.grn.status) : 'Not received',
-      ok: !!wo.grn && !!r?.ok,
+      label: ib.grn
+        ? `${ib.number}: ${ib.grn.number} vs ${ib.packingList.number}`
+        : `${ib.number}: ${ib.packingList.number} — no GRN yet`,
+      status: ib.grn ? (r?.ok ? 'Match' : ib.grn.status) : 'Not received',
+      ok: !!ib.grn && !!r?.ok,
     });
   }
   for (const req of wo.customerRequests) {

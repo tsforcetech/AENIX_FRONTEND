@@ -4,8 +4,16 @@ import type { DocFlags } from './api';
 /** Compact document-status chips: PL → GRN and request → POD. */
 export function DocFlagChips({ flags }: { flags: DocFlags }) {
   const chips: { label: string; tone: 'danger' | 'warning' | 'info' }[] = [];
-  if (flags.grnVariance) chips.push({ label: 'GRN variance', tone: 'danger' });
-  else if (flags.awaitingGrn) chips.push({ label: 'Awaiting GRN', tone: 'info' });
+  if (flags.grnVariance)
+    chips.push({
+      label: flags.grnVariance > 1 ? `${flags.grnVariance} GRN variances` : 'GRN variance',
+      tone: 'danger',
+    });
+  else if (flags.awaitingGrn)
+    chips.push({
+      label: flags.awaitingGrn > 1 ? `${flags.awaitingGrn} awaiting GRN` : 'Awaiting GRN',
+      tone: 'info',
+    });
   if (flags.podVariance)
     chips.push({
       label: `POD variance${flags.podVariance > 1 ? ` ×${flags.podVariance}` : ''}`,

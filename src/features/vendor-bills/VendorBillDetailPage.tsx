@@ -256,7 +256,7 @@ export function VendorBillDetailPage() {
 /** GRN / POD status on the source job so AP can check delivery evidence before approving. */
 function EvidenceCard({ b }: { b: VendorBillRow }) {
   const ev = b.evidence!;
-  const hasAny = !!ev.packingList || !!ev.grn || ev.requests.length > 0;
+  const hasAny = ev.inbounds.length > 0 || ev.requests.length > 0;
   return (
     <Card>
       <CardHeader
@@ -279,27 +279,20 @@ function EvidenceCard({ b }: { b: VendorBillRow }) {
           <p className="text-body-s text-fg-muted">No GRN or customer requests recorded on this job.</p>
         ) : (
           <ul className="divide-y divide-border-subtle text-body-s">
-            {ev.packingList ? (
-              <li className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+            {ev.inbounds.map((ib) => (
+              <li key={ib.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
                 <span>
-                  Product list <span className="font-mono text-[13px]">{ev.packingList.number}</span>
-                </span>
-                <StatusBadge status={ev.packingList.status} />
-              </li>
-            ) : null}
-            {ev.packingList || ev.grn ? (
-              <li className="flex flex-wrap items-center justify-between gap-2 py-2.5">
-                <span>
-                  GRN{' '}
-                  {ev.grn ? (
-                    <span className="font-mono text-[13px]">{ev.grn.number}</span>
+                  Inbound <span className="font-mono text-[13px]">{ib.number}</span> · PL{' '}
+                  <span className="font-mono text-[13px]">{ib.plNumber}</span> · GRN{' '}
+                  {ib.grnNumber ? (
+                    <span className="font-mono text-[13px]">{ib.grnNumber}</span>
                   ) : (
                     <span className="text-fg-muted">not received</span>
                   )}
                 </span>
-                {ev.grn ? <StatusBadge status={ev.grn.status} /> : <Badge tone="warning">Pending</Badge>}
+                {ib.grnStatus ? <StatusBadge status={ib.grnStatus} /> : <Badge tone="warning">Pending</Badge>}
               </li>
-            ) : null}
+            ))}
             {ev.requests.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
                 <span>
