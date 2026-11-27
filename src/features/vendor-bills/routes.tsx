@@ -1,8 +1,8 @@
-import { ModulePlaceholder } from '@/shared/ui/ModulePlaceholder';
 import { createRoute } from '@tanstack/react-router';
 import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
 import { VendorBillDetailPage } from './VendorBillDetailPage';
 import { VendorBillsListPage } from './VendorBillsListPage';
+import { NewVendorInvoicePage } from './NewVendorInvoicePage';
 
 export function vendorBillsRoutes(parent: AppParentRoute) {
   return [
@@ -21,7 +21,7 @@ export function vendorBillsRoutes(parent: AppParentRoute) {
             ? s.purchaseOrderId.slice(0, 64)
             : undefined,
       }),
-      component: () => <ModulePlaceholder title="Record vendor invoice" />,
+      component: NewVendorInvoicePage,
     }),
     createRoute({ getParentRoute: () => parent, path: 'vendor-bills/$id', component: VendorBillDetailPage }),
   ] as const;

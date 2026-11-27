@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { daysBetween, invoiceTotals } from '@/domain/calc';
-import type { Collection, Customer, Invoice } from '@/domain/types';
+import { customerBalance } from '@/domain/balances';
+import type { Collection, Customer, Invoice, InvoiceLine, SalesOrder, WorkOrderStatus } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { PROTO_TODAY } from '@/prototype/seed';
-import { latency, logActivity, protoDb } from '@/prototype/store';
+import { latency, logActivity, newId, protoDb } from '@/prototype/store';
 import { ACCOUNTS, postJournal } from '@/features/accounting/ledger';
 
 /**
@@ -20,7 +21,9 @@ export interface InvoiceRow extends Invoice {
   outstanding: number;
   daysOverdue: number;
   sourceLabel: string;
-  sourceType: 'Job' | 'Storage' | 'Manual';
+  sourceType: 'Job' | 'Storage' | 'Manual' | 'Sales orders';
+  /** Sales orders billed by this invoice (one invoice may bill several). */
+  salesOrders: { id: string; number: string }[];
 }
 
 export interface InvoiceDetail extends InvoiceRow {
@@ -54,13 +57,30 @@ function toRow(inv: Invoice): InvoiceRow {
   const db = protoDb.get();
   const wo = inv.workOrderId ? db.workOrders.find((w) => w.id === inv.workOrderId) : undefined;
   const run = inv.storageRunId ? db.storageRuns.find((r) => r.id === inv.storageRunId) : undefined;
+  const soIds = [
+    ...new Set([
+      ...(inv.salesOrderIds ?? []),
+      ...inv.lines.flatMap((l) => (l.salesOrderId ? [l.salesOrderId] : [])),
+    ]),
+  ];
+  const salesOrders = soIds.map((id) => ({
+    id,
+    number: db.salesOrders.find((x) => x.id === id)?.number ?? id,
+  }));
   return {
     ...inv,
     customerName: lookupName.customer(inv.customerId),
     ...t,
     daysOverdue: inv.status === 'Overdue' ? Math.max(0, daysBetween(inv.dueDate, PROTO_TODAY)) : 0,
-    sourceLabel: wo ? wo.number : run ? run.number : 'Manual',
-    sourceType: wo ? 'Job' : run ? 'Storage' : 'Manual',
+    sourceLabel: wo
+      ? wo.number
+      : run
+        ? run.number
+        : salesOrders.length
+          ? salesOrders.map((x) => x.number).join(', ')
+          : 'Manual',
+    sourceType: wo ? 'Job' : run ? 'Storage' : salesOrders.length ? 'Sales orders' : 'Manual',
+    salesOrders,
   };
 }
 
@@ -76,7 +96,8 @@ export const invoicesApi = {
     const rows = [...protoDb.get().invoices].sort((a, b) => b.number.localeCompare(a.number)).map(toRow);
     return latency(
       paginate(rows, params, {
-        searchText: (r) => `${r.number} ${r.customerName} ${r.sourceLabel}`,
+        searchText: (r) =>
+          `${r.number} ${r.customerName} ${r.sourceLabel} ${r.salesOrders.map((x) => x.number).join(' ')}`,
         status: (r) => r.status,
       }),
     );
@@ -134,6 +155,55 @@ export const invoicesApi = {
       },
       payments,
     });
+  },
+  /** Sales orders of a customer that still have something to invoice (drafts count as billed). */
+  invoiceableSalesOrders(customerId: string): Promise<InvoiceableSalesOrder[]> {
+    return latency(invoiceableSalesOrders(customerId), 80);
+  },
+  /** One invoice can bill several sales orders of the same customer. */
+  create(input: NewInvoiceInput): Promise<Invoice> {
+    const db = protoDb.get();
+    const lines = input.lines.filter((l) => l.quantity > 0);
+    if (!lines.length) return Promise.reject(new Error('Select at least one line to invoice'));
+    const soIds = [...new Set(lines.map((l) => l.salesOrderId))];
+    const sos = soIds.map((id) => db.salesOrders.find((x) => x.id === id));
+    if (sos.some((x) => !x || x.customerId !== input.customerId))
+      return Promise.reject(new Error('All sales orders must belong to the selected customer'));
+    const jobs = db.workOrders.filter((w) => w.salesOrderId && soIds.includes(w.salesOrderId));
+    const next = Math.max(3000, ...db.invoices.map((i) => Number(i.number.split('-')[1]) || 0)) + 1;
+    const inv: Invoice = {
+      id: newId('inv'),
+      number: `INV-${next}`,
+      customerId: input.customerId,
+      workOrderId: jobs.length === 1 ? jobs[0]!.id : undefined,
+      salesOrderIds: soIds,
+      issueDate: input.issueDate,
+      dueDate: input.dueDate,
+      lines: lines.map((l): InvoiceLine => ({
+        id: newId('il'),
+        salesOrderId: l.salesOrderId,
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        vatRate: 0.05,
+      })),
+      paid: 0,
+      status: 'Draft',
+    };
+    protoDb.update((s) => ({
+      ...s,
+      invoices: [inv, ...s.invoices],
+      workOrders: s.workOrders.map((w) =>
+        w.id === inv.workOrderId && !w.invoiceId ? { ...w, invoiceId: inv.id } : w,
+      ),
+    }));
+    logActivity({
+      entity: 'Invoice',
+      entityId: inv.id,
+      entityRef: inv.number,
+      action: `drafted an invoice for ${sos.map((x) => x!.number).join(', ')}`,
+    });
+    return latency(inv, 250);
   },
   /** Draft → Posted: the invoice becomes read-only and posts AR / revenue / VAT. */
   post(id: string): Promise<void> {
@@ -242,8 +312,124 @@ export function openInvoicesForCustomer(customerId: string): InvoiceRow[] {
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 }
 
+export interface InvoiceableLine {
+  key: string;
+  salesOrderId: string;
+  description: string;
+  unit: string;
+  unitPrice: number;
+  /** Quantity still to bill (order quantity minus what earlier invoices already billed). */
+  quantity: number;
+}
+
+export interface InvoiceableSalesOrder {
+  id: string;
+  number: string;
+  customerPoRef: string;
+  status: SalesOrder['status'];
+  orderDate: string;
+  orderValue: number;
+  invoiced: number;
+  notInvoiced: number;
+  jobs: { id: string; number: string; status: WorkOrderStatus }[];
+  lines: InvoiceableLine[];
+}
+
+export interface NewInvoiceInput {
+  customerId: string;
+  issueDate: string;
+  dueDate: string;
+  lines: { salesOrderId: string; description: string; quantity: number; unitPrice: number }[];
+}
+
+/**
+ * Remaining billable lines per sales order. Every non-cancelled invoice (drafts included) counts,
+ * so a line is never billed twice. Matching is by sales order + description (prototype rule).
+ */
+export function invoiceableSalesOrders(customerId: string): InvoiceableSalesOrder[] {
+  const db = protoDb.get();
+  const balance = customerBalance(customerId, db);
+  const billedQty = new Map<string, number>();
+  for (const inv of db.invoices) {
+    if (inv.customerId !== customerId || inv.status === 'Cancelled') continue;
+    for (const l of inv.lines) {
+      const soId = l.salesOrderId ?? (inv.salesOrderIds?.length === 1 ? inv.salesOrderIds[0] : undefined);
+      if (!soId) continue;
+      const k = `${soId}|${l.description}`;
+      billedQty.set(k, (billedQty.get(k) ?? 0) + l.quantity);
+    }
+  }
+  return db.salesOrders
+    .filter((so) => so.customerId === customerId && so.status !== 'Cancelled' && so.status !== 'Draft')
+    .map((so) => {
+      const lines = so.lines
+        .map((l) => {
+          const k = `${so.id}|${l.description}`;
+          const left = Math.max(0, l.quantity - (billedQty.get(k) ?? 0));
+          billedQty.set(k, Math.max(0, (billedQty.get(k) ?? 0) - l.quantity));
+          return {
+            key: `${so.id}|${l.id}`,
+            salesOrderId: so.id,
+            description: l.description,
+            unit: l.unit,
+            unitPrice: l.unitPrice,
+            quantity: left,
+          };
+        })
+        .filter((l) => l.quantity > 0);
+      const b = balance.salesOrders.find((x) => x.salesOrderId === so.id);
+      return {
+        id: so.id,
+        number: so.number,
+        customerPoRef: so.customerPoRef,
+        status: so.status,
+        orderDate: so.orderDate,
+        orderValue: b?.orderValue ?? 0,
+        invoiced: b?.invoiced ?? 0,
+        notInvoiced: Math.round(lines.reduce((s, l) => s + l.quantity * l.unitPrice * 1.05, 0) * 100) / 100,
+        jobs: db.workOrders
+          .filter((w) => w.salesOrderId === so.id)
+          .map((w) => ({ id: w.id, number: w.number, status: w.status })),
+        lines,
+      };
+    })
+    .filter((so) => so.lines.length > 0);
+}
+
+export function useInvoiceableSalesOrders(customerId: string | undefined) {
+  return useQuery({
+    queryKey: ['invoices', 'invoiceable', customerId],
+    queryFn: () => invoicesApi.invoiceableSalesOrders(customerId!),
+    enabled: !!customerId,
+  });
+}
+
+export function useCreateInvoice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ input, post }: { input: NewInvoiceInput; post: boolean }) => {
+      const inv = await invoicesApi.create(input);
+      if (post) await invoicesApi.post(inv.id);
+      return inv;
+    },
+    onSuccess: () => {
+      invalidateFinance(qc);
+      void qc.invalidateQueries({ queryKey: ['sales-orders'] });
+      void qc.invalidateQueries({ queryKey: ['customers'] });
+    },
+  });
+}
+
 export function invalidateFinance(qc: QueryClient) {
-  for (const key of ['invoices', 'vendor-bills', 'collections', 'accounting', 'home'])
+  for (const key of [
+    'invoices',
+    'vendor-bills',
+    'collections',
+    'payments',
+    'purchase-orders',
+    'accounting',
+    'home',
+  ])
     void qc.invalidateQueries({ queryKey: [key] });
 }
 

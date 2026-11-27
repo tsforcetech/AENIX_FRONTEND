@@ -1,8 +1,8 @@
-import { ModulePlaceholder } from '@/shared/ui/ModulePlaceholder';
 import { createRoute } from '@tanstack/react-router';
 import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
 import { InvoiceDetailPage } from './InvoiceDetailPage';
 import { InvoicesListPage } from './InvoicesListPage';
+import { NewInvoicePage } from './NewInvoicePage';
 
 export function invoicesRoutes(parent: AppParentRoute) {
   return [
@@ -20,7 +20,7 @@ export function invoicesRoutes(parent: AppParentRoute) {
         salesOrderId:
           typeof s.salesOrderId === 'string' && s.salesOrderId ? s.salesOrderId.slice(0, 64) : undefined,
       }),
-      component: () => <ModulePlaceholder title="New customer invoice" />,
+      component: NewInvoicePage,
     }),
     createRoute({ getParentRoute: () => parent, path: 'invoices/$id', component: InvoiceDetailPage }),
   ] as const;

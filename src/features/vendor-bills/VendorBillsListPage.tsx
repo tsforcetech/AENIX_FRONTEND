@@ -8,6 +8,7 @@ import { DataTable, Pagination, type Column } from '@/shared/ui/DataTable';
 import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { ButtonLink } from '@/shared/ui/Button';
 import { formatDate } from '@/shared/utils/format';
 import { useVendorBills, type VendorBillRow } from './api';
 import { VarianceTag } from './VarianceTag';
@@ -38,10 +39,11 @@ const columns: Column<VendorBillRow>[] = [
   },
   {
     key: 'job',
-    header: 'Job',
+    header: 'Job / PO',
     hideOnMobile: true,
     cell: (r) => (
       <div className="space-y-1 whitespace-nowrap">
+        {r.po ? <p className="font-mono text-caption text-fg-muted">{r.po.number}</p> : null}
         {r.workOrderNumber && r.jobCategory ? (
           <p className="flex items-center gap-1.5">
             <JobKindIcon category={r.jobCategory} mode={r.jobMode} className="size-4 text-fg-muted" />
@@ -56,7 +58,13 @@ const columns: Column<VendorBillRow>[] = [
             Drafted at job completion
           </Badge>
         ) : null}
-        {r.variance !== undefined ? <VarianceTag variance={r.variance} /> : null}
+        {r.match ? (
+          <Badge tone={r.match.ok ? 'success' : 'danger'} dot={false}>
+            {r.match.ok ? '3-way matched' : '3-way: review'}
+          </Badge>
+        ) : r.variance !== undefined ? (
+          <VarianceTag variance={r.variance} />
+        ) : null}
       </div>
     ),
   },
@@ -105,7 +113,12 @@ export function VendorBillsListPage() {
     <div>
       <PageHeader
         title="Purchase invoices"
-        description="Vendor invoices for completed jobs, matched to the agreed job cost and delivery evidence (GRN / POD). Approve, then pay."
+        description="Vendor invoices recorded against purchase orders and checked with a 3-way match (PO vs GRN / POD vs invoice). Approve, then pay."
+        actions={
+          <ButtonLink to="/purchase-orders" variant="secondary">
+            Record from a purchase order
+          </ButtonLink>
+        }
       />
       <Card>
         <ListToolbar

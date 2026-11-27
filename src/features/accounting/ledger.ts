@@ -16,6 +16,8 @@ export const ACCOUNTS = {
   costOfSales: '5100 Freight cost of sales',
   freightRevenue: '4100 Freight revenue',
   storageRevenue: '4200 Storage revenue',
+  customerAdvances: '2300 Customer advances',
+  pdcIssued: '2150 PDC issued (cheques payable)',
 } as const;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;

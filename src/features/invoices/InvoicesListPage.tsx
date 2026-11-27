@@ -8,6 +8,8 @@ import { KpiCard } from '@/shared/ui/KpiCard';
 import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
+import { ButtonLink } from '@/shared/ui/Button';
+import { Plus } from 'lucide-react';
 import { formatDate, formatMoneyCompact } from '@/shared/utils/format';
 import { useInvoiceKpis, useInvoices, type InvoiceRow } from './api';
 
@@ -34,16 +36,26 @@ const columns: Column<InvoiceRow>[] = [
   },
   {
     key: 'source',
-    header: 'Source',
+    header: 'Billed from',
     hideOnMobile: true,
-    cell: (r) => (
-      <div className="whitespace-nowrap">
-        <p className="font-mono text-[13px]">{r.sourceLabel}</p>
-        <p className="text-caption text-fg-muted">
-          {r.sourceType === 'Job' ? 'Work order' : r.sourceType === 'Storage' ? 'Storage billing' : 'Manual'}
-        </p>
-      </div>
-    ),
+    cell: (r) =>
+      r.salesOrders.length ? (
+        <div className="flex max-w-56 flex-wrap gap-x-2 gap-y-0.5">
+          {r.salesOrders.map((so) => (
+            <DocRef key={so.id}>{so.number}</DocRef>
+          ))}
+          {r.salesOrders.length > 1 ? (
+            <span className="w-full text-caption text-fg-muted">{r.salesOrders.length} sales orders</span>
+          ) : null}
+        </div>
+      ) : (
+        <div className="whitespace-nowrap">
+          <p className="font-mono text-[13px]">{r.sourceLabel}</p>
+          <p className="text-caption text-fg-muted">
+            {r.sourceType === 'Storage' ? 'Storage run' : r.sourceType}
+          </p>
+        </div>
+      ),
   },
   {
     key: 'due',
@@ -92,7 +104,12 @@ export function InvoicesListPage() {
     <div>
       <PageHeader
         title="Invoices"
-        description="Customer tax invoices from work orders and storage billing. Posted invoices are read-only — corrections go through credit notes."
+        description="Customer tax invoices. One invoice can bill several sales orders of the same customer. Posted invoices are read-only — corrections go through credit notes."
+        actions={
+          <ButtonLink to="/invoices/new" icon={<Plus aria-hidden="true" />}>
+            New invoice
+          </ButtonLink>
+        }
       />
       <section aria-label="Receivables summary" className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard

@@ -4,11 +4,14 @@ import { AccountingPage } from './AccountingPage';
 import { JournalDetailPage } from './JournalDetailPage';
 
 export interface AccountingSearch extends ListSearch {
-  view?: 'trial-balance';
+  view?: 'trial-balance' | 'accounts';
 }
 
 function validateAccountingSearch(s: Record<string, unknown>): AccountingSearch {
-  return { ...validateListSearch(s), view: s.view === 'trial-balance' ? 'trial-balance' : undefined };
+  return {
+    ...validateListSearch(s),
+    view: s.view === 'trial-balance' || s.view === 'accounts' ? s.view : undefined,
+  };
 }
 
 export function accountingRoutes(parent: AppParentRoute) {
