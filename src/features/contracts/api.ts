@@ -20,7 +20,7 @@ export interface ContractDetail extends ContractRow {
   quotationNumber?: string;
   workOrders: (Pick<
     WorkOrder,
-    'id' | 'number' | 'status' | 'origin' | 'destination' | 'createdAt' | 'serviceCategory'
+    'id' | 'number' | 'status' | 'origin' | 'destination' | 'createdAt' | 'serviceCategory' | 'serviceCategories'
   > & {
     revenue: number;
   })[];
@@ -66,6 +66,7 @@ export const contractsApi = {
           origin: w.origin,
           destination: w.destination,
           serviceCategory: w.serviceCategory,
+          serviceCategories: w.serviceCategories,
           createdAt: w.createdAt,
           revenue: workOrderFinancials(w).revenue,
         })),

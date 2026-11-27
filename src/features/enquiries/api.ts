@@ -24,6 +24,7 @@ export interface EnquiryRow extends Enquiry {
 export interface EnquiryInput {
   customerId: string;
   serviceCategory: ServiceCategory;
+  serviceCategories: ServiceCategory[];
   mode?: TransportMode;
   origin: string;
   destination: string;
@@ -38,7 +39,7 @@ const toRow = (e: Enquiry): EnquiryRow => ({ ...e, customerName: lookupName.cust
 export const enquiriesApi = {
   list(params: ListParams): Promise<Page<EnquiryRow>> {
     const rows = [...protoDb.get().enquiries]
-      .filter((e) => !params.type || e.serviceCategory === params.type)
+      .filter((e) => !params.type || e.serviceCategories.includes(params.type as ServiceCategory))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(toRow);
     return latency(

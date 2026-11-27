@@ -10,8 +10,8 @@ import type {
   TransportMode,
   WorkOrder,
 } from '@/domain/types';
-import { jobKindLabel } from '@/domain/workflow';
-import { locationText } from '@/features/sales-orders/commercial-ui';
+import { categoriesFromLines, primaryCategory, servicesLabel } from '@/domain/workflow';
+import { locationTextMulti } from '@/features/sales-orders/commercial-ui';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
@@ -39,7 +39,8 @@ export interface QuotationDetail extends QuotationRow {
 export interface QuotationInput {
   enquiryId?: string;
   customerId: string;
-  serviceCategory: ServiceCategory;
+  /** Selected service types; the stored list also includes every type found on the lines. */
+  serviceCategories: ServiceCategory[];
   mode?: TransportMode;
   origin: string;
   destination: string;
@@ -53,6 +54,7 @@ export interface QuotationInput {
 export interface QuotationDraftPrefill {
   customerId: string;
   serviceCategory: ServiceCategory;
+  serviceCategories: ServiceCategory[];
   mode?: TransportMode;
   origin: string;
   destination: string;
@@ -114,7 +116,7 @@ function transition(id: string, status: QuotationStatus, action: string) {
 export const quotationsApi = {
   list(params: ListParams): Promise<Page<QuotationRow>> {
     const rows = [...protoDb.get().quotations]
-      .filter((q) => !params.type || q.serviceCategory === params.type)
+      .filter((q) => !params.type || q.serviceCategories.includes(params.type as ServiceCategory))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .map(toRow);
     return latency(
@@ -169,7 +171,7 @@ export const quotationsApi = {
       const unitCost = rate?.rate ?? 0;
       return {
         serviceId,
-        description: `${svc?.name ?? 'Service'} — ${locationText(e.serviceCategory, e.origin, e.destination)}`,
+        description: `${svc?.name ?? 'Service'} — ${locationTextMulti(e.serviceCategories, e.origin, e.destination)}`,
         quantity: 1,
         unit: svc?.unit ?? 'Unit',
         unitCost,
@@ -180,6 +182,7 @@ export const quotationsApi = {
       {
         customerId: e.customerId,
         serviceCategory: e.serviceCategory,
+        serviceCategories: e.serviceCategories,
         mode: e.mode,
         origin: e.origin,
         destination: e.destination,
@@ -192,8 +195,12 @@ export const quotationsApi = {
   create(input: QuotationInput): Promise<Quotation> {
     const db = protoDb.get();
     const next = Math.max(...db.quotations.map((q) => Number(q.number.split('-')[1]))) + 1;
-    const { submit, lines, ...rest } = input;
+    const { submit, lines, serviceCategories: selected, ...rest } = input;
+    const modeOf = (serviceId: string) => db.services.find((x) => x.id === serviceId)?.mode;
+    const serviceCategories = categoriesFromLines(lines, modeOf, selected);
     const q: Quotation = {
+      serviceCategories,
+      serviceCategory: primaryCategory(serviceCategories),
       id: newId('qt'),
       number: `QT-${next}`,
       version: 1,
@@ -265,7 +272,7 @@ export const quotationsApi = {
       number: `CTR-${year}-${String(seq).padStart(3, '0')}`,
       customerId: q.customerId,
       quotationId: q.id,
-      title: `${locationText(q.serviceCategory, q.origin, q.destination)} — ${jobKindLabel(q.serviceCategory, q.mode).toLowerCase()} rates`,
+      title: `${locationTextMulti(q.serviceCategories, q.origin, q.destination)} — ${servicesLabel(q.serviceCategories, q.mode).toLowerCase()} rates`,
       startDate: start.toISOString().slice(0, 10),
       endDate: end.toISOString().slice(0, 10),
       status: 'Active',

@@ -15,7 +15,8 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
 import { useCreateSalesOrder, useSalesOrderPrefill, type SalesOrderPrefill } from './api';
-import { locationLabel, ModePicker, serviceFitsType, ServiceTypePicker } from './commercial-ui';
+import { categoriesFromLines, serviceCategoryLabel } from '@/domain/workflow';
+import { locationLabel, ModePicker, serviceFitsTypes, ServiceTypesPicker } from './commercial-ui';
 
 const route = getRouteApi('/_app/sales-orders/new');
 
@@ -31,7 +32,9 @@ const lineSchema = z.object({
 const schema = z
   .object({
     customerId: z.string().min(1, 'Choose a customer'),
-    serviceCategory: z.enum(['Transport', 'Warehouse', 'Service']),
+    serviceCategories: z
+      .array(z.enum(['Transport', 'Warehouse', 'Service']))
+      .min(1, 'Select at least one service type'),
     mode: z.enum(['Road', 'Sea', 'Air']),
     origin: z.string().trim().min(2, 'Enter a location').max(80),
     destination: z.string().trim().max(80),
@@ -41,7 +44,7 @@ const schema = z
     lines: z.array(lineSchema).min(1, 'Add at least one price line'),
   })
   .superRefine((v, ctx) => {
-    if (v.serviceCategory === 'Transport' && v.destination.length < 2)
+    if (v.serviceCategories.includes('Transport') && v.destination.length < 2)
       ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
   });
 type FormInput = z.input<typeof schema>;
@@ -86,21 +89,28 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
     resolver: zodResolver(schema),
     defaultValues: {
       customerId: prefill.customerId,
-      serviceCategory: prefill.serviceCategory,
+      serviceCategories: prefill.serviceCategories,
       mode: prefill.mode ?? 'Road',
       origin: prefill.origin,
       destination: prefill.destination,
       customerPoRef: '',
       orderDate: '2026-11-23',
-      notes: '',
+      notes: prefill.notes ?? '',
       lines: prefill.lines.length ? prefill.lines : [emptyLine],
     },
   });
-  const category = useController({ control, name: 'serviceCategory' });
+  const cats = useController({ control, name: 'serviceCategories' });
   const mode = useController({ control, name: 'mode' });
   const { fields, append, remove } = useFieldArray({ control, name: 'lines' });
   const watchedLines = useWatch({ control, name: 'lines' }) ?? [];
-  const type = category.field.value;
+  const selected = cats.field.value;
+  // Types found on the price lines are always included (one order can mix services).
+  const lineTypes = categoriesFromLines(
+    watchedLines.map((l) => ({ serviceId: l?.serviceId ?? '' })),
+    (id) => services.data?.find((s) => s.value === id)?.mode,
+  );
+  const transport = selected.includes('Transport') || lineTypes.includes('Transport');
+  const locationKind = transport ? 'Transport' : selected.includes('Warehouse') ? 'Warehouse' : 'Service';
   const t = totals(
     watchedLines.map((l) => ({
       quantity: Number(l?.quantity) || 0,
@@ -110,7 +120,8 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
   );
   const serviceChoices = (services.data ?? []).filter(
     (s) =>
-      serviceFitsType(s.mode, type, mode.field.value) || watchedLines.some((l) => l?.serviceId === s.value),
+      serviceFitsTypes(s.mode, selected, mode.field.value) ||
+      watchedLines.some((l) => l?.serviceId === s.value),
   );
 
   const onServiceChange = (index: number, serviceId: string) => {
@@ -124,8 +135,8 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
     setConfirmMode(confirm);
     const so = await create.mutateAsync({
       ...v,
-      mode: v.serviceCategory === 'Transport' ? v.mode : undefined,
-      destination: v.serviceCategory === 'Transport' ? v.destination : '',
+      mode: transport ? v.mode : undefined,
+      destination: transport ? v.destination : '',
       enquiryId: prefill.enquiryId,
       quotationId: prefill.quotationId,
       contractId: prefill.contractId,
@@ -133,7 +144,7 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
     });
     toast({
       title: `${so.number} ${confirm ? 'confirmed' : 'saved as draft'}`,
-      body: confirm ? 'Create the work order to start the job.' : undefined,
+      body: confirm ? 'Create the job (work order) to start the work.' : undefined,
     });
     void navigate({ to: '/sales-orders/$id', params: { id: so.id } });
   };
@@ -192,23 +203,40 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
         </Card>
 
         <Card>
-          <CardHeader title="Service" />
+          <CardHeader
+            title="Services"
+            description="One sales order can combine transport, warehouse and other services."
+          />
           <CardBody className="grid gap-5 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <ServiceTypePicker name={category.field.name} value={type} onChange={category.field.onChange} />
+              <ServiceTypesPicker
+                value={selected}
+                error={errors.serviceCategories?.message}
+                onChange={cats.field.onChange}
+              />
+              {lineTypes.some((c) => !selected.includes(c)) ? (
+                <p className="mt-2 text-caption text-fg-muted">
+                  Price lines also include{' '}
+                  {lineTypes
+                    .filter((c) => !selected.includes(c))
+                    .map((c) => serviceCategoryLabel[c])
+                    .join(', ')}{' '}
+                  — saved with the order.
+                </p>
+              ) : null}
             </div>
-            {type === 'Transport' ? (
+            {transport ? (
               <div className="sm:col-span-2">
                 <ModePicker name={mode.field.name} value={mode.field.value} onChange={mode.field.onChange} />
               </div>
             ) : null}
             <TextField
-              label={type === 'Transport' ? 'Origin' : locationLabel(type)}
+              label={transport ? 'Origin' : locationLabel(locationKind)}
               required
               error={errors.origin?.message}
               {...register('origin')}
             />
-            {type === 'Transport' ? (
+            {transport ? (
               <TextField
                 label="Destination"
                 required

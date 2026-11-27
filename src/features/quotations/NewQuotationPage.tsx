@@ -2,10 +2,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import { Plus, Send, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { useFieldArray, useForm, useWatch } from 'react-hook-form';
+import { useController, useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
-import { SERVICE_CATEGORIES, serviceCategoryLabel } from '@/domain/workflow';
-import { locationLabel } from '@/features/sales-orders/commercial-ui';
+import { categoriesFromLines, serviceCategoryLabel } from '@/domain/workflow';
+import { locationLabel, ServiceTypesPicker } from '@/features/sales-orders/commercial-ui';
 import { useCustomerOptions, useServiceOptions } from '@/shared/data/lookups';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
@@ -31,7 +31,9 @@ const lineSchema = z.object({
 const schema = z
   .object({
     customerId: z.string().min(1, 'Choose a customer'),
-    serviceCategory: z.enum(['Transport', 'Warehouse', 'Service']),
+    serviceCategories: z
+      .array(z.enum(['Transport', 'Warehouse', 'Service']))
+      .min(1, 'Select at least one service type'),
     mode: z.enum(['Road', 'Sea', 'Air']),
     origin: z.string().trim().min(2, 'Enter a location').max(80),
     destination: z.string().trim().max(80),
@@ -41,7 +43,7 @@ const schema = z
     lines: z.array(lineSchema).min(1, 'Add at least one price line'),
   })
   .superRefine((v, ctx) => {
-    if (v.serviceCategory === 'Transport' && v.destination.length < 2)
+    if (v.serviceCategories.includes('Transport') && v.destination.length < 2)
       ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
   });
 type FormInput = z.input<typeof schema>;
@@ -87,7 +89,7 @@ function QuotationForm({
     resolver: zodResolver(schema),
     defaultValues: {
       customerId: prefill?.customerId ?? '',
-      serviceCategory: prefill?.serviceCategory ?? 'Transport',
+      serviceCategories: prefill?.serviceCategories ?? ['Transport'],
       mode: prefill?.mode ?? 'Road',
       origin: prefill?.origin ?? '',
       destination: prefill?.destination ?? '',
@@ -101,7 +103,15 @@ function QuotationForm({
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'lines' });
   const watchedLines = useWatch({ control, name: 'lines' }) ?? [];
-  const category = useWatch({ control, name: 'serviceCategory' });
+  const cats = useController({ control, name: 'serviceCategories' });
+  // Types found on the price lines are always included (one quote can mix services).
+  const lineTypes = categoriesFromLines(
+    watchedLines.map((l) => ({ serviceId: l?.serviceId ?? '' })),
+    (id) => services.data?.find((s) => s.value === id)?.mode,
+  );
+  const selected = cats.field.value;
+  const transport = selected.includes('Transport') || lineTypes.includes('Transport');
+  const locationKind = transport ? 'Transport' : selected.includes('Warehouse') ? 'Warehouse' : 'Service';
   const t = totals(
     watchedLines.map((l) => ({
       quantity: Number(l?.quantity) || 0,
@@ -121,8 +131,8 @@ function QuotationForm({
     setSubmitMode(submit ? 'submit' : 'draft');
     const q = await create.mutateAsync({
       ...v,
-      mode: v.serviceCategory === 'Transport' ? v.mode : undefined,
-      destination: v.serviceCategory === 'Transport' ? v.destination : '',
+      mode: transport ? v.mode : undefined,
+      destination: transport ? v.destination : '',
       enquiryId,
       submit,
     });
@@ -166,12 +176,23 @@ function QuotationForm({
               error={errors.customerId?.message}
               {...register('customerId')}
             />
-            <SelectField
-              label="Service type"
-              required
-              options={SERVICE_CATEGORIES.map((c) => ({ value: c, label: serviceCategoryLabel[c] }))}
-              {...register('serviceCategory')}
-            />
+            <div className="sm:col-span-2 lg:col-span-4">
+              <ServiceTypesPicker
+                value={selected}
+                error={errors.serviceCategories?.message}
+                onChange={cats.field.onChange}
+              />
+              {lineTypes.some((c) => !selected.includes(c)) ? (
+                <p className="mt-2 text-caption text-fg-muted">
+                  Price lines also include{' '}
+                  {lineTypes
+                    .filter((c) => !selected.includes(c))
+                    .map((c) => serviceCategoryLabel[c])
+                    .join(', ')}{' '}
+                  — saved with the quotation.
+                </p>
+              ) : null}
+            </div>
             <SelectField
               label="Agreement"
               required
@@ -182,7 +203,7 @@ function QuotationForm({
               ]}
               {...register('agreement')}
             />
-            {category === 'Transport' ? (
+            {transport ? (
               <SelectField
                 label="Transport mode"
                 required
@@ -191,12 +212,12 @@ function QuotationForm({
               />
             ) : null}
             <TextField
-              label={category === 'Transport' ? 'Origin' : locationLabel(category)}
+              label={transport ? 'Origin' : locationLabel(locationKind)}
               required
               error={errors.origin?.message}
               {...register('origin')}
             />
-            {category === 'Transport' ? (
+            {transport ? (
               <TextField
                 label="Destination"
                 required

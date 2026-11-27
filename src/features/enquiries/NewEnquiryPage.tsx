@@ -3,7 +3,14 @@ import { useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { useController, useForm } from 'react-hook-form';
 import { z } from 'zod';
-import { ModePicker, serviceFitsType, ServiceTypePicker } from '@/features/sales-orders/commercial-ui';
+import type { ServiceCategory } from '@/domain/types';
+import { primaryCategory } from '@/domain/workflow';
+import {
+  ModePicker,
+  serviceFitsTypes,
+  ServiceTypesPicker,
+  SITE_PREFIX,
+} from '@/features/sales-orders/commercial-ui';
 import { useCustomerOptions, useServiceOptions } from '@/shared/data/lookups';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
@@ -15,10 +22,14 @@ import { useCreateEnquiry } from './api';
 const schema = z
   .object({
     customerId: z.string().min(1, 'Choose a customer'),
-    serviceCategory: z.enum(['Transport', 'Warehouse', 'Service']),
+    serviceCategories: z
+      .array(z.enum(['Transport', 'Warehouse', 'Service']))
+      .min(1, 'Select at least one service type'),
     mode: z.enum(['Road', 'Sea', 'Air']),
-    origin: z.string().trim().min(2, 'Enter a location').max(80),
+    origin: z.string().trim().max(80),
     destination: z.string().trim().max(80),
+    warehouseSite: z.string().trim().max(80),
+    serviceLocation: z.string().trim().max(80),
     storagePeriod: z.string().trim().max(60).optional(),
     requiredBy: z.string().min(1, 'Choose a date'),
     serviceIds: z.array(z.string()).min(1, 'Select at least one service'),
@@ -30,10 +41,19 @@ const schema = z
     notes: z.string().max(1000).optional(),
   })
   .superRefine((v, ctx) => {
-    if (v.serviceCategory === 'Transport' && v.destination.length < 2) {
-      ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
+    const has = (c: ServiceCategory) => v.serviceCategories.includes(c);
+    if (has('Transport')) {
+      if (v.origin.length < 2)
+        ctx.addIssue({ code: 'custom', path: ['origin'], message: 'Enter the origin' });
+      if (v.destination.length < 2)
+        ctx.addIssue({ code: 'custom', path: ['destination'], message: 'Enter the destination' });
     }
-    if (v.serviceCategory !== 'Service') {
+    if (has('Warehouse') && v.warehouseSite.length < 2)
+      ctx.addIssue({ code: 'custom', path: ['warehouseSite'], message: 'Enter the warehouse / site' });
+    if (has('Service') && !has('Transport') && !has('Warehouse') && v.serviceLocation.length < 2)
+      ctx.addIssue({ code: 'custom', path: ['serviceLocation'], message: 'Enter the service location' });
+    const goods = has('Transport') || has('Warehouse');
+    if (goods) {
       if (v.packages <= 0)
         ctx.addIssue({ code: 'custom', path: ['packages'], message: 'Must be more than 0' });
       if (v.weightKg <= 0)
@@ -44,17 +64,6 @@ const schema = z
   });
 type FormInput = z.input<typeof schema>;
 type FormOutput = z.output<typeof schema>;
-
-const originLabel = {
-  Transport: 'Origin',
-  Warehouse: 'Warehouse / site',
-  Service: 'Service location',
-} as const;
-const originPlaceholder = {
-  Transport: 'e.g. Jebel Ali',
-  Warehouse: 'e.g. JAFZA WH-1',
-  Service: 'e.g. DXB Cargo Village',
-} as const;
 
 export function NewEnquiryPage() {
   const navigate = useNavigate();
@@ -70,29 +79,50 @@ export function NewEnquiryPage() {
   } = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(schema),
     defaultValues: {
-      serviceCategory: 'Transport',
+      serviceCategories: ['Transport'],
       mode: 'Road',
       serviceIds: [],
       requiredBy: '2026-12-05',
+      origin: '',
       destination: '',
+      warehouseSite: '',
+      serviceLocation: '',
     },
   });
-  const category = useController({ control, name: 'serviceCategory' });
+  const cats = useController({ control, name: 'serviceCategories' });
   const mode = useController({ control, name: 'mode' });
   const svc = useController({ control, name: 'serviceIds' });
-  const type = category.field.value;
-  const serviceChoices = (services.data ?? []).filter((s) => serviceFitsType(s.mode, type, mode.field.value));
+  const types = cats.field.value;
+  const has = (c: ServiceCategory) => types.includes(c);
+  const onlyService = has('Service') && !has('Transport') && !has('Warehouse');
+  const serviceChoices = (services.data ?? []).filter((s) =>
+    serviceFitsTypes(s.mode, types, mode.field.value),
+  );
 
   const onSubmit = handleSubmit(async (v) => {
-    const notes = [v.storagePeriod ? `Expected storage period: ${v.storagePeriod}` : '', v.notes ?? '']
+    const t = v.serviceCategories;
+    const transport = t.includes('Transport');
+    const warehouse = t.includes('Warehouse');
+    // Primary location: the route when transport is included, else the warehouse site, else the service location.
+    const origin = transport ? v.origin : warehouse ? v.warehouseSite : v.serviceLocation;
+    const destination = transport ? v.destination : '';
+    const notes = [
+      transport && warehouse ? `${SITE_PREFIX.Warehouse}${v.warehouseSite}` : '',
+      t.includes('Service') && !onlyService && v.serviceLocation
+        ? `${SITE_PREFIX.Service}${v.serviceLocation}`
+        : '',
+      warehouse && v.storagePeriod ? `Expected storage period: ${v.storagePeriod}` : '',
+      v.notes ?? '',
+    ]
       .filter(Boolean)
       .join('\n');
     const created = await create.mutateAsync({
       customerId: v.customerId,
-      serviceCategory: v.serviceCategory,
-      mode: v.serviceCategory === 'Transport' ? v.mode : undefined,
-      origin: v.origin,
-      destination: v.serviceCategory === 'Transport' ? v.destination : '',
+      serviceCategory: primaryCategory(t),
+      serviceCategories: t,
+      mode: transport ? v.mode : undefined,
+      origin,
+      destination,
       requiredBy: v.requiredBy,
       serviceIds: v.serviceIds,
       notes,
@@ -106,7 +136,7 @@ export function NewEnquiryPage() {
     });
     toast({
       title: `${created.number} created`,
-      body: 'Prepare a quotation, or confirm a sales order directly.',
+      body: 'Prepare a quotation, or create a sales order directly.',
     });
     void navigate({ to: '/enquiries/$id', params: { id: created.id } });
   });
@@ -116,11 +146,11 @@ export function NewEnquiryPage() {
       <PageHeader
         title="New enquiry"
         crumbs={[{ label: 'Enquiries', to: '/enquiries' }, { label: 'New' }]}
-        description="Capture what the customer needs: transport, warehousing or a direct service. Pricing happens on the quotation or sales order."
+        description="Capture what the customer needs. One enquiry can combine transport, warehousing and other services. Pricing happens on the quotation or sales order."
       />
       <form onSubmit={onSubmit} noValidate className="space-y-6">
         <Card>
-          <CardHeader title="Customer & service" />
+          <CardHeader title="Customer & services" />
           <CardBody className="grid gap-5 sm:grid-cols-2">
             <SelectField
               label="Customer"
@@ -132,52 +162,70 @@ export function NewEnquiryPage() {
               {...register('customerId')}
             />
             <div className="sm:col-span-2">
-              <ServiceTypePicker
-                name={category.field.name}
-                value={type}
-                onChange={(c) => {
-                  category.field.onChange(c);
+              <ServiceTypesPicker
+                value={types}
+                error={errors.serviceCategories?.message}
+                onChange={(next) => {
+                  cats.field.onChange(next);
                   svc.field.onChange([]);
                 }}
               />
             </div>
-            {type === 'Transport' ? (
-              <div className="sm:col-span-2">
-                <ModePicker
-                  name={mode.field.name}
-                  value={mode.field.value}
-                  onChange={(m) => {
-                    mode.field.onChange(m);
-                    svc.field.onChange([]);
-                  }}
+            {has('Transport') ? (
+              <>
+                <div className="sm:col-span-2">
+                  <ModePicker
+                    name={mode.field.name}
+                    value={mode.field.value}
+                    onChange={(m) => {
+                      mode.field.onChange(m);
+                      svc.field.onChange([]);
+                    }}
+                  />
+                </div>
+                <TextField
+                  label="Origin"
+                  required
+                  placeholder="e.g. Shanghai"
+                  error={errors.origin?.message}
+                  {...register('origin')}
                 />
-              </div>
+                <TextField
+                  label="Destination"
+                  required
+                  placeholder="e.g. Jebel Ali"
+                  error={errors.destination?.message}
+                  {...register('destination')}
+                />
+              </>
             ) : null}
-            <TextField
-              label={originLabel[type]}
-              required
-              placeholder={originPlaceholder[type]}
-              error={errors.origin?.message}
-              {...register('origin')}
-            />
-            {type === 'Transport' ? (
+            {has('Warehouse') ? (
+              <>
+                <TextField
+                  label="Warehouse / site"
+                  required
+                  placeholder="e.g. JAFZA WH-1"
+                  error={errors.warehouseSite?.message}
+                  {...register('warehouseSite')}
+                />
+                <TextField
+                  label="Expected storage period"
+                  placeholder="e.g. 3 months"
+                  error={errors.storagePeriod?.message}
+                  {...register('storagePeriod')}
+                />
+              </>
+            ) : null}
+            {has('Service') ? (
               <TextField
-                label="Destination"
-                required
-                placeholder="e.g. Riyadh"
-                error={errors.destination?.message}
-                {...register('destination')}
+                label="Service location"
+                required={onlyService}
+                placeholder="e.g. DXB Cargo Village"
+                hint={onlyService ? undefined : 'Optional when a route or warehouse is given'}
+                error={errors.serviceLocation?.message}
+                {...register('serviceLocation')}
               />
-            ) : type === 'Warehouse' ? (
-              <TextField
-                label="Expected storage period"
-                placeholder="e.g. 3 months"
-                error={errors.storagePeriod?.message}
-                {...register('storagePeriod')}
-              />
-            ) : (
-              <div aria-hidden="true" className="hidden sm:block" />
-            )}
+            ) : null}
             <TextField
               label="Required by"
               type="date"
@@ -192,11 +240,17 @@ export function NewEnquiryPage() {
           <CardHeader
             title="Services requested"
             description={
-              type === 'Transport'
-                ? `${mode.field.value} services plus customs and insurance`
-                : type === 'Warehouse'
-                  ? 'Warehouse services'
-                  : 'Direct services (no transport leg)'
+              types.length
+                ? `Catalogue services for ${types
+                    .map((t) =>
+                      t === 'Transport'
+                        ? `${mode.field.value} transport`
+                        : t === 'Service'
+                          ? 'direct services'
+                          : 'warehouse',
+                    )
+                    .join(', ')}`
+                : 'Select a service type first'
             }
           />
           <CardBody>
@@ -242,8 +296,8 @@ export function NewEnquiryPage() {
 
         <Card>
           <CardHeader
-            title={type === 'Service' ? 'Service details' : 'Goods'}
-            description={type === 'Service' ? 'Quantities are optional for a direct service.' : undefined}
+            title={onlyService ? 'Service details' : 'Goods'}
+            description={onlyService ? 'Quantities are optional for a direct service.' : undefined}
           />
           <CardBody className="grid gap-5 sm:grid-cols-4">
             <TextField
@@ -251,7 +305,7 @@ export function NewEnquiryPage() {
               required
               className="sm:col-span-4"
               placeholder={
-                type === 'Service'
+                onlyService
                   ? 'e.g. Import declaration for diagnostic equipment'
                   : 'e.g. Palletised ceramic tiles'
               }
@@ -262,7 +316,7 @@ export function NewEnquiryPage() {
               label="Packages"
               type="number"
               inputMode="numeric"
-              required={type !== 'Service'}
+              required={!onlyService}
               error={errors.packages?.message}
               {...register('packages')}
             />
@@ -270,7 +324,7 @@ export function NewEnquiryPage() {
               label="Weight (kg)"
               type="number"
               inputMode="decimal"
-              required={type !== 'Service'}
+              required={!onlyService}
               error={errors.weightKg?.message}
               {...register('weightKg')}
             />
@@ -279,13 +333,13 @@ export function NewEnquiryPage() {
               type="number"
               inputMode="decimal"
               step="0.1"
-              required={type !== 'Service'}
+              required={!onlyService}
               error={errors.volumeCbm?.message}
               {...register('volumeCbm')}
             />
             <TextField
-              label={type === 'Warehouse' ? 'Handling unit' : 'Equipment'}
-              placeholder={type === 'Warehouse' ? 'e.g. 18 pallets' : 'e.g. 40ft trailer'}
+              label={has('Transport') ? 'Equipment' : 'Handling unit'}
+              placeholder={has('Transport') ? 'e.g. 40ft trailer' : 'e.g. 18 pallets'}
               error={errors.equipment?.message}
               {...register('equipment')}
             />

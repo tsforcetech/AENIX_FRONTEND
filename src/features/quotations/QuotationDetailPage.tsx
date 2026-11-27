@@ -16,9 +16,8 @@ import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { Logo } from '@/shared/ui/Logo';
-import { JobKindIcon } from '@/shared/ui/ModeIcon';
-import { jobKindLabel } from '@/domain/workflow';
-import { locationText } from '@/features/sales-orders/commercial-ui';
+import { servicesLabel } from '@/domain/workflow';
+import { locationTextMulti, ServiceTypePills } from '@/features/sales-orders/commercial-ui';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
@@ -161,7 +160,7 @@ export function QuotationDetailPage() {
               search={{ quotationId: q.id }}
               icon={<ShoppingCart aria-hidden="true" />}
             >
-              Create sales order
+              Convert to sales order
             </ButtonLink>
           </>
         );
@@ -209,14 +208,9 @@ export function QuotationDetailPage() {
                   {
                     label: 'Service',
                     value: (
-                      <span className="inline-flex items-center gap-1.5">
-                        <JobKindIcon
-                          category={q.serviceCategory}
-                          mode={q.mode}
-                          className="size-4 text-fg-muted"
-                        />
-                        {jobKindLabel(q.serviceCategory, q.mode)} ·{' '}
-                        {locationText(q.serviceCategory, q.origin, q.destination)}
+                      <span className="flex flex-col gap-1.5">
+                        <ServiceTypePills categories={q.serviceCategories} mode={q.mode} />
+                        <span>{locationTextMulti(q.serviceCategories, q.origin, q.destination)}</span>
                       </span>
                     ),
                   },
@@ -339,7 +333,7 @@ export function QuotationDetailPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Work orders" description="Jobs running under its sales orders" />
+            <CardHeader title="Jobs" description="Work orders running under its sales orders" />
             <CardBody>
               {q.workOrders.length === 0 ? (
                 <p className="text-body-s text-fg-muted">
@@ -507,8 +501,8 @@ function CustomerPreview({ q }: { q: QuotationDetail }) {
             <div className="sm:text-right">
               <p className="text-caption uppercase tracking-wide text-fg-muted">Service</p>
               <p className="mt-1 font-semibold">
-                {jobKindLabel(q.serviceCategory, q.mode)} ·{' '}
-                {locationText(q.serviceCategory, q.origin, q.destination)}
+                {servicesLabel(q.serviceCategories, q.mode)} ·{' '}
+                {locationTextMulti(q.serviceCategories, q.origin, q.destination)}
               </p>
             </div>
           </div>
