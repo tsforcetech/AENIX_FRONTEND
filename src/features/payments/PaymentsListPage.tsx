@@ -15,7 +15,7 @@ import { formatDate } from '@/shared/utils/format';
 import { usePayments, usePresentPdc, type PaymentRow } from './api';
 
 const route = getRouteApi('/_app/payments');
-const STATUSES: VendorPayment['status'][] = ['Posted', 'PDC issued', 'Cancelled'];
+const STATUSES: VendorPayment['status'][] = ['Pending approval', 'Posted', 'PDC issued', 'Cancelled'];
 
 export function PaymentsListPage() {
   const search = route.useSearch();
@@ -117,6 +117,7 @@ export function PaymentsListPage() {
           columns={columns}
           rows={data?.items}
           rowKey={(r) => r.id}
+          onRowClick={(r) => void navigate({ to: '/payments/$id', params: { id: r.id } })}
           loading={isLoading || isFetching}
           error={error}
           emptyTitle="No payments match"

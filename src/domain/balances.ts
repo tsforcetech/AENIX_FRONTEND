@@ -1,11 +1,15 @@
-import { invoiceTotals, linesRevenue, VAT_RATE } from './calc';
-import type { Collection, Invoice, SalesOrder } from './types';
+import { billTotals, invoiceTotals, linesRevenue, VAT_RATE } from './calc';
+import { toAed } from './controls';
+import type { Collection, DebitNote, Invoice, SalesOrder, VendorBill } from './types';
 
 /**
  * Customer balance — display maths for the prototype; the backend ledger is the authority.
+ * All figures are in AED: invoices in another currency are converted with `toAed` (C10).
  *
  * Sign convention: positive = the customer owes us.
- *   outstanding = Σ posted invoice totals − Σ amounts received against invoices
+ *   An invoice's `paid` is everything that settled it: cash receipts, credit notes (`credited`, A2)
+ *   and bad-debt write-offs (`writtenOff`, A16). Cash received = paid − credited − writtenOff.
+ *   outstanding = Σ posted invoice totals − Σ settled
  *   advances    = Σ receipts held against sales orders (or unallocated), not yet applied to an invoice
  *   balance     = outstanding − advances  (net position)
  */
@@ -18,12 +22,16 @@ export interface SalesOrderBalance {
   notInvoiced: number;
   received: number; // receipts applied via invoices + advances on this SO
   advance: number; // part of `received` held as advance (not yet applied to an invoice)
-  balance: number; // invoiced − received (what is currently due on this order)
+  balance: number; // invoiced − settled (what is currently due on this order)
 }
 
 export interface CustomerBalance {
   invoiced: number;
   received: number;
+  /** Credit notes issued (incl. VAT). */
+  credited: number;
+  /** Bad debts written off. */
+  writtenOff: number;
   outstanding: number;
   advances: number;
   unallocated: number;
@@ -36,6 +44,19 @@ export interface CustomerBalance {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const BILLED: Invoice['status'][] = ['Posted', 'Partially paid', 'Paid', 'Overdue'];
 
+/** Converts an amount in the invoice's currency to AED. */
+export function invoiceAed(inv: Pick<Invoice, 'currency' | 'exchangeRate'>, amount: number): number {
+  return toAed(amount, inv.currency ?? 'AED', inv.exchangeRate);
+}
+
+/** Settlement split of one invoice, in the invoice currency. */
+export function invoiceSettlement(inv: Pick<Invoice, 'lines' | 'paid' | 'credited' | 'writtenOff'>) {
+  const { total, outstanding } = invoiceTotals(inv);
+  const credited = r2(inv.credited ?? 0);
+  const writtenOff = r2(inv.writtenOff ?? 0);
+  return { total, credited, writtenOff, cash: r2(inv.paid - credited - writtenOff), outstanding };
+}
+
 export function customerBalance(
   customerId: string,
   data: { salesOrders: SalesOrder[]; invoices: Invoice[]; collections: Collection[] },
@@ -44,8 +65,17 @@ export function customerBalance(
   const collections = data.collections.filter((c) => c.customerId === customerId && c.status !== 'Bounced');
   const orders = data.salesOrders.filter((s) => s.customerId === customerId && s.status !== 'Cancelled');
 
-  const invoiced = r2(invoices.reduce((s, i) => s + invoiceTotals(i).total, 0));
-  const receivedOnInvoices = r2(invoices.reduce((s, i) => s + i.paid, 0));
+  let invoiced = 0;
+  let cash = 0;
+  let credited = 0;
+  let writtenOff = 0;
+  for (const inv of invoices) {
+    const s = invoiceSettlement(inv);
+    invoiced += invoiceAed(inv, s.total);
+    cash += invoiceAed(inv, s.cash);
+    credited += invoiceAed(inv, s.credited);
+    writtenOff += invoiceAed(inv, s.writtenOff);
+  }
   const advances = r2(
     collections
       .filter((c) => c.status !== 'PDC pending')
@@ -63,9 +93,12 @@ export function customerBalance(
   );
 
   const salesOrders: SalesOrderBalance[] = orders.map((so) => {
-    const orderValue = r2(linesRevenue(so.lines) * (1 + VAT_RATE));
+    const orderValue = r2(
+      toAed(linesRevenue(so.lines) * (1 + VAT_RATE), so.currency ?? 'AED', so.exchangeRate),
+    );
     let soInvoiced = 0;
-    let soReceived = 0;
+    let soSettled = 0;
+    let soCash = 0;
     for (const inv of invoices) {
       const { total } = invoiceTotals(inv);
       if (total <= 0) continue;
@@ -77,8 +110,10 @@ export function customerBalance(
         )
         .reduce((s, l) => s + l.quantity * l.unitPrice * (1 + l.vatRate), 0);
       if (soShare <= 0) continue;
-      soInvoiced += soShare;
-      soReceived += inv.paid * (soShare / total); // receipts apportioned to the orders an invoice bills
+      const ratio = soShare / total; // settlements apportioned to the orders an invoice bills
+      soInvoiced += invoiceAed(inv, soShare);
+      soSettled += invoiceAed(inv, inv.paid * ratio);
+      soCash += invoiceAed(inv, invoiceSettlement(inv).cash * ratio);
     }
     const advance = r2(
       collections
@@ -94,16 +129,18 @@ export function customerBalance(
       orderValue,
       invoiced: r2(soInvoiced),
       notInvoiced: r2(Math.max(0, orderValue - soInvoiced)),
-      received: r2(soReceived + advance),
+      received: r2(soCash + advance),
       advance,
-      balance: r2(soInvoiced - soReceived - advance),
+      balance: r2(soInvoiced - soSettled - advance),
     };
   });
 
-  const outstanding = r2(invoiced - receivedOnInvoices);
+  const outstanding = r2(invoiced - cash - credited - writtenOff);
   return {
-    invoiced,
-    received: r2(receivedOnInvoices + advances + unallocated),
+    invoiced: r2(invoiced),
+    received: r2(cash + advances + unallocated),
+    credited: r2(credited),
+    writtenOff: r2(writtenOff),
     outstanding,
     advances,
     unallocated,
@@ -111,5 +148,45 @@ export function customerBalance(
     balance: r2(outstanding - advances - unallocated),
     notYetInvoiced: r2(salesOrders.reduce((s, o) => s + o.notInvoiced, 0)),
     salesOrders,
+  };
+}
+
+/**
+ * Vendor position (AED). A posted debit note (A10) set off against a bill is recorded in the bill's
+ * `paid`, so `paid` = cash paid + debit notes; cash paid is shown separately.
+ */
+export interface VendorBalance {
+  billed: number;
+  paidCash: number;
+  debitNotes: number;
+  /** Posted debit notes not yet set off against a bill (reduce what we owe). */
+  unappliedDebitNotes: number;
+  outstanding: number;
+}
+
+const OPEN_BILL: VendorBill['status'][] = ['Approved', 'Partially paid', 'Paid', 'Overdue'];
+
+export function debitNoteTotal(dn: Pick<DebitNote, 'amount' | 'vatRate'>): number {
+  return r2(dn.amount * (1 + dn.vatRate));
+}
+
+export function vendorBalance(
+  vendorId: string,
+  data: { vendorBills: VendorBill[]; debitNotes: DebitNote[] },
+): VendorBalance {
+  const bills = data.vendorBills.filter((b) => b.vendorId === vendorId && OPEN_BILL.includes(b.status));
+  const posted = data.debitNotes.filter((d) => d.vendorId === vendorId && d.status !== 'Draft');
+  const applied = posted.filter((d) => d.vendorBillId && bills.some((b) => b.id === d.vendorBillId));
+  const unapplied = posted.filter((d) => !applied.includes(d));
+  const billed = r2(bills.reduce((s, b) => s + billTotals(b).total, 0));
+  const paid = r2(bills.reduce((s, b) => s + b.paid, 0));
+  const debitNotes = r2(applied.reduce((s, d) => s + debitNoteTotal(d), 0));
+  const unappliedDebitNotes = r2(unapplied.reduce((s, d) => s + debitNoteTotal(d), 0));
+  return {
+    billed,
+    paidCash: r2(paid - debitNotes),
+    debitNotes,
+    unappliedDebitNotes,
+    outstanding: r2(billed - paid - unappliedDebitNotes),
   };
 }

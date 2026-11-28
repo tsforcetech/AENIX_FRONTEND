@@ -229,9 +229,22 @@ export function VendorBillDetailPage() {
                 <div className="flex justify-between">
                   <dt className="text-fg-muted">Paid</dt>
                   <dd>
-                    <Money amount={b.paid} muted />
+                    <Money amount={b.paid - b.debited} muted />
                   </dd>
                 </div>
+                {b.debitNotes.length ? (
+                  <div className="flex justify-between">
+                    <dt className="text-fg-muted">
+                      Debit notes{' '}
+                      <span className="font-mono text-caption">
+                        {b.debitNotes.map((d) => `${d.number} (${d.status})`).join(', ')}
+                      </span>
+                    </dt>
+                    <dd>
+                      <Money amount={b.debited} muted />
+                    </dd>
+                  </div>
+                ) : null}
                 <div className="flex justify-between rounded-lg bg-surface-inverse px-3 py-2 font-semibold text-fg-inverse">
                   <dt>Outstanding</dt>
                   <dd>

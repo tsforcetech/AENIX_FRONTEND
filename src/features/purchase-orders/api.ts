@@ -8,6 +8,8 @@ import type {
   TransportMode,
   VendorBill,
   Inbound,
+  ServiceCompletionNote,
+  WorkOrder,
 } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
@@ -29,7 +31,7 @@ export interface PurchaseOrderRow extends PurchaseOrder {
 }
 
 export interface ProofItem {
-  kind: 'GRN' | 'POD';
+  kind: 'GRN' | 'POD' | 'Completion note';
   label: string;
   status: string;
   ok: boolean;
@@ -39,6 +41,17 @@ export interface PurchaseOrderDetail extends PurchaseOrderRow {
   jobStatus: string;
   customerName: string;
   salesOrderNumber?: string;
+  /** X5 printable PO: vendor block and job route. */
+  vendor?: {
+    name: string;
+    code: string;
+    city: string;
+    country: string;
+    contactName: string;
+    contactEmail: string;
+    paymentTermsDays: number;
+  };
+  route?: string;
   bill?: VendorBill & { total: number };
   proof: ProofItem[];
   match: {
@@ -63,8 +76,55 @@ function toRow(po: PurchaseOrder): PurchaseOrderRow {
   };
 }
 
-/** Proof of work for the job: the GRN of EVERY inbound receipt and the POD of every customer request. */
-function proofFor(wo: { inbounds: Inbound[]; customerRequests: CustomerRequest[] }): ProofItem[] {
+/** S3: is this a service / customs PO (proof = signed service completion note, not GRN / POD)? */
+export function isServicePo(po: Pick<PurchaseOrder, 'serviceId'>, wo?: Pick<WorkOrder, 'serviceCategory'>) {
+  const svc = protoDb.get().services.find((s) => s.id === po.serviceId);
+  return svc?.mode === 'Customs' || wo?.serviceCategory === 'Service';
+}
+
+/** S3: service completion notes on the job that belong to this PO (by PO, else by service). */
+export function completionNotesFor(
+  po: Pick<PurchaseOrder, 'id' | 'serviceId'>,
+  wo: Pick<WorkOrder, 'completionNotes'>,
+): ServiceCompletionNote[] {
+  return (wo.completionNotes ?? []).filter((n) =>
+    n.purchaseOrderId ? n.purchaseOrderId === po.id : n.serviceId === po.serviceId,
+  );
+}
+
+/**
+ * Proof of work for the job: the GRN of EVERY inbound receipt and the POD of every customer request.
+ * Service / customs POs (S3) are proven by the signed service completion note read from the job.
+ */
+function proofFor(
+  wo: Pick<WorkOrder, 'inbounds' | 'customerRequests' | 'completionNotes' | 'serviceCategory'>,
+  po?: PurchaseOrder,
+): ProofItem[] {
+  if (po && isServicePo(po, wo)) {
+    const notes = completionNotesFor(po, wo);
+    if (notes.length)
+      return notes.map((n) => ({
+        kind: 'Completion note' as const,
+        label: `${n.number} — ${n.description}${n.customerSignedBy ? ` (signed by ${n.customerSignedBy})` : ''}`,
+        status: n.status === 'Signed' ? 'Signed' : 'Not signed',
+        ok: n.status === 'Signed',
+      }));
+    const fallback = proofFromDocs(wo);
+    return fallback.length
+      ? fallback
+      : [
+          {
+            kind: 'Completion note',
+            label: 'No service completion note yet',
+            status: 'Not received',
+            ok: false,
+          },
+        ];
+  }
+  return proofFromDocs(wo);
+}
+
+function proofFromDocs(wo: { inbounds: Inbound[]; customerRequests: CustomerRequest[] }): ProofItem[] {
   const items: ProofItem[] = [];
   for (const ib of wo.inbounds) {
     const r = grnResult(ib);
@@ -146,13 +206,15 @@ export const purchaseOrdersApi = {
     const wo = db.workOrders.find((w) => w.id === po.workOrderId);
     const billRaw = po.vendorBillId ? db.vendorBills.find((b) => b.id === po.vendorBillId) : undefined;
     const bill = billRaw ? { ...billRaw, total: billTotals(billRaw).total } : undefined;
-    const proof = wo ? proofFor(wo) : [];
+    const proof = wo ? proofFor(wo, po) : [];
     const proofOk = proof.every((p) => p.ok);
     const amountOk = bill ? Math.abs(bill.amount - po.amount) < 0.01 : null;
     return latency({
       ...toRow(po),
       jobStatus: wo?.status ?? '—',
       customerName: wo ? lookupName.customer(wo.customerId) : '—',
+      vendor: db.vendors.find((v) => v.id === po.vendorId),
+      route: wo ? [wo.origin, wo.destination].filter(Boolean).join(' → ') : undefined,
       salesOrderNumber: po.salesOrderId
         ? db.salesOrders.find((o) => o.id === po.salesOrderId)?.number
         : undefined,

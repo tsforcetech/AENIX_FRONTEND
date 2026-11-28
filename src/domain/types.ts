@@ -516,6 +516,9 @@ export interface Invoice {
   reminders?: { level: 1 | 2 | 3; at: IsoDateTime; channel: 'Email' | 'WhatsApp' | 'Letter' }[];
   /** FLOW-003 X5 */
   emirate?: Emirate;
+  // FLOW-003 WP-D: credit notes are settled into `paid` (like write-offs); this keeps the credited part
+  // (incl. VAT, invoice currency) so balances can tell cash received from credits.
+  credited?: number;
 }
 
 export type BillStatus = 'Draft' | 'Approved' | 'Partially paid' | 'Paid' | 'Overdue';

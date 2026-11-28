@@ -2,6 +2,7 @@ import { createRoute } from '@tanstack/react-router';
 import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
 import { NewPaymentPage } from './NewPaymentPage';
 import { PaymentsListPage } from './PaymentsListPage';
+import { PaymentVoucherPage } from './PaymentVoucherPage';
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
@@ -22,5 +23,6 @@ export function paymentsRoutes(parent: AppParentRoute) {
       }),
       component: NewPaymentPage,
     }),
+    createRoute({ getParentRoute: () => parent, path: 'payments/$id', component: PaymentVoucherPage }),
   ] as const;
 }

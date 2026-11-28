@@ -1,7 +1,9 @@
 import { createRoute } from '@tanstack/react-router';
 import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
 import { CollectionsListPage } from './CollectionsListPage';
+import { FollowUpPage } from './FollowUpPage';
 import { NewCollectionPage } from './NewCollectionPage';
+import { PdcRegisterPage } from './PdcRegisterPage';
 
 export interface NewCollectionSearch {
   invoiceId?: string;
@@ -31,5 +33,7 @@ export function collectionsRoutes(parent: AppParentRoute) {
       validateSearch: validateNewCollectionSearch,
       component: NewCollectionPage,
     }),
+    createRoute({ getParentRoute: () => parent, path: 'collections/pdc', component: PdcRegisterPage }),
+    createRoute({ getParentRoute: () => parent, path: 'collections/follow-up', component: FollowUpPage }),
   ] as const;
 }
