@@ -109,10 +109,24 @@ export const transportApi = {
     const db = protoDb.get();
     const wo = db.workOrders.find((w) => w.id === id);
     if (!wo) return fail('Job not found');
+    // Warehouse documents are kept per inbound (PL → GRN); count them as received on the checklist.
+    const pls = wo.inbounds.filter((ib) => ib.packingList.lines.length > 0);
+    const grns = wo.inbounds.filter((ib) => ib.grn);
+    const fromInbounds: Record<string, Pick<JobDocument, 'number' | 'receivedAt'>> = {};
+    if (pls.length)
+      fromInbounds['Packing list / ASN'] = {
+        number: pls.map((ib) => ib.packingList.number).join(', '),
+        receivedAt: pls[0]!.packingList.sentAt,
+      };
+    if (grns.length)
+      fromInbounds.GRN = {
+        number: grns.map((ib) => ib.grn!.number).join(', '),
+        receivedAt: grns[0]!.grn!.receivedAt,
+      };
     const checklist = documentChecklist(
       wo.documents,
       requiredDocuments(wo.serviceCategories, wo.mode, serviceModesOf(wo)),
-    );
+    ).map((d) => (d.id.startsWith('tpl:') && fromInbounds[d.name] ? { ...d, ...fromInbounds[d.name] } : d));
     const surcharge = (sid: string) => !!serviceOf(sid)?.isSurcharge;
     const pos = db.purchaseOrders.filter((p) => p.workOrderId === id);
     const directLines = wo.lines.filter((l) => {
