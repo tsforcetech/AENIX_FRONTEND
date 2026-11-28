@@ -24,6 +24,7 @@ import {
   useQuotationDecision,
   type CustomerApproval,
 } from './api';
+import { CustomerStockCard } from './CustomerStock';
 import { PackingListsCard } from './PackingListUpload';
 import { PortalDenied } from './PortalDenied';
 
@@ -122,6 +123,7 @@ export function CustomerPortalHome() {
         />
       </section>
       <PackingListsCard partyId={partyId} jobs={data.warehouseJobs} />
+      <CustomerStockCard partyId={partyId} />
       <div className="grid gap-6 xl:grid-cols-5">
         <Card className="xl:col-span-3">
           <CardHeader
@@ -457,6 +459,40 @@ export function CustomerInvoicesPage() {
         title="Invoices & statement"
         description="Read-only view of your invoices and account statement. Contact us to query an invoice."
       />
+      <section aria-label="Account balance" className="grid gap-4 sm:grid-cols-3">
+        <KpiCard
+          label="Outstanding balance"
+          value={formatMoneyCompact(data.balance.outstanding)}
+          icon={<Receipt />}
+          footnote={
+            data.overdue ? (
+              <span className="font-medium text-danger">{formatMoneyCompact(data.overdue)} overdue</span>
+            ) : (
+              <span className="text-success">Nothing overdue</span>
+            )
+          }
+        />
+        <KpiCard
+          label="Advances held"
+          value={formatMoneyCompact(data.balance.advances + data.balance.unallocated)}
+          icon={<Wallet />}
+          footnote={<span className="text-fg-muted">Applied to future invoices</span>}
+        />
+        <KpiCard
+          label="Net balance"
+          value={formatMoneyCompact(data.balance.balance)}
+          icon={<Scale />}
+          footnote={
+            <span className="text-fg-muted">
+              {data.balance.balance > 0
+                ? 'Amount due to AENIX'
+                : data.balance.balance < 0
+                  ? 'In your favour'
+                  : 'Settled'}
+            </span>
+          }
+        />
+      </section>
       <Card>
         <CardHeader title="Invoices" />
         <div className="mt-3">

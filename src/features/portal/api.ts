@@ -9,6 +9,7 @@ import { reconcile } from '@/domain/reconcile';
 import { customerBalance } from '@/domain/balances';
 import { jobStock } from '@/domain/stock';
 import type { AppNotification, Attachment, DocLine, WorkOrder } from '@/domain/types';
+import { advanceMilestone, billPayment, stockStatementCsv, stockStatementRows } from './portalLogic';
 
 const where = (w: Pick<WorkOrder, 'origin' | 'destination'>) =>
   w.destination ? `${w.origin} → ${w.destination}` : w.origin;
@@ -165,7 +166,15 @@ function customerInvoices(partyId: string) {
   const invoices = db.invoices.filter(
     (i) => i.customerId === partyId && i.status !== 'Draft' && i.status !== 'Cancelled',
   );
+  const stats = openInvoiceStats(invoices);
   return {
+    /** Outstanding balance shown at the top of "Invoices & statement". */
+    balance: customerBalance(partyId, {
+      salesOrders: db.salesOrders,
+      invoices: db.invoices,
+      collections: db.collections,
+    }),
+    overdue: stats.overdue,
     invoices: [...invoices]
       .sort((a, b) => b.issueDate.localeCompare(a.issueDate))
       .map((i) => ({
@@ -389,11 +398,20 @@ function vendorBills(partyId: string) {
   const db = protoDb.get();
   return db.vendorBills
     .filter((b) => b.vendorId === partyId)
-    .map((b) => ({
-      ...b,
-      ...billTotals(b),
-      jobRef: db.workOrders.find((w) => w.id === b.workOrderId)?.number ?? '—',
-    }));
+    .map((b) => {
+      const pay = billPayment(
+        b,
+        db.vendorPayments.filter((p) => p.vendorId === partyId),
+      );
+      return {
+        ...b,
+        ...billTotals(b),
+        jobRef: db.workOrders.find((w) => w.id === b.workOrderId)?.number ?? '—',
+        poNumber: db.purchaseOrders.find((p) => p.id === b.purchaseOrderId)?.number,
+        paymentStatus: pay.status,
+        vouchers: pay.vouchers,
+      };
+    });
 }
 
 function vendorOverview(partyId: string) {
@@ -647,6 +665,193 @@ export function useAssignmentAction(partyId: string | null) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['portal'] });
       void qc.invalidateQueries({ queryKey: ['work-orders'] });
+    },
+  });
+}
+
+// ---------------- FLOW-003 X6: customer stock & claims ----------------
+function customerStock(partyId: string) {
+  const db = protoDb.get();
+  return {
+    stock: stockStatementRows(db.stockItems, db.warehouseLocations, partyId),
+    /** Read-only: open variances and customer claims on this customer's jobs. */
+    claims: db.variances
+      .filter((v) => v.customerId === partyId && (v.status !== 'Resolved' || v.outcome === 'Customer claim'))
+      .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))
+      .map((v) => ({
+        id: v.id,
+        number: v.number,
+        jobRef: db.workOrders.find((w) => w.id === v.workOrderId)?.number ?? '—',
+        source: `${v.source} ${v.sourceRef}`,
+        raisedAt: v.raisedAt,
+        short: v.lines.reduce((s, l) => s + Math.max(0, l.expected - l.actual), 0),
+        damaged: v.lines.reduce((s, l) => s + l.damaged, 0),
+        outcome: v.outcome,
+        status: v.status,
+        creditNote: db.creditNotes.find((c) => c.varianceId === v.id)?.number,
+      })),
+  };
+}
+
+export type CustomerStock = ReturnType<typeof customerStock>;
+
+export function useCustomerStock(partyId: string | null) {
+  return useQuery({
+    queryKey: ['portal', 'customer', partyId, 'stock'],
+    enabled: !!partyId,
+    queryFn: () => latency(customerStock(partyId!)),
+  });
+}
+
+/** CSV stock statement for the signed-in customer (party from the session only). */
+export function exportCustomerStockCsv(partyId: string): Promise<string> {
+  return latency(stockStatementCsv(customerStock(partyId).stock), 80);
+}
+
+// ---------------- FLOW-003 X6: vendor POs, debit notes, milestones ----------------
+function vendorPurchaseOrderDoc(partyId: string, id: string) {
+  const db = protoDb.get();
+  const po = db.purchaseOrders.find((p) => p.id === id && p.vendorId === partyId);
+  if (!po) return null;
+  const wo = db.workOrders.find((w) => w.id === po.workOrderId);
+  const vat = Math.round(po.amount * po.vatRate * 100) / 100;
+  return {
+    number: po.number,
+    status: po.status,
+    issuedAt: po.issuedAt,
+    description: po.description,
+    service: lookupName.service(po.serviceId),
+    amount: po.amount,
+    vatRate: po.vatRate,
+    vat,
+    total: Math.round((po.amount + vat) * 100) / 100,
+    jobRef: wo?.number ?? '—',
+    location: wo ? where(wo) : '—',
+    eta: wo?.eta,
+    vendor: {
+      name: lookupName.vendor(partyId),
+      contact: db.vendors.find((v) => v.id === partyId)?.contactName ?? '',
+    },
+    company: {
+      legalName: db.company.legalName,
+      trn: db.company.trn,
+      address: db.company.officeAddress,
+      phone: db.company.phone,
+      email: db.company.email,
+    },
+  };
+}
+
+export type VendorPoDoc = NonNullable<ReturnType<typeof vendorPurchaseOrderDoc>>;
+
+export function useVendorPurchaseOrderDoc(partyId: string | null, id: string) {
+  return useQuery({
+    queryKey: ['portal', 'vendor', partyId, 'purchase-orders', id],
+    enabled: !!partyId,
+    queryFn: () => latency(vendorPurchaseOrderDoc(partyId!, id)),
+  });
+}
+
+function vendorDebitNotes(partyId: string) {
+  const db = protoDb.get();
+  return db.debitNotes
+    .filter((d) => d.vendorId === partyId && d.status !== 'Draft')
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map((d) => ({
+      id: d.id,
+      number: d.number,
+      date: d.date,
+      reason: d.reason,
+      billNumber: db.vendorBills.find((b) => b.id === d.vendorBillId)?.number,
+      poNumber: db.purchaseOrders.find((p) => p.id === d.purchaseOrderId)?.number,
+      total: Math.round(d.amount * (1 + d.vatRate) * 100) / 100,
+      status: d.status,
+    }));
+}
+
+export type VendorDebitNoteRow = ReturnType<typeof vendorDebitNotes>[number];
+
+export function useVendorDebitNotes(partyId: string | null) {
+  return useQuery({
+    queryKey: ['portal', 'vendor', partyId, 'debit-notes'],
+    enabled: !!partyId,
+    queryFn: () => latency(vendorDebitNotes(partyId!)),
+  });
+}
+
+/** Jobs where this vendor's assignment is accepted and still open: the vendor may update milestones. */
+function vendorMilestoneJobs(partyId: string) {
+  return protoDb
+    .get()
+    .workOrders.filter(
+      (w) =>
+        !['Draft', 'Completed', 'Cancelled'].includes(w.status) &&
+        w.vendorAssignments.some((a) => a.vendorId === partyId),
+    )
+    .map((w) => {
+      const mine = w.vendorAssignments.filter((a) => a.vendorId === partyId);
+      return {
+        id: w.id,
+        jobRef: w.number,
+        lane: where(w),
+        eta: w.eta,
+        status: w.status,
+        milestones: w.milestones,
+        canUpdate: mine.some((a) => a.status === 'Accepted'),
+      };
+    });
+}
+
+export type VendorMilestoneJob = ReturnType<typeof vendorMilestoneJobs>[number];
+
+export function useVendorMilestoneJobs(partyId: string | null) {
+  return useQuery({
+    queryKey: ['portal', 'vendor', partyId, 'milestones'],
+    enabled: !!partyId,
+    queryFn: () => latency(vendorMilestoneJobs(partyId!)),
+  });
+}
+
+/** T2: vendor marks the current milestone done on a job they are assigned to (and accepted). */
+export function useAdvanceMilestone(partyId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (workOrderId: string) => {
+      const wo = protoDb.get().workOrders.find((w) => w.id === workOrderId);
+      if (
+        !partyId ||
+        !wo ||
+        !wo.vendorAssignments.some((a) => a.vendorId === partyId && a.status === 'Accepted')
+      )
+        throw new Error('You can update milestones only on jobs you have accepted.');
+      const at = nowIso();
+      const next = advanceMilestone(wo.milestones, at);
+      if (!next) throw new Error('All milestones are already done.');
+      protoDb.update((s) => ({
+        ...s,
+        workOrders: s.workOrders.map((w) => (w.id === wo.id ? { ...w, milestones: next.milestones } : w)),
+        notifications: [
+          staffNotice(
+            `${wo.number}: ${next.done}`,
+            `${lookupName.vendor(partyId)} marked “${next.done}” done.`,
+            `/work-orders/${wo.id}`,
+          ),
+          ...s.notifications,
+        ],
+      }));
+      logActivity({
+        entity: 'Work order',
+        entityId: wo.id,
+        entityRef: wo.number,
+        action: `vendor marked milestone “${next.done}” done`,
+        changes: [{ field: next.done, from: 'Current', to: 'Done' }],
+      });
+      return latency(next.done, 200);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['portal'] });
+      void qc.invalidateQueries({ queryKey: ['work-orders'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
     },
   });
 }

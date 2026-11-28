@@ -5,6 +5,19 @@ import { monthlyRevenue, PROTO_TODAY } from '@/prototype/seed';
 import { latency, protoDb } from '@/prototype/store';
 import type { ServiceCategory } from '@/domain/types';
 import { jobKindLabel, SERVICE_CATEGORIES } from '@/domain/workflow';
+import {
+  jobProfitability,
+  openPdcs,
+  pdcMaturity,
+  vendorPerformance,
+  warehouseOccupancy,
+  type CustomerProfitRow,
+  type JobProfitRow,
+  type OccupancyRow,
+  type OpenPdc,
+  type PdcBucket,
+  type VendorPerformanceRow,
+} from './analytics';
 
 /**
  * Reporting view-models. REQUESTED contract (Phase 10 report specs). Prototype adapter computes
@@ -38,6 +51,14 @@ export interface ReportsData {
     pdcPending: number;
     balance: number;
   }[];
+  /** FLOW-003 X8: job profitability (revenue − vendor PO cost − internal costs). */
+  profitability: { jobs: JobProfitRow[]; customers: CustomerProfitRow[] };
+  /** FLOW-003 T10: vendor on-time % and variances. */
+  vendorPerformance: VendorPerformanceRow[];
+  /** FLOW-003 W: pallets used vs bin capacity by zone. */
+  occupancy: OccupancyRow[];
+  /** FLOW-003 A15: post-dated cheques by maturity. */
+  pdc: { buckets: PdcBucket[]; items: (OpenPdc & { partyName: string })[] };
 }
 
 function build(): ReportsData {
@@ -123,7 +144,26 @@ function build(): ReportsData {
     b.count += 1;
   }
 
+  const pdcs = openPdcs(db.collections, db.vendorPayments, PROTO_TODAY);
+  const partyName = (p: OpenPdc) =>
+    (p.direction === 'Received'
+      ? db.customers.find((c) => c.id === p.partyId)?.name
+      : db.vendors.find((v) => v.id === p.partyId)?.name) ?? '—';
+
   return {
+    profitability: jobProfitability({
+      workOrders: db.workOrders,
+      invoices: db.invoices,
+      purchaseOrders: db.purchaseOrders,
+      customers: db.customers,
+    }),
+    vendorPerformance: vendorPerformance({
+      vendors: db.vendors,
+      workOrders: db.workOrders,
+      variances: db.variances,
+    }),
+    occupancy: warehouseOccupancy(db.warehouseLocations, db.stockItems),
+    pdc: { buckets: pdcMaturity(pdcs), items: pdcs.map((p) => ({ ...p, partyName: partyName(p) })) },
     revenueByMonth: monthlyRevenue.map((m) => ({
       ...m,
       marginPct: Math.round(((m.revenue - m.cost) / m.revenue) * 1000) / 10,
