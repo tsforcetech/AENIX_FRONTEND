@@ -1,5 +1,7 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { FileText, ShoppingCart, XCircle } from 'lucide-react';
+import clsx from 'clsx';
+import { useState } from 'react';
+import { AlertTriangle, BellRing, FileText, ShoppingCart, XCircle } from 'lucide-react';
 import { servicesLabel } from '@/domain/workflow';
 import {
   locationLabel,
@@ -19,6 +21,7 @@ import { useToast } from '@/shared/ui/Toast';
 import { lookupName } from '@/shared/data/lookups';
 import { formatDate, formatDateTime, formatNumber } from '@/shared/utils/format';
 import { useEnquiry, useSetEnquiryStatus } from './api';
+import { FollowUpDialog, LostReasonDialog } from './EnquiryBoard';
 
 const route = getRouteApi('/_app/enquiries/$id');
 
@@ -27,6 +30,8 @@ export function EnquiryDetailPage() {
   const { data: e, isLoading, error } = useEnquiry(id);
   const setStatus = useSetEnquiryStatus();
   const toast = useToast();
+  const [losing, setLosing] = useState(false);
+  const [following, setFollowing] = useState(false);
 
   if (error)
     return (
@@ -54,12 +59,7 @@ export function EnquiryDetailPage() {
                 variant="ghost"
                 icon={<XCircle aria-hidden="true" />}
                 busy={setStatus.isPending}
-                onClick={() =>
-                  setStatus.mutate(
-                    { id: e.id, status: 'Lost' },
-                    { onSuccess: () => toast({ title: `${e.number} marked lost` }) },
-                  )
-                }
+                onClick={() => setLosing(true)}
               >
                 Mark lost
               </Button>
@@ -172,6 +172,51 @@ export function EnquiryDetailPage() {
           ) : null}
         </div>
         <div className="space-y-6">
+          {e.status === 'Lost' ? (
+            <Card>
+              <CardHeader title="Lost reason" />
+              <CardBody className="text-body-s text-fg-secondary">
+                {e.lostReason ?? 'No reason recorded (older enquiry — see notes).'}
+              </CardBody>
+            </Card>
+          ) : null}
+          {open ? (
+            <Card>
+              <CardHeader title="Follow-up" description="When to contact the customer next" />
+              <CardBody className="space-y-3">
+                {e.nextFollowUp ? (
+                  <p
+                    className={clsx(
+                      'flex items-center gap-2 text-body-s',
+                      e.followUpOverdue ? 'font-semibold text-danger' : 'text-fg',
+                    )}
+                  >
+                    {e.followUpOverdue ? (
+                      <AlertTriangle aria-hidden="true" className="size-4" />
+                    ) : (
+                      <BellRing aria-hidden="true" className="size-4 text-fg-muted" />
+                    )}
+                    {e.followUpOverdue
+                      ? 'Overdue — was due '
+                      : e.followUpDue
+                        ? 'Due today — '
+                        : 'Next follow-up '}
+                    {formatDate(e.nextFollowUp)}
+                  </p>
+                ) : (
+                  <p className="text-body-s text-fg-muted">No follow-up set.</p>
+                )}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<BellRing aria-hidden="true" />}
+                  onClick={() => setFollowing(true)}
+                >
+                  {e.nextFollowUp ? 'Change follow-up' : 'Set follow-up'}
+                </Button>
+              </CardBody>
+            </Card>
+          ) : null}
           <Card>
             <CardHeader title="Quotations" description="Versions prepared for this enquiry" />
             <CardBody>
@@ -239,6 +284,21 @@ export function EnquiryDetailPage() {
           </Card>
         </div>
       </div>
+      <FollowUpDialog row={following ? e : null} onClose={() => setFollowing(false)} />
+      <LostReasonDialog
+        row={losing ? e : null}
+        onClose={() => setLosing(false)}
+        onConfirm={(reason) => {
+          setLosing(false);
+          setStatus.mutate(
+            { id: e.id, status: 'Lost', lostReason: reason },
+            {
+              onSuccess: () => toast({ title: `${e.number} marked lost`, body: `Reason: ${reason}` }),
+              onError: (err) => toast({ title: 'Could not mark lost', body: err.message }),
+            },
+          );
+        }}
+      />
     </div>
   );
 }

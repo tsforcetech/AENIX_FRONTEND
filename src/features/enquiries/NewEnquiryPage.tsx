@@ -32,6 +32,7 @@ const schema = z
     serviceLocation: z.string().trim().max(80),
     storagePeriod: z.string().trim().max(60).optional(),
     requiredBy: z.string().min(1, 'Choose a date'),
+    nextFollowUp: z.string().optional(),
     serviceIds: z.array(z.string()).min(1, 'Select at least one service'),
     description: z.string().trim().min(2, 'Describe the goods or the service').max(160),
     packages: z.coerce.number().int().min(0, 'Cannot be negative'),
@@ -124,6 +125,7 @@ export function NewEnquiryPage() {
       origin,
       destination,
       requiredBy: v.requiredBy,
+      nextFollowUp: v.nextFollowUp || undefined,
       serviceIds: v.serviceIds,
       notes,
       cargo: {
@@ -232,6 +234,13 @@ export function NewEnquiryPage() {
               required
               error={errors.requiredBy?.message}
               {...register('requiredBy')}
+            />
+            <TextField
+              label="Next follow-up"
+              type="date"
+              hint="When to call the customer back — overdue follow-ups are flagged on the board"
+              error={errors.nextFollowUp?.message}
+              {...register('nextFollowUp')}
             />
           </CardBody>
         </Card>

@@ -4,10 +4,12 @@ import { Send } from 'lucide-react';
 import { useState } from 'react';
 import { useController, useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
+import type { Currency } from '@/domain/types';
 import { categoriesFromLines, serviceCategoryLabel } from '@/domain/workflow';
 import { locationLabel, ServiceTypesPicker } from '@/features/sales-orders/commercial-ui';
+import { suggestLine, useCommercialSettings, useServiceMeta } from '@/features/sales-orders/commercial-api';
+import { CurrencyFields, rateError } from '@/features/sales-orders/CurrencyFields';
 import {
-  suggestServiceRate,
   useCustomerComboOptions,
   useCustomerOptions,
   useServiceComboOptions,
@@ -43,6 +45,8 @@ const lineSchema = z.object({
   unit: z.string().trim().min(1, 'Unit').max(30),
   unitPrice: z.coerce.number().min(0, '≥ 0'),
   unitCost: z.coerce.number().min(0, '≥ 0'),
+  minimumCharge: z.number().optional(),
+  customerApproved: z.boolean().optional(),
 });
 
 const schema = z
@@ -103,6 +107,13 @@ function QuotationForm({
   const serviceCombo = useServiceComboOptions();
   const create = useCreateQuotation();
   const [submitMode, setSubmitMode] = useState<'draft' | 'submit'>('draft');
+  const settings = useCommercialSettings();
+  const serviceMeta = useServiceMeta();
+  const multiCurrency = !!settings.data?.multiCurrency;
+  const [fx, setFx] = useState<{ currency: Currency; rate: string }>({ currency: 'AED', rate: '1' });
+  const [fxTouched, setFxTouched] = useState(false);
+  const fxError = fxTouched ? rateError(fx.currency, fx.rate) : undefined;
+  const fxRate = fx.currency === 'AED' ? 1 : Number(fx.rate) || 1;
 
   const {
     register,
@@ -144,6 +155,7 @@ function QuotationForm({
       quantity: Number(l?.quantity) || 0,
       unitPrice: Number(l?.unitPrice) || 0,
       unitCost: Number(l?.unitCost) || 0,
+      minimumCharge: l?.minimumCharge,
     })),
   );
 
@@ -155,6 +167,8 @@ function QuotationForm({
     unit: l?.unit ?? '',
     unitPrice: String(l?.unitPrice ?? ''),
     unitCost: String(l?.unitCost ?? ''),
+    minimumCharge: l?.minimumCharge,
+    customerApproved: l?.customerApproved,
   }));
   const patchLine = (i: number, p: Partial<GridLine>) => {
     const o = { shouldDirty: true };
@@ -164,23 +178,38 @@ function QuotationForm({
     if (p.unit !== undefined) setValue(`lines.${i}.unit`, p.unit, o);
     if (p.unitPrice !== undefined) setValue(`lines.${i}.unitPrice`, p.unitPrice, o);
     if (p.unitCost !== undefined) setValue(`lines.${i}.unitCost`, p.unitCost, o);
+    if ('minimumCharge' in p) setValue(`lines.${i}.minimumCharge`, p.minimumCharge, o);
+    if (p.customerApproved !== undefined) setValue(`lines.${i}.customerApproved`, p.customerApproved, o);
   };
   const suggest = (serviceId: string) =>
-    suggestServiceRate(serviceId, { origin: getValues('origin'), destination: getValues('destination') });
+    suggestLine(serviceId, { origin: getValues('origin'), destination: getValues('destination') }, fxRate);
 
   const save = (submit: boolean) => async (v: FormOutput) => {
     setSubmitMode(submit ? 'submit' : 'draft');
-    const q = await create.mutateAsync({
+    setFxTouched(true);
+    if (rateError(fx.currency, fx.rate)) return;
+    const res = await create.mutateAsync({
       ...v,
       mode: transport ? v.mode : undefined,
       destination: transport ? v.destination : '',
       enquiryId,
       submit,
+      ...(fx.currency !== 'AED' ? { currency: fx.currency, exchangeRate: fxRate } : {}),
     });
-    toast({
-      title: `${q.number} ${submit ? 'submitted for approval' : 'saved as draft'}`,
-      body: q.status === 'Pending approval' ? 'An approver can now review the price and margin.' : undefined,
-    });
+    const q = res.quotation;
+    toast(
+      !submit
+        ? { title: `${q.number} saved as draft` }
+        : res.status === 'Pending approval'
+          ? {
+              title: `${q.number} sent for approval`,
+              body: `${res.reasons.join('; ')}. Waiting for the ${res.approverRole ?? 'approver'}.`,
+            }
+          : {
+              title: `${q.number} sent to the customer`,
+              body: 'No approval needed — discount and margin are inside the approval matrix limits.',
+            },
+    );
     void navigate({ to: '/quotations/$id', params: { id: q.id } });
   };
   const onSubmit = handleSubmit(save(false));
@@ -280,13 +309,24 @@ function QuotationForm({
               error={errors.validUntil?.message}
               {...register('validUntil')}
             />
+            {multiCurrency ? (
+              <CurrencyFields
+                currency={fx.currency}
+                rate={fx.rate}
+                rateError={fxError}
+                onChange={(next) => {
+                  setFxTouched(true);
+                  setFx(next);
+                }}
+              />
+            ) : null}
           </CardBody>
         </Card>
 
         <Card>
           <CardHeader
             title="Price lines"
-            description="Type to find a service — cost and a suggested price come from the rate card. Unit cost is internal."
+            description={`Type to find a service — cost and a suggested price come from the rate card. Unit cost and margin are internal and never printed.${fx.currency !== 'AED' ? ` Amounts in ${fx.currency}.` : ''}`}
           />
           <CardBody>
             <PriceLinesGrid
@@ -315,6 +355,8 @@ function QuotationForm({
               onAdd={() => append(emptyLine)}
               onRemove={remove}
               suggest={suggest}
+              serviceMeta={serviceMeta}
+              currency={fx.currency}
             />
             {errors.lines ? (
               <p role="alert" className="mt-2 text-caption font-medium text-danger">
@@ -322,7 +364,7 @@ function QuotationForm({
               </p>
             ) : null}
             <div className="mt-6 border-t border-border-subtle pt-5">
-              <QuotationTotals t={t} />
+              <QuotationTotals t={t} currency={fx.currency} rate={fxRate} />
             </div>
           </CardBody>
         </Card>
@@ -338,7 +380,10 @@ function QuotationForm({
           summary={
             <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-body-s">
               <span>
-                Total <strong className="tabular-nums">{formatMoney(t.total)}</strong>
+                Total{' '}
+                <strong className="tabular-nums">
+                  {fx.currency === 'AED' ? formatMoney(t.total) : `${fx.currency} ${t.total.toFixed(2)}`}
+                </strong>
               </span>
               <span className="text-fg-muted">
                 margin <span className="tabular-nums">{formatMoney(t.margin)}</span> ({t.marginPct}%)
