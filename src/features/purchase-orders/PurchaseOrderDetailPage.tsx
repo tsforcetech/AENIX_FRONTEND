@@ -1,6 +1,6 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { AlertTriangle, CheckCircle2, Clock3, FilePlus2, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Clock3, FilePlus2, Printer, XCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Badge, StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
@@ -43,6 +43,14 @@ export function PurchaseOrderDetailPage() {
         description={`${po.vendorName} · issued ${formatDateTime(po.issuedAt)}`}
         actions={
           <>
+            <ButtonLink
+              to="/purchase-orders/$id/print"
+              params={{ id: po.id }}
+              variant="ghost"
+              icon={<Printer aria-hidden="true" />}
+            >
+              Print PO
+            </ButtonLink>
             {po.status !== 'Billed' && po.status !== 'Cancelled' ? (
               <Button
                 variant="ghost"

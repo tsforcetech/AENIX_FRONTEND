@@ -85,3 +85,78 @@ export function reconcile(
     ok: mismatches === 0,
   };
 }
+
+// ---------- A13: bank reconciliation auto-match ----------
+export interface BankLineLike {
+  id: string;
+  date: string;
+  reference: string;
+  description: string;
+  /** + money in, − money out. */
+  amount: number;
+}
+
+export interface BookItem {
+  kind: 'Receipt' | 'Payment' | 'Expense';
+  id: string;
+  ref: string;
+  /** Other references that may appear on the statement (bank / cheque reference). */
+  refs: string[];
+  date: string;
+  /** Signed like the statement: + receipts, − payments / expenses. */
+  amount: number;
+}
+
+export interface BankMatch {
+  lineId: string;
+  item: BookItem;
+  rule: 'Amount + reference' | 'Amount + date';
+}
+
+const normRef = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+function refsOverlap(line: BankLineLike, item: BookItem): boolean {
+  const hay = normRef(`${line.reference} ${line.description}`);
+  const lineRef = normRef(line.reference);
+  return [item.ref, ...item.refs]
+    .map(normRef)
+    .filter((r) => r.length >= 4)
+    .some((r) => hay.includes(r) || (lineRef.length >= 4 && r.includes(lineRef)));
+}
+
+/**
+ * Auto-match statement lines to book items. Pass 1: same amount and a shared reference.
+ * Pass 2: same amount, the only candidate with that amount, dated within `days` days.
+ * Each line and each book item is used at most once.
+ */
+export function autoMatchBank(
+  lines: readonly BankLineLike[],
+  items: readonly BookItem[],
+  days = 5,
+): BankMatch[] {
+  const used = new Set<string>();
+  const matched = new Set<string>();
+  const out: BankMatch[] = [];
+  const same = (a: number, b: number) => Math.abs(a - b) < 0.005;
+  for (const line of lines) {
+    const hit = items.find((it) => !used.has(it.id) && same(it.amount, line.amount) && refsOverlap(line, it));
+    if (hit) {
+      used.add(hit.id);
+      matched.add(line.id);
+      out.push({ lineId: line.id, item: hit, rule: 'Amount + reference' });
+    }
+  }
+  for (const line of lines) {
+    if (matched.has(line.id)) continue;
+    const cands = items.filter((it) => !used.has(it.id) && same(it.amount, line.amount));
+    const near = cands.filter(
+      (it) => Math.abs(Date.parse(it.date) - Date.parse(line.date)) <= days * 86_400_000,
+    );
+    if (cands.length === 1 && near.length === 1) {
+      used.add(near[0]!.id);
+      matched.add(line.id);
+      out.push({ lineId: line.id, item: near[0]!, rule: 'Amount + date' });
+    }
+  }
+  return out;
+}

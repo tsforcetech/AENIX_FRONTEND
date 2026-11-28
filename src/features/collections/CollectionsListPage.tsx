@@ -1,5 +1,5 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
-import { BadgeCheck, Plus } from 'lucide-react';
+import { BadgeCheck, BellRing, Landmark, Plus } from 'lucide-react';
 import { useState } from 'react';
 import type { Collection } from '@/domain/types';
 import { StatusBadge } from '@/shared/ui/Badge';
@@ -62,7 +62,9 @@ export function CollectionsListPage() {
         <div className="whitespace-nowrap">
           <p>{r.method}</p>
           <p className="text-caption text-fg-muted">
-            {r.chequeDate ? `Cheque dated ${formatDate(r.chequeDate)}` : r.reference}
+            {r.chequeDate
+              ? `${r.chequeNo ? `Chq ${r.chequeNo} · ` : ''}dated ${formatDate(r.chequeDate)}`
+              : r.reference}
           </p>
         </div>
       ),
@@ -132,9 +134,21 @@ export function CollectionsListPage() {
         title="Receipts"
         description="Money received from customers: allocated to invoices, or held as an advance against a sales order. Post-dated cheques are held until they clear."
         actions={
-          <ButtonLink to="/collections/new" icon={<Plus aria-hidden="true" />}>
-            New receipt
-          </ButtonLink>
+          <>
+            <ButtonLink to="/collections/pdc" variant="secondary" icon={<Landmark aria-hidden="true" />}>
+              PDC register
+            </ButtonLink>
+            <ButtonLink
+              to="/collections/follow-up"
+              variant="secondary"
+              icon={<BellRing aria-hidden="true" />}
+            >
+              Follow-up
+            </ButtonLink>
+            <ButtonLink to="/collections/new" icon={<Plus aria-hidden="true" />}>
+              New receipt
+            </ButtonLink>
+          </>
         }
       />
       <Card>

@@ -11,7 +11,8 @@ import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
-import { formatDate } from '@/shared/utils/format';
+import { formatDate, formatNumber } from '@/shared/utils/format';
+import { toAed } from '@/domain/controls';
 import { PROTO_TODAY } from '@/prototype/seed';
 import { protoDb } from '@/prototype/store';
 import { useCreateInvoice, useInvoiceableSalesOrders, type InvoiceableSalesOrder } from './api';
@@ -61,10 +62,22 @@ export function NewInvoicePage() {
       return { ...l, soNumber: o.number, max: l.quantity, include: st.include, quantity: st.quantity };
     }),
   );
-  const billed = lines.filter((l) => l.include && l.quantity > 0);
-  const subtotal = r2(billed.reduce((s, l) => s + l.quantity * l.unitPrice, 0));
-  const vat = r2(subtotal * 0.05);
-  const invalidQty = lines.some((l) => l.include && (l.quantity <= 0 || l.quantity > l.max));
+  const billed = lines.filter((l) => l.include && l.quantity > 0 && !l.blockedReason);
+  const subtotal = r2(
+    billed.filter((l) => !l.isDisbursement).reduce((s, l) => s + l.quantity * l.unitPrice, 0),
+  );
+  const disbSubtotal = r2(
+    billed.filter((l) => l.isDisbursement).reduce((s, l) => s + l.quantity * l.unitPrice, 0),
+  );
+  const vat = r2(billed.reduce((s, l) => s + l.quantity * l.unitPrice * l.vatRate, 0));
+  const total = r2(subtotal + disbSubtotal + vat);
+  const invalidQty = lines.some(
+    (l) => l.include && !l.blockedReason && (l.quantity <= 0 || l.quantity > l.max),
+  );
+  const currencies = [...new Set(chosen.map((o) => o.currency))];
+  const currency = currencies[0] ?? 'AED';
+  const rate = chosen[0]?.exchangeRate ?? 1;
+  const mixedCurrency = currencies.length > 1;
 
   const toggleOrder = (id: string) =>
     setSelected((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
@@ -76,6 +89,10 @@ export function NewInvoicePage() {
     if (!customerId) return setError('Choose a customer.');
     if (!billed.length) return setError('Select at least one sales order line to invoice.');
     if (invalidQty) return setError('A quantity is zero or more than is left to bill.');
+    if (mixedCurrency)
+      return setError(
+        `One invoice can only combine sales orders in the same currency (selected: ${currencies.join(', ')}).`,
+      );
     try {
       const inv = await create.mutateAsync({
         post,
@@ -85,10 +102,13 @@ export function NewInvoicePage() {
           dueDate,
           lines: billed.map((l) => ({
             salesOrderId: l.salesOrderId,
+            sourceLineId: l.sourceLineId,
             description: l.description,
             quantity: l.quantity,
             unitPrice: l.unitPrice,
             uom: l.unit,
+            vatRate: l.vatRate,
+            isDisbursement: l.isDisbursement,
           })),
         },
       });
@@ -185,6 +205,8 @@ export function NewInvoicePage() {
                             </span>
                             <span className="block text-caption text-fg-muted">
                               PO {o.customerPoRef} · ordered {formatDate(o.orderDate)}
+                              {o.currency !== 'AED' ? ` · ${o.currency} at ${o.exchangeRate}` : ''}
+                              {o.status === 'Cancelled' ? ' · cancelled — cancellation fee only' : ''}
                             </span>
                           </span>
                           <span className="flex flex-wrap gap-1.5 text-caption">
@@ -201,9 +223,13 @@ export function NewInvoicePage() {
                           </span>
                           <span className="w-40 text-right text-caption text-fg-muted">
                             <span className="block text-body-s font-semibold text-fg">
-                              <Money amount={o.notInvoiced} />
+                              {o.currency === 'AED' ? (
+                                <Money amount={o.notInvoiced} />
+                              ) : (
+                                `${o.currency} ${formatNumber(o.notInvoiced, 2)}`
+                              )}
                             </span>
-                            left to bill of <Money amount={o.orderValue} />
+                            left to bill of <Money amount={o.orderValue} /> (AED)
                           </span>
                         </label>
                       </li>
@@ -217,6 +243,12 @@ export function NewInvoicePage() {
                     <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
                     Some selected orders have jobs that are not delivered yet. Bill them only if the contract
                     allows advance or milestone billing.
+                  </p>
+                ) : null}
+                {mixedCurrency ? (
+                  <p role="alert" className="mt-3 text-caption font-medium text-danger">
+                    One invoice can only combine sales orders in the same currency. Selected:{' '}
+                    {currencies.join(', ')}.
                   </p>
                 ) : null}
               </fieldset>
@@ -248,10 +280,10 @@ export function NewInvoicePage() {
                       Qty
                     </th>
                     <th scope="col" className="px-3 py-2 text-right font-medium">
-                      Unit price
+                      Unit price ({currency})
                     </th>
                     <th scope="col" className="px-5 py-2 text-right font-medium">
-                      Amount
+                      Amount ({currency})
                     </th>
                   </tr>
                 </thead>
@@ -268,7 +300,8 @@ export function NewInvoicePage() {
                         <input
                           type="checkbox"
                           aria-label={`Include ${l.description} (${l.soNumber})`}
-                          checked={l.include}
+                          checked={l.include && !l.blockedReason}
+                          disabled={!!l.blockedReason}
                           onChange={(e) => setLine(l.key, { include: e.target.checked }, l.max)}
                           className="size-4 accent-[var(--color-brand)]"
                         />
@@ -276,7 +309,19 @@ export function NewInvoicePage() {
                       <td className="px-3 py-2.5">
                         <DocRef>{l.soNumber}</DocRef>
                       </td>
-                      <td className="px-3 py-2.5">{l.description}</td>
+                      <td className="px-3 py-2.5">
+                        {l.description}
+                        {l.isDisbursement ? (
+                          <span className="block text-caption text-fg-muted">
+                            Disbursement — at cost · VAT 0% (VAT treatment per accountant)
+                          </span>
+                        ) : null}
+                        {l.blockedReason ? (
+                          <span className="block text-caption font-medium text-danger">
+                            Cannot bill: {l.blockedReason}
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-2.5 text-right">
                         <input
                           type="number"
@@ -287,7 +332,7 @@ export function NewInvoicePage() {
                           aria-invalid={
                             l.include && (l.quantity <= 0 || l.quantity > l.max) ? true : undefined
                           }
-                          disabled={!l.include}
+                          disabled={!l.include || !!l.blockedReason}
                           value={l.quantity}
                           onChange={(e) => setLine(l.key, { quantity: Number(e.target.value) }, l.max)}
                           className={clsx(inputClasses, 'h-9 w-24 text-right tabular-nums')}
@@ -296,11 +341,9 @@ export function NewInvoicePage() {
                           of {l.max} {l.unit}
                         </span>
                       </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <Money amount={l.unitPrice} />
-                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(l.unitPrice, 2)}</td>
                       <td className="px-5 py-2.5 text-right font-medium">
-                        <Money amount={l.include ? r2(l.quantity * l.unitPrice) : 0} />
+                        {formatNumber(l.include && !l.blockedReason ? r2(l.quantity * l.unitPrice) : 0, 2)}
                       </td>
                     </tr>
                   ))}
@@ -309,24 +352,32 @@ export function NewInvoicePage() {
             </div>
             <CardBody>
               <dl className="ml-auto w-full max-w-xs space-y-1.5 text-body-s">
-                <div className="flex justify-between">
-                  <dt className="text-fg-muted">Subtotal</dt>
-                  <dd>
-                    <Money amount={subtotal} />
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-fg-muted">VAT 5%</dt>
-                  <dd>
-                    <Money amount={vat} />
-                  </dd>
-                </div>
+                {[
+                  ['Services subtotal', subtotal],
+                  ...(disbSubtotal ? [['Disbursements (at cost)', disbSubtotal] as const] : []),
+                  ['VAT', vat],
+                ].map(([k, v]) => (
+                  <div key={k} className="flex justify-between">
+                    <dt className="text-fg-muted">{k}</dt>
+                    <dd className="tabular-nums">
+                      {currency} {formatNumber(Number(v), 2)}
+                    </dd>
+                  </div>
+                ))}
                 <div className="flex justify-between border-t border-border-subtle pt-1.5 text-[15px] font-semibold">
                   <dt>Total</dt>
-                  <dd>
-                    <Money amount={r2(subtotal + vat)} />
+                  <dd className="tabular-nums">
+                    {currency} {formatNumber(total, 2)}
                   </dd>
                 </div>
+                {currency !== 'AED' ? (
+                  <div className="flex justify-between text-caption text-fg-muted">
+                    <dt>AED equivalent at {rate}</dt>
+                    <dd>
+                      <Money amount={toAed(total, currency, rate)} />
+                    </dd>
+                  </div>
+                ) : null}
               </dl>
             </CardBody>
           </Card>

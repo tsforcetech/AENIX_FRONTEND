@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { invoiceAed } from '@/domain/balances';
 import { billTotals, daysBetween, invoiceTotals } from '@/domain/calc';
 import type { AccountGroup, JournalEntry, LedgerAccount } from '@/domain/types';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
@@ -80,7 +81,7 @@ function buildChart(): AccountNode[] {
           .filter(
             (i) => i.customerId === a.party!.id && ['Posted', 'Partially paid', 'Overdue'].includes(i.status),
           )
-          .reduce((s, i) => s + invoiceTotals(i).outstanding, 0),
+          .reduce((s, i) => s + invoiceAed(i, invoiceTotals(i).outstanding), 0),
       );
     return -round2(
       db.vendorBills
@@ -207,7 +208,7 @@ export const accountingApi = {
     ];
     for (const inv of protoDb.get().invoices) {
       if (!['Posted', 'Partially paid', 'Overdue'].includes(inv.status)) continue;
-      const { outstanding } = invoiceTotals(inv);
+      const outstanding = invoiceAed(inv, invoiceTotals(inv).outstanding);
       if (outstanding <= 0) continue;
       const late = daysBetween(inv.dueDate, PROTO_TODAY);
       const b = buckets[late <= 0 ? 0 : late <= 30 ? 1 : late <= 60 ? 2 : 3]!;

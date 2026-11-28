@@ -3,6 +3,7 @@ import { validateListSearch, type AppParentRoute } from '@/app/routes-base';
 import { VendorBillDetailPage } from './VendorBillDetailPage';
 import { VendorBillsListPage } from './VendorBillsListPage';
 import { NewVendorInvoicePage } from './NewVendorInvoicePage';
+import { DebitNotesPage } from './DebitNotesPage';
 
 export function vendorBillsRoutes(parent: AppParentRoute) {
   return [
@@ -22,6 +23,12 @@ export function vendorBillsRoutes(parent: AppParentRoute) {
             : undefined,
       }),
       component: NewVendorInvoicePage,
+    }),
+    createRoute({
+      getParentRoute: () => parent,
+      path: 'vendor-bills/debit-notes',
+      validateSearch: validateListSearch,
+      component: DebitNotesPage,
     }),
     createRoute({ getParentRoute: () => parent, path: 'vendor-bills/$id', component: VendorBillDetailPage }),
   ] as const;

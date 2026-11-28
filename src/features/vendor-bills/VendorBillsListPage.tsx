@@ -115,9 +115,14 @@ export function VendorBillsListPage() {
         title="Purchase invoices"
         description="Vendor invoices recorded against purchase orders and checked with a 3-way match (PO vs GRN / POD vs invoice). Approve, then pay."
         actions={
-          <ButtonLink to="/purchase-orders" variant="secondary">
-            Record from a purchase order
-          </ButtonLink>
+          <>
+            <ButtonLink to="/vendor-bills/debit-notes" variant="secondary">
+              Debit notes
+            </ButtonLink>
+            <ButtonLink to="/purchase-orders" variant="secondary">
+              Record from a purchase order
+            </ButtonLink>
+          </>
         }
       />
       <Card>
