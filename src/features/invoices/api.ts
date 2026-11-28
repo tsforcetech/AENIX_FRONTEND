@@ -422,9 +422,7 @@ export const invoicesApi = {
       })),
       paid: 0,
       status: 'Draft',
-      ...(currency !== 'AED'
-        ? { currency, exchangeRate: firstSo.exchangeRate ?? rateFor(currency) }
-        : {}),
+      ...(currency !== 'AED' ? { currency, exchangeRate: firstSo.exchangeRate ?? rateFor(currency) } : {}),
       emirate: customer ? emirateFor(customer) : undefined,
     };
     protoDb.update((s) => ({
