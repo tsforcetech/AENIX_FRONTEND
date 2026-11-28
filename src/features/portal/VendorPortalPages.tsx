@@ -12,7 +12,7 @@ import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
-import { formatDate, formatMoneyCompact } from '@/shared/utils/format';
+import { formatDate, formatMoney, formatMoneyCompact } from '@/shared/utils/format';
 import {
   useAssignmentAction,
   usePortalParty,
@@ -23,6 +23,7 @@ import {
   type VendorBillRow,
 } from './api';
 import { PortalDenied } from './PortalDenied';
+import { VendorDebitNotesCard, VendorMilestonesCard } from './VendorExtras';
 import { VendorDeliveryRequestsCard, VendorPurchaseOrdersCard } from './VendorPoPod';
 
 export function VendorPortalHome() {
@@ -204,6 +205,7 @@ export function VendorAssignmentsPage() {
             />
           </div>
         </Card>
+        <VendorMilestonesCard partyId={partyId} />
         <VendorPurchaseOrdersCard partyId={partyId} />
         <VendorDeliveryRequestsCard partyId={partyId} />
       </div>
@@ -218,7 +220,10 @@ const billColumns: Column<VendorBillRow>[] = [
     cell: (b) => (
       <div>
         <DocRef>{b.number}</DocRef>
-        <p className="text-caption text-fg-muted">Your ref {b.vendorRef}</p>
+        <p className="text-caption text-fg-muted">
+          Your ref {b.vendorRef}
+          {b.poNumber ? ` · ${b.poNumber}` : ''}
+        </p>
       </div>
     ),
   },
@@ -253,7 +258,31 @@ const billColumns: Column<VendorBillRow>[] = [
     align: 'right',
     cell: (b) => <Money amount={b.outstanding} muted={b.outstanding === 0} />,
   },
-  { key: 'status', header: 'Status', cell: (b) => <StatusBadge status={b.status} /> },
+  {
+    key: 'payment',
+    header: 'Payment',
+    cell: (b) => (
+      <div className="min-w-32">
+        <Badge
+          tone={
+            b.paymentStatus === 'Paid' ? 'success' : b.paymentStatus === 'Partly paid' ? 'warning' : 'neutral'
+          }
+        >
+          {b.paymentStatus}
+        </Badge>
+        {b.vouchers.length ? (
+          <ul className="mt-1 space-y-0.5 text-caption text-fg-muted">
+            {b.vouchers.map((v) => (
+              <li key={`${v.number}-${v.date}`}>
+                <span className="font-mono">{v.number}</span> · {formatDate(v.date)} · {formatMoney(v.amount)}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    ),
+  },
+  { key: 'status', header: 'Status', hideOnMobile: true, cell: (b) => <StatusBadge status={b.status} /> },
 ];
 
 export function VendorBillsPage() {
@@ -264,18 +293,21 @@ export function VendorBillsPage() {
     <div>
       <PageHeader
         title="Bills & payments"
-        description="Read-only status of the bills you have submitted to AENIX."
+        description="Read-only status of the bills you have submitted to AENIX, with the payment vouchers that paid them."
       />
-      <Card>
-        <DataTable
-          caption="Your bills"
-          columns={billColumns}
-          rows={data}
-          rowKey={(b) => b.id}
-          loading={isLoading}
-          emptyTitle="No bills yet"
-        />
-      </Card>
+      <div className="space-y-6">
+        <Card>
+          <DataTable
+            caption="Your bills"
+            columns={billColumns}
+            rows={data}
+            rowKey={(b) => b.id}
+            loading={isLoading}
+            emptyTitle="No bills yet"
+          />
+        </Card>
+        <VendorDebitNotesCard partyId={partyId} />
+      </div>
     </div>
   );
 }

@@ -36,6 +36,20 @@ export function BalanceSummary({ balance, loading }: { balance?: CustomerBalance
             {it.hint ? <p className="text-caption text-fg-muted">{it.hint}</p> : null}
           </div>
         ))}
+        {balance && (balance.credited > 0 || balance.writtenOff > 0) ? (
+          <p className="text-caption text-fg-muted sm:col-span-3 lg:col-span-5">
+            {balance.credited > 0 ? (
+              <>
+                Credit notes: <Money amount={balance.credited} />.{' '}
+              </>
+            ) : null}
+            {balance.writtenOff > 0 ? (
+              <>
+                Written off: <Money amount={balance.writtenOff} />.
+              </>
+            ) : null}
+          </p>
+        ) : null}
         {balance && (balance.pdcPending > 0 || balance.notYetInvoiced > 0) ? (
           <p className="text-caption text-fg-muted sm:col-span-3 lg:col-span-5">
             {balance.pdcPending > 0 ? (

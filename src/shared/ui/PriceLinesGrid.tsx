@@ -1,7 +1,9 @@
 import clsx from 'clsx';
 import { Plus, Trash2 } from 'lucide-react';
 import { useEffect, useRef, type KeyboardEvent } from 'react';
-import { formatMoney } from '@/shared/utils/format';
+import { lineMargin } from '@/domain/calc';
+import { BUSINESS_LOCALE, formatMoney } from '@/shared/utils/format';
+import { Badge } from './Badge';
 import { Button } from './Button';
 import { Combobox, type ComboOption } from './Combobox';
 import { inputClasses } from './Field';
@@ -14,9 +16,21 @@ export interface GridLine {
   unit: string;
   unitPrice: number | string;
   unitCost: number | string;
+  /** FLOW-003 S6: minimum charge per line (AED / document currency), from the service master. */
+  minimumCharge?: number;
+  /** FLOW-003 T8: surcharge line accepted by the customer. */
+  customerApproved?: boolean;
 }
 
-export type GridLineErrors = Partial<Record<keyof GridLine, string>> | undefined;
+/** FLOW-003 S5/S6/T8: service master flags shown on the line. */
+export interface GridServiceMeta {
+  isDisbursement?: boolean;
+  isSurcharge?: boolean;
+  minimumCharge?: number;
+}
+
+export type GridLineErrors =
+  Partial<Record<Exclude<keyof GridLine, 'minimumCharge' | 'customerApproved'>, string>> | undefined;
 
 type Col = 'serviceId' | 'description' | 'quantity' | 'unit' | 'unitPrice' | 'unitCost';
 
@@ -37,6 +51,8 @@ export function PriceLinesGrid({
   onRemove,
   suggest,
   showCost = true,
+  serviceMeta,
+  currency,
 }: {
   caption: string;
   lines: GridLine[];
@@ -48,7 +64,20 @@ export function PriceLinesGrid({
   onRemove: (index: number) => void;
   suggest?: (serviceId: string) => Partial<GridLine>;
   showCost?: boolean;
+  /** Service master flags (disbursement, surcharge, minimum charge) by service id. */
+  serviceMeta?: (serviceId: string) => GridServiceMeta | undefined;
+  /** FLOW-003 C10: document currency for the amounts (default AED). */
+  currency?: string;
 }) {
+  const fmt = (n: number) =>
+    currency && currency !== 'AED'
+      ? new Intl.NumberFormat(BUSINESS_LOCALE, {
+          style: 'currency',
+          currency,
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(n)
+      : formatMoney(n);
   const gridRef = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<{ row: number; col: Col } | null>(null);
 
@@ -141,8 +170,15 @@ export function PriceLinesGrid({
           </thead>
           <tbody>
             {lines.map((l, i) => {
-              const amount = num(l.quantity) * num(l.unitPrice);
-              const margin = num(l.quantity) * (num(l.unitPrice) - num(l.unitCost));
+              const m = lineMargin({
+                quantity: num(l.quantity),
+                unitPrice: num(l.unitPrice),
+                unitCost: num(l.unitCost),
+                minimumCharge: l.minimumCharge,
+              });
+              const raw = num(l.quantity) * num(l.unitPrice);
+              const minApplied = !!l.minimumCharge && raw < l.minimumCharge;
+              const meta = l.serviceId ? serviceMeta?.(l.serviceId) : undefined;
               return (
                 <tr key={keys[i] ?? i} className="group align-top">
                   <td className="py-3 pr-1 text-caption tabular-nums text-fg-muted">{i + 1}</td>
@@ -159,6 +195,8 @@ export function PriceLinesGrid({
                           serviceId,
                           unit: s.unit ?? l.unit,
                           description: l.description || s.description || '',
+                          minimumCharge: s.minimumCharge,
+                          customerApproved: false,
                           ...(num(l.unitCost) === 0 && s.unitCost !== undefined
                             ? { unitCost: s.unitCost }
                             : {}),
@@ -176,6 +214,34 @@ export function PriceLinesGrid({
                       onChange={(e) => onPatch(i, { description: e.target.value })}
                       {...cell(i, 'description')}
                     />
+                    {meta?.isDisbursement || meta?.isSurcharge || l.minimumCharge ? (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
+                        {meta?.isDisbursement ? (
+                          <Badge tone="info" dot={false}>
+                            Disbursement — at cost
+                          </Badge>
+                        ) : null}
+                        {l.minimumCharge ? (
+                          <span className={clsx(minApplied ? 'font-medium text-warning' : 'text-fg-muted')}>
+                            Min. charge {fmt(l.minimumCharge)}
+                            {minApplied ? ' — applied' : ''}
+                          </span>
+                        ) : null}
+                        {meta?.isSurcharge ? (
+                          <label className="inline-flex items-center gap-1.5 text-fg-secondary">
+                            <input
+                              type="checkbox"
+                              tabIndex={-1}
+                              checked={!!l.customerApproved}
+                              onChange={(e) => onPatch(i, { customerApproved: e.target.checked })}
+                              className="size-3.5 accent-[var(--color-brand)]"
+                            />
+                            Customer approved
+                            <span className="sr-only"> — line {i + 1} surcharge</span>
+                          </label>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="py-1.5 pr-2">
                     <input
@@ -218,16 +284,22 @@ export function PriceLinesGrid({
                     </td>
                   ) : null}
                   <td className="py-2 pr-2 text-right">
-                    <span className="block font-medium tabular-nums">{formatMoney(amount)}</span>
+                    <span className="block font-medium tabular-nums">{fmt(m.amount)}</span>
                     {showCost ? (
-                      <span
-                        className={clsx(
-                          'block text-caption tabular-nums',
-                          margin < 0 ? 'text-danger' : 'text-fg-muted',
-                        )}
-                      >
-                        margin {formatMoney(margin)}
-                      </span>
+                      <>
+                        <span className="block text-caption tabular-nums text-fg-muted">
+                          cost {fmt(m.cost)}
+                        </span>
+                        <span
+                          className={clsx(
+                            'block text-caption tabular-nums',
+                            m.margin < 0 ? 'font-medium text-danger' : 'text-fg-muted',
+                          )}
+                        >
+                          {m.margin < 0 ? 'loss ' : 'margin '}
+                          {fmt(m.margin)} ({m.marginPct}%)
+                        </span>
+                      </>
                     ) : null}
                   </td>
                   <td className="py-1.5">

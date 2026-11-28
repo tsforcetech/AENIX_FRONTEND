@@ -10,7 +10,11 @@ import type {
 } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
+import { PROTO_TODAY } from '@/prototype/seed';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
+
+/** Prototype "today" for follow-up reminders (C1). */
+export const FOLLOW_UP_TODAY = PROTO_TODAY;
 
 /**
  * Enquiries data source. PROTOTYPE ADAPTER — replace the bodies of `enquiriesApi` with calls
@@ -19,6 +23,10 @@ import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store'
  */
 export interface EnquiryRow extends Enquiry {
   customerName: string;
+  /** C1: open enquiry with a follow-up on or before today. */
+  followUpDue: boolean;
+  /** C1: open enquiry whose follow-up date has passed. */
+  followUpOverdue: boolean;
 }
 
 export interface EnquiryInput {
@@ -32,16 +40,31 @@ export interface EnquiryInput {
   cargo: Cargo;
   requiredBy: string;
   notes: string;
+  nextFollowUp?: string;
 }
 
-const toRow = (e: Enquiry): EnquiryRow => ({ ...e, customerName: lookupName.customer(e.customerId) });
+const OPEN: EnquiryStatus[] = ['New', 'Quoting', 'Quoted'];
+
+const toRow = (e: Enquiry): EnquiryRow => {
+  const open = OPEN.includes(e.status) && !!e.nextFollowUp;
+  return {
+    ...e,
+    customerName: lookupName.customer(e.customerId),
+    followUpDue: open && e.nextFollowUp! <= FOLLOW_UP_TODAY,
+    followUpOverdue: open && e.nextFollowUp! < FOLLOW_UP_TODAY,
+  };
+};
+
+/** `?followUp=due` keeps only enquiries with a follow-up due today or overdue. */
+const followUpFilter = (params: ListParams) => (r: EnquiryRow) => params.followUp !== 'due' || r.followUpDue;
 
 export const enquiriesApi = {
   list(params: ListParams): Promise<Page<EnquiryRow>> {
     const rows = [...protoDb.get().enquiries]
       .filter((e) => !params.type || e.serviceCategories.includes(params.type as ServiceCategory))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(toRow);
+      .map(toRow)
+      .filter(followUpFilter(params));
     return latency(
       paginate(rows, params, {
         searchText: (r) =>
@@ -89,6 +112,9 @@ export const enquiriesApi = {
     return latency(enquiry, 300);
   },
   setStatus(id: string, status: EnquiryStatus, lostReason?: string): Promise<void> {
+    // Lost always needs a reason (kept for win/loss reporting).
+    if (status === 'Lost' && (lostReason ?? '').trim().length < 3)
+      return Promise.reject(new Error('Give the reason the enquiry was lost.'));
     protoDb.update((s) => ({
       ...s,
       enquiries: s.enquiries.map((e) =>
@@ -96,7 +122,7 @@ export const enquiriesApi = {
           ? {
               ...e,
               status,
-              notes: lostReason ? `${e.notes ? `${e.notes}\n` : ''}Lost reason: ${lostReason}` : e.notes,
+              ...(status === 'Lost' ? { lostReason: lostReason!.trim() } : {}),
             }
           : e,
       ),
@@ -107,8 +133,26 @@ export const enquiriesApi = {
         entity: 'Enquiry',
         entityId: id,
         entityRef: e.number,
-        action: `marked the enquiry ${status.toLowerCase()}`,
+        action: `marked the enquiry ${status.toLowerCase()}${status === 'Lost' ? ` — ${lostReason!.trim()}` : ''}`,
       });
+    return latency(undefined, 200);
+  },
+  /** C1: set or clear the next follow-up date. */
+  setFollowUp(id: string, date: string | undefined): Promise<void> {
+    const e = protoDb.get().enquiries.find((x) => x.id === id);
+    if (!e) return Promise.reject(new Error('Not found'));
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return Promise.reject(new Error('Choose a valid date.'));
+    protoDb.update((s) => ({
+      ...s,
+      enquiries: s.enquiries.map((x) => (x.id === id ? { ...x, nextFollowUp: date || undefined } : x)),
+    }));
+    logActivity({
+      entity: 'Enquiry',
+      entityId: id,
+      entityRef: e.number,
+      action: date ? `set the next follow-up to ${date}` : 'cleared the follow-up',
+      changes: [{ field: 'Next follow-up', from: e.nextFollowUp ?? '—', to: date || '—' }],
+    });
     return latency(undefined, 200);
   },
 };
@@ -127,7 +171,8 @@ export function boardList(params: ListParams): Promise<EnquiryBoardRow[]> {
     [...db.enquiries]
       .filter((e) => !params.type || e.serviceCategories.includes(params.type as ServiceCategory))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(toRow),
+      .map(toRow)
+      .filter(followUpFilter(params)),
     { ...params, page: 1, pageSize: 100, status: undefined },
     {
       searchText: (r) => `${r.number} ${r.customerName} ${r.origin} ${r.destination} ${r.cargo.description}`,
@@ -204,7 +249,23 @@ export function useCreateEnquiry() {
 export function useSetEnquiryStatus() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, status }: { id: string; status: EnquiryStatus }) => enquiriesApi.setStatus(id, status),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['enquiries'] }),
+    mutationFn: ({ id, status, lostReason }: { id: string; status: EnquiryStatus; lostReason?: string }) =>
+      enquiriesApi.setStatus(id, status, lostReason),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['enquiries'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
+    },
+  });
+}
+
+export function useSetFollowUp() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, date }: { id: string; date: string | undefined }) =>
+      enquiriesApi.setFollowUp(id, date),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['enquiries'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
+    },
   });
 }

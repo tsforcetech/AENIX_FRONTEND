@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router';
 import { CheckCircle2, FileSpreadsheet, Upload } from 'lucide-react';
 import { useId, useState } from 'react';
 import { StatusBadge } from '@/shared/ui/Badge';
@@ -30,7 +31,14 @@ export function VendorPurchaseOrdersCard({ partyId }: { partyId: string }) {
       header: 'Purchase order',
       cell: (p) => (
         <div>
-          <DocRef>{p.number}</DocRef>
+          <Link
+            to="/vendor-portal/purchase-orders/$id"
+            params={{ id: p.id }}
+            className="hover:underline"
+            aria-label={`Open printable ${p.number}`}
+          >
+            <DocRef>{p.number}</DocRef>
+          </Link>
           <p className="text-caption text-fg-muted">{p.description}</p>
         </div>
       ),

@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus } from 'lucide-react';
+import { PencilLine, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -14,12 +14,39 @@ import { inputClasses, SelectField, TextField } from '@/shared/ui/Field';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToast } from '@/shared/ui/Toast';
-import { formatDate } from '@/shared/utils/format';
-import { useAddRate, useRates, useServices, type RateRow } from './api';
+import { formatDate, formatMoney } from '@/shared/utils/format';
+import { useAddRate, useRates, useServices, useUpdateServiceFlags, type RateRow } from './api';
 
-const serviceColumns: Column<Service>[] = [
+const serviceColumns = (onEdit: (s: Service) => void): Column<Service>[] => [
   { key: 'code', header: 'Code', cell: (s) => <DocRef>{s.code}</DocRef> },
-  { key: 'name', header: 'Service', cell: (s) => <span className="font-medium">{s.name}</span> },
+  {
+    key: 'name',
+    header: 'Service',
+    cell: (s) => (
+      <div className="min-w-40">
+        <span className="font-medium">{s.name}</span>
+        {s.isDisbursement || s.isSurcharge || s.minimumCharge ? (
+          <span className="mt-1 flex flex-wrap gap-1">
+            {s.isDisbursement ? (
+              <Badge tone="info" dot={false}>
+                Disbursement — at cost
+              </Badge>
+            ) : null}
+            {s.isSurcharge ? (
+              <Badge tone="warning" dot={false}>
+                Surcharge — customer approval
+              </Badge>
+            ) : null}
+            {s.minimumCharge ? (
+              <Badge tone="neutral" dot={false}>
+                Min. charge {formatMoney(s.minimumCharge)}
+              </Badge>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+    ),
+  },
   {
     key: 'mode',
     header: 'Mode',
@@ -35,6 +62,22 @@ const serviceColumns: Column<Service>[] = [
     header: 'Description',
     hideOnMobile: true,
     cell: (s) => <span className="text-fg-muted">{s.description}</span>,
+  },
+  {
+    key: 'edit',
+    header: 'Billing',
+    align: 'right',
+    cell: (s) => (
+      <Button
+        variant="ghost"
+        size="sm"
+        icon={<PencilLine aria-hidden="true" />}
+        aria-label={`Edit billing flags of ${s.name}`}
+        onClick={() => onEdit(s)}
+      >
+        Edit
+      </Button>
+    ),
   },
 ];
 
@@ -66,6 +109,7 @@ export function ServicesPage() {
   const [vendorId, setVendorId] = useState('');
   const rates = useRates({ serviceId: serviceId || undefined, vendorId: vendorId || undefined });
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Service | null>(null);
 
   return (
     <div className="space-y-6">
@@ -83,7 +127,7 @@ export function ServicesPage() {
         <div className="mt-3">
           <DataTable
             caption="Service catalogue"
-            columns={serviceColumns}
+            columns={serviceColumns(setEditing)}
             rows={services.data}
             rowKey={(s) => s.id}
             loading={services.isLoading}
@@ -149,7 +193,99 @@ export function ServicesPage() {
         </div>
       </Card>
       <AddRateDialog open={adding} onClose={() => setAdding(false)} />
+      {editing ? <ServiceFlagsDialog service={editing} onClose={() => setEditing(null)} /> : null}
     </div>
+  );
+}
+
+/** S5/S6/T8: disbursement, surcharge and minimum charge on a service. */
+function ServiceFlagsDialog({ service, onClose }: { service: Service; onClose: () => void }) {
+  const update = useUpdateServiceFlags();
+  const toast = useToast();
+  const [isDisbursement, setDisb] = useState(!!service.isDisbursement);
+  const [isSurcharge, setSurch] = useState(!!service.isSurcharge);
+  const [min, setMin] = useState(String(service.minimumCharge ?? 0));
+  const [touched, setTouched] = useState(false);
+  const minNum = min.trim() === '' ? 0 : Number(min);
+  const minError = touched && (!Number.isFinite(minNum) || minNum < 0) ? 'Enter 0 or more' : undefined;
+  const bothError =
+    touched && isDisbursement && isSurcharge ? 'Choose disbursement or surcharge, not both' : undefined;
+  const submit = () => {
+    setTouched(true);
+    if (!Number.isFinite(minNum) || minNum < 0 || (isDisbursement && isSurcharge)) return;
+    update.mutate(
+      { id: service.id, isDisbursement, isSurcharge, minimumCharge: minNum },
+      {
+        onSuccess: () => {
+          toast({ title: `${service.name} updated` });
+          onClose();
+        },
+        onError: (e) => toast({ title: 'Could not save', body: e.message }),
+      },
+    );
+  };
+  const box = 'size-4 accent-[var(--color-brand)]';
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Billing flags — ${service.name}`}
+      description="How this service is priced and invoiced on quotations, orders and invoices."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button busy={update.isPending} onClick={submit}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 text-body-s">
+        <label className="flex items-start gap-3 font-medium">
+          <input
+            type="checkbox"
+            className={`${box} mt-0.5`}
+            checked={isDisbursement}
+            onChange={(e) => setDisb(e.target.checked)}
+          />
+          <span>
+            Disbursement
+            <span className="block text-caption font-normal text-fg-muted">
+              Paid for the customer (duty, port fees) and rebilled at cost — not revenue.
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-3 font-medium">
+          <input
+            type="checkbox"
+            className={`${box} mt-0.5`}
+            checked={isSurcharge}
+            onChange={(e) => setSurch(e.target.checked)}
+          />
+          <span>
+            Surcharge
+            <span className="block text-caption font-normal text-fg-muted">
+              Waiting, demurrage, extra stop, after-hours — each line needs the customer’s approval.
+            </span>
+          </span>
+        </label>
+        {bothError ? (
+          <p role="alert" className="text-caption font-medium text-danger">
+            {bothError}
+          </p>
+        ) : null}
+        <TextField
+          label="Minimum charge per line (AED)"
+          inputMode="decimal"
+          hint="0 = no minimum. Applied when quantity × price is lower."
+          value={min}
+          error={minError}
+          onChange={(e) => setMin(e.target.value)}
+        />
+      </div>
+    </Dialog>
   );
 }
 

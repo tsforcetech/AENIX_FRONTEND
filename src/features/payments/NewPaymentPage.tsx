@@ -36,6 +36,7 @@ export function NewPaymentPage() {
   const [method, setMethod] = useState<PaymentMethod>('Bank transfer');
   const [reference, setReference] = useState('');
   const [chequeDate, setChequeDate] = useState('');
+  const [chequeNo, setChequeNo] = useState('');
   const [error, setError] = useState<string | undefined>();
   const create = useCreatePayment();
 
@@ -65,6 +66,7 @@ export function NewPaymentPage() {
     if (total <= 0) return setError('Enter an amount against at least one bill.');
     if (reference.trim().length < 2) return setError('Enter the bank or cheque reference.');
     if (isCheque && !chequeDate) return setError('Enter the cheque date.');
+    if (isCheque && !chequeNo.trim()) return setError('Enter the cheque number.');
     try {
       const pv = await create.mutateAsync({
         vendorId,
@@ -72,14 +74,15 @@ export function NewPaymentPage() {
         method,
         reference: reference.trim(),
         chequeDate: isCheque ? chequeDate : undefined,
+        chequeNo: isCheque ? chequeNo.trim() : undefined,
         amount: total,
         allocations: rows.filter((b) => b.pay > 0).map((b) => ({ billId: b.id, amount: b.pay })),
       });
       toast({
-        title: `${pv.number} saved`,
+        title: pv.status === 'Pending approval' ? `${pv.number} sent for approval` : `${pv.number} saved`,
         body: `${formatMoney(pv.amount)} to ${vendors.data?.find((v) => v.value === vendorId)?.label ?? 'vendor'}`,
       });
-      void navigate({ to: '/payments' });
+      void navigate({ to: '/payments/$id', params: { id: pv.id } });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the payment.');
     }
@@ -90,7 +93,7 @@ export function NewPaymentPage() {
       <PageHeader
         title="New payment"
         crumbs={[{ label: 'Payments', to: '/payments' }, { label: 'New' }]}
-        description="Pay a vendor against approved purchase invoices. The voucher amount is the total allocated."
+        description="Pay a vendor against approved purchase invoices. The voucher amount is the total allocated. Large vouchers wait for approval before they post."
       />
       <div className="space-y-6">
         <Card>
@@ -123,12 +126,21 @@ export function NewPaymentPage() {
               options={METHODS.map((m) => ({ value: m, label: m }))}
             />
             <TextField
-              label={isCheque ? 'Cheque no. & bank' : 'Bank reference'}
+              label={isCheque ? 'Bank / account reference' : 'Bank reference'}
               required
               value={reference}
-              placeholder={isCheque ? 'e.g. CHQ 118204 — Mashreq' : 'e.g. TT771230'}
+              placeholder={isCheque ? 'e.g. Current account' : 'e.g. TT771230'}
               onChange={(e) => setReference(e.target.value)}
             />
+            {isCheque ? (
+              <TextField
+                label="Cheque no."
+                required
+                value={chequeNo}
+                placeholder="e.g. 118204"
+                onChange={(e) => setChequeNo(e.target.value)}
+              />
+            ) : null}
             {isCheque ? (
               <TextField
                 label="Cheque date"

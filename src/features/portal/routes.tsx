@@ -1,6 +1,7 @@
 import { createRoute } from '@tanstack/react-router';
 import type { AppParentRoute } from '@/app/routes-base';
 import { CustomerApprovalsPage, CustomerInvoicesPage, CustomerPortalHome } from './CustomerPortalPages';
+import { VendorPoPrintPage } from './VendorExtras';
 import { VendorAssignmentsPage, VendorBillsPage, VendorPortalHome } from './VendorPortalPages';
 
 /** Portal routes. Party scope comes from the session only — no party ids in paths or search. */
@@ -16,5 +17,10 @@ export function portalRoutes(parent: AppParentRoute) {
       component: VendorAssignmentsPage,
     }),
     createRoute({ getParentRoute: () => parent, path: 'vendor-portal/bills', component: VendorBillsPage }),
+    createRoute({
+      getParentRoute: () => parent,
+      path: 'vendor-portal/purchase-orders/$id',
+      component: VendorPoPrintPage,
+    }),
   ] as const;
 }

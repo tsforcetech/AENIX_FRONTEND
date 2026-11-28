@@ -4,6 +4,8 @@ import { invoiceTotals, workOrderFinancials } from '@/domain/calc';
 import type { ActivityEvent, ServiceCategory, TransportMode, WorkOrder } from '@/domain/types';
 import { monthlyRevenue, PROTO_TODAY } from '@/prototype/seed';
 import { latency, protoDb } from '@/prototype/store';
+import { openPdcs } from '@/features/reports/analytics';
+import { expiringSoon, followUpsDue, type ExpiringItem } from './alerts';
 
 /**
  * Home overview view-model. REQUESTED contract (to be added to API-DEPENDENCIES as a
@@ -52,6 +54,21 @@ export interface HomeOverview {
   warehouse: { palletsUsed: number; palletsCapacity: number; skus: number; movementsThisWeek: number };
   revenueByMonth: typeof monthlyRevenue;
   activity: ActivityEvent[];
+  /** FLOW-003 cross-cutting cards. */
+  approvals: {
+    count: number;
+    items: { id: string; ref: string; docType: string; summary: string; role: string }[];
+  };
+  expiring: ExpiringItem[];
+  followUps: { id: string; number: string; customer: string; date: string; overdue: boolean }[];
+  pdcsThisWeek: {
+    id: string;
+    number: string;
+    direction: 'Received' | 'Issued';
+    party: string;
+    date: string;
+    amount: number;
+  }[];
 }
 
 function buildOverview(): HomeOverview {
@@ -241,6 +258,9 @@ function buildOverview(): HomeOverview {
   db.workOrders.filter((w) => w.status !== 'Cancelled').forEach((w) => (kindMix[jobKindOf(w)] += 1));
 
   const pallets = sum(db.stockItems.map((s) => s.pallets));
+  const pendingApprovals = db.approvalRequests
+    .filter((r) => r.record.status === 'Pending')
+    .sort((a, b) => a.record.requestedAt.localeCompare(b.record.requestedAt));
   const nov = monthlyRevenue[monthlyRevenue.length - 1]!;
   const oct = monthlyRevenue[monthlyRevenue.length - 2]!;
 
@@ -295,6 +315,40 @@ function buildOverview(): HomeOverview {
     },
     revenueByMonth: monthlyRevenue,
     activity: db.activity.slice(0, 8),
+    approvals: {
+      count: pendingApprovals.length,
+      items: pendingApprovals.slice(0, 4).map((r) => ({
+        id: r.id,
+        ref: r.entityRef,
+        docType: r.docType,
+        summary: r.summary,
+        role: r.record.approverRole,
+      })),
+    },
+    expiring: expiringSoon(
+      { vehicles: db.vehicles, drivers: db.drivers, stockItems: db.stockItems, customerName },
+      today,
+    ),
+    followUps: followUpsDue(db.enquiries, today).map((e) => ({
+      id: e.id,
+      number: e.number,
+      customer: customerName(e.customerId),
+      date: e.nextFollowUp!,
+      overdue: e.nextFollowUp! < today,
+    })),
+    pdcsThisWeek: openPdcs(db.collections, db.vendorPayments, today)
+      .filter((p) => p.daysLeft <= 7)
+      .map((p) => ({
+        id: p.id,
+        number: p.number,
+        direction: p.direction,
+        party:
+          p.direction === 'Received'
+            ? customerName(p.partyId)
+            : (db.vendors.find((v) => v.id === p.partyId)?.name ?? '—'),
+        date: p.chequeDate,
+        amount: p.amount,
+      })),
   };
 }
 

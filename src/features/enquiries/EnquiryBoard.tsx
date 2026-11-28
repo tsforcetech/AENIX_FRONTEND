@@ -1,6 +1,14 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { ArrowRightLeft, CalendarClock, FileText, GripVertical, Lock } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRightLeft,
+  BellRing,
+  CalendarClock,
+  FileText,
+  GripVertical,
+  Lock,
+} from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import type { EnquiryStatus } from '@/domain/types';
 import { ServiceIcons, locationTextMulti } from '@/features/sales-orders/commercial-ui';
@@ -11,7 +19,7 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Dialog } from '@/shared/ui/Dialog';
-import { TextareaField } from '@/shared/ui/Field';
+import { TextareaField, TextField } from '@/shared/ui/Field';
 import { DocRef } from '@/shared/ui/Money';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
@@ -23,7 +31,13 @@ const shortDate = (iso: string) =>
     month: 'short',
     timeZone: BUSINESS_TIME_ZONE,
   }).format(new Date(`${iso}T12:00:00+04:00`));
-import { useEnquiryBoard, useMoveEnquiry, type EnquiryBoardRow } from './api';
+import {
+  FOLLOW_UP_TODAY,
+  useEnquiryBoard,
+  useMoveEnquiry,
+  useSetFollowUp,
+  type EnquiryBoardRow,
+} from './api';
 
 export const BOARD_COLUMNS: EnquiryStatus[] = ['New', 'Quoting', 'Quoted', 'Won', 'Lost'];
 const FINAL: EnquiryStatus[] = ['Won', 'Lost'];
@@ -55,6 +69,7 @@ export function EnquiryBoard({ params }: { params: ListParams }) {
   const [announce, setAnnounce] = useState('');
   const [lostFor, setLostFor] = useState<EnquiryBoardRow | null>(null);
   const [wonBlocked, setWonBlocked] = useState<EnquiryBoardRow | null>(null);
+  const [followFor, setFollowFor] = useState<EnquiryBoardRow | null>(null);
   const cardRefs = useRef(new Map<string, HTMLAnchorElement>());
 
   const rows = data ?? [];
@@ -224,6 +239,7 @@ export function EnquiryBoard({ params }: { params: ListParams }) {
                       }}
                       onKeyDown={(e) => onCardKeyDown(e, row)}
                       onMoveTo={(to) => attemptMove(row, to)}
+                      onFollowUp={() => setFollowFor(row)}
                     />
                   </li>
                 ))}
@@ -244,6 +260,7 @@ export function EnquiryBoard({ params }: { params: ListParams }) {
         })}
       </div>
 
+      <FollowUpDialog row={followFor} onClose={() => setFollowFor(null)} />
       <LostReasonDialog
         row={lostFor}
         onClose={() => setLostFor(null)}
@@ -294,12 +311,14 @@ function EnquiryCard({
   cardRef,
   onKeyDown,
   onMoveTo,
+  onFollowUp,
 }: {
   row: EnquiryBoardRow;
   picked: boolean;
   cardRef: (el: HTMLAnchorElement | null) => void;
   onKeyDown: (e: KeyboardEvent<HTMLAnchorElement>) => void;
   onMoveTo: (to: EnquiryStatus) => void;
+  onFollowUp: () => void;
 }) {
   const navigate = useNavigate();
   const final = FINAL.includes(row.status);
@@ -345,7 +364,7 @@ function EnquiryCard({
               className="size-4 text-fg-muted opacity-0 group-hover:opacity-100"
             />
           ) : null}
-          <MoveMenu row={row} onMoveTo={onMoveTo} />
+          <MoveMenu row={row} onMoveTo={onMoveTo} onFollowUp={final ? undefined : onFollowUp} />
         </span>
       </div>
       <div id={`card-meta-${row.id}`} className="mt-2 space-y-1.5 text-caption text-fg-muted">
@@ -354,6 +373,30 @@ function EnquiryCard({
           <span className="truncate">{services}</span>
         </p>
         {location ? <p className="truncate text-fg-secondary">{location}</p> : null}
+        {row.nextFollowUp && !final ? (
+          <p
+            className={clsx(
+              'flex items-center gap-1.5',
+              row.followUpOverdue
+                ? 'font-semibold text-danger'
+                : row.followUpDue
+                  ? 'font-semibold text-fg'
+                  : 'text-fg-secondary',
+            )}
+          >
+            {row.followUpOverdue ? (
+              <AlertTriangle aria-hidden="true" className="size-3.5" />
+            ) : (
+              <BellRing aria-hidden="true" className="size-3.5" />
+            )}
+            {row.followUpOverdue
+              ? 'Follow-up overdue · '
+              : row.followUpDue
+                ? 'Follow up today · '
+                : 'Follow up '}
+            {shortDate(row.nextFollowUp)}
+          </p>
+        ) : null}
         <div className="flex items-center justify-between gap-2 pt-1">
           <span
             className={clsx(
@@ -390,7 +433,15 @@ function EnquiryCard({
   );
 }
 
-function MoveMenu({ row, onMoveTo }: { row: EnquiryBoardRow; onMoveTo: (to: EnquiryStatus) => void }) {
+function MoveMenu({
+  row,
+  onMoveTo,
+  onFollowUp,
+}: {
+  row: EnquiryBoardRow;
+  onMoveTo: (to: EnquiryStatus) => void;
+  onFollowUp?: () => void;
+}) {
   const { open, setOpen, ref } = usePopover();
   return (
     <div ref={ref} className="relative">
@@ -424,18 +475,112 @@ function MoveMenu({ row, onMoveTo }: { row: EnquiryBoardRow; onMoveTo: (to: Enqu
               <StatusBadge status={s} />
             </button>
           ))}
+          {onFollowUp ? (
+            <>
+              <div className="my-1 border-t border-border-subtle" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onFollowUp();
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-body-s hover:bg-surface-muted"
+              >
+                <BellRing aria-hidden="true" className="size-3.5 text-fg-muted" />
+                {row.nextFollowUp ? 'Change follow-up…' : 'Set follow-up…'}
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-function LostReasonDialog({
+/** C1: set / change / clear the next follow-up date of an enquiry. */
+export function FollowUpDialog({
+  row,
+  onClose,
+}: {
+  row: { id: string; number: string; nextFollowUp?: string } | null;
+  onClose: () => void;
+}) {
+  const setFollowUp = useSetFollowUp();
+  const toast = useToast();
+  const [date, setDate] = useState('');
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (!row) return;
+    const t = setTimeout(() => {
+      setDate(row.nextFollowUp ?? '');
+      setTouched(false);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [row]);
+  const error = touched && !date ? 'Choose a date, or use Clear' : undefined;
+  const save = (value: string | undefined) => {
+    if (!row) return;
+    setFollowUp.mutate(
+      { id: row.id, date: value },
+      {
+        onSuccess: () => {
+          toast({
+            title: value ? `Follow-up set for ${row.number}` : `Follow-up cleared on ${row.number}`,
+            body: value ? shortDate(value) : undefined,
+          });
+          onClose();
+        },
+        onError: (e) => toast({ title: 'Could not save the follow-up', body: e.message }),
+      },
+    );
+  };
+  return (
+    <Dialog
+      open={!!row}
+      onClose={onClose}
+      title={row ? `Follow-up for ${row.number}` : 'Follow-up'}
+      description={`When to contact the customer next. Today is ${shortDate(FOLLOW_UP_TODAY)}.`}
+      footer={
+        <>
+          {row?.nextFollowUp ? (
+            <Button variant="ghost" onClick={() => save(undefined)} disabled={setFollowUp.isPending}>
+              Clear
+            </Button>
+          ) : null}
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            busy={setFollowUp.isPending}
+            onClick={() => {
+              setTouched(true);
+              if (date) save(date);
+            }}
+          >
+            Save follow-up
+          </Button>
+        </>
+      }
+    >
+      <TextField
+        label="Next follow-up"
+        type="date"
+        required
+        value={date}
+        error={error}
+        onChange={(e) => setDate(e.target.value)}
+      />
+    </Dialog>
+  );
+}
+
+export function LostReasonDialog({
   row,
   onClose,
   onConfirm,
 }: {
-  row: EnquiryBoardRow | null;
+  row: { number: string } | null;
   onClose: () => void;
   onConfirm: (reason: string) => void;
 }) {

@@ -1,6 +1,6 @@
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { Columns3, List, Plus } from 'lucide-react';
+import { AlertTriangle, BellRing, Columns3, List, Plus } from 'lucide-react';
 import type { EnquiryStatus } from '@/domain/types';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { ButtonLink } from '@/shared/ui/Button';
@@ -72,6 +72,29 @@ const columns: Column<EnquiryRow>[] = [
     cell: (r) => <span className="whitespace-nowrap">{formatDate(r.requiredBy)}</span>,
   },
   {
+    key: 'followUp',
+    header: 'Follow-up',
+    cell: (r) =>
+      r.nextFollowUp && (r.status === 'New' || r.status === 'Quoting' || r.status === 'Quoted') ? (
+        <span
+          className={clsx(
+            'inline-flex items-center gap-1 whitespace-nowrap',
+            r.followUpOverdue ? 'font-semibold text-danger' : r.followUpDue ? 'font-semibold' : '',
+          )}
+        >
+          {r.followUpOverdue ? (
+            <AlertTriangle aria-hidden="true" className="size-3.5" />
+          ) : (
+            <BellRing aria-hidden="true" className="size-3.5 text-fg-muted" />
+          )}
+          {r.followUpOverdue ? 'Overdue · ' : r.followUpDue ? 'Today · ' : ''}
+          {formatDate(r.nextFollowUp)}
+        </span>
+      ) : (
+        <span className="text-fg-muted">—</span>
+      ),
+  },
+  {
     key: 'owner',
     header: 'Owner',
     hideOnMobile: true,
@@ -89,7 +112,28 @@ export function EnquiriesListPage() {
     status: search.status,
     search: search.q,
     type: search.type,
+    followUp: search.followUp,
   });
+  const followUpToggle = (
+    <button
+      type="button"
+      aria-pressed={search.followUp === 'due'}
+      onClick={() =>
+        void navigate({
+          search: (p) => ({ ...p, followUp: p.followUp === 'due' ? undefined : 'due', page: undefined }),
+        })
+      }
+      className={clsx(
+        'inline-flex h-10 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-body-s font-medium transition-colors',
+        search.followUp === 'due'
+          ? 'border-brand bg-brand-subtle text-brand'
+          : 'border-border bg-surface text-fg-secondary hover:bg-canvas',
+      )}
+    >
+      <BellRing aria-hidden="true" className="size-4" />
+      Follow-ups due
+    </button>
+  );
 
   return (
     <div>
@@ -122,15 +166,18 @@ export function EnquiriesListPage() {
               }
               searchPlaceholder="Search number, customer, location…"
               extra={
-                <ServiceTypeFilter
-                  value={search.type}
-                  onChange={(type) => void navigate({ search: (p) => ({ ...p, type, page: undefined }) })}
-                />
+                <>
+                  <ServiceTypeFilter
+                    value={search.type}
+                    onChange={(type) => void navigate({ search: (p) => ({ ...p, type, page: undefined }) })}
+                  />
+                  {followUpToggle}
+                </>
               }
             />
             <div className="h-4" />
           </Card>
-          <EnquiryBoard params={{ search: search.q, type: search.type }} />
+          <EnquiryBoard params={{ search: search.q, type: search.type, followUp: search.followUp }} />
         </div>
       ) : (
         <Card>
@@ -146,10 +193,13 @@ export function EnquiriesListPage() {
             onSearch={(q) => void navigate({ search: (p) => ({ ...p, q: q || undefined, page: undefined }) })}
             searchPlaceholder="Search number, customer, location…"
             extra={
-              <ServiceTypeFilter
-                value={search.type}
-                onChange={(type) => void navigate({ search: (p) => ({ ...p, type, page: undefined }) })}
-              />
+              <>
+                <ServiceTypeFilter
+                  value={search.type}
+                  onChange={(type) => void navigate({ search: (p) => ({ ...p, type, page: undefined }) })}
+                />
+                {followUpToggle}
+              </>
             }
           />
           <DataTable

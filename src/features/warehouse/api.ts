@@ -1,8 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { MovementType, StockItem, StockMovement } from '@/domain/types';
+import { assertOpenPeriod } from '@/domain/controls';
+import { nextDocNumber } from '@/domain/numbering';
+import type { CycleCount, MovementType, StockItem, StockMovement, WarehouseLocation } from '@/domain/types';
+import { approvalNeeded, onApprovalDecided, requestApproval } from '@/shared/data/approvals';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
-import { latency, logActivity, newId, protoDb } from '@/prototype/store';
+import { latency, logActivity, newId, protoDb, useProtoDb } from '@/prototype/store';
+import {
+  expiryState,
+  isInLocation,
+  maxCountDifference,
+  occupancy,
+  type ExpiryState,
+  type LocationOccupancy,
+} from './floor';
 
 /**
  * Warehouse (3PL) data source. PROTOTYPE ADAPTER — replace with the generated OpenAPI client
@@ -16,7 +27,14 @@ const WEEK_START = '2026-11-16';
 
 export interface StockRow extends StockItem {
   customerName: string;
+  /** FLOW-003 W5 */
+  expiry: ExpiryState;
+  status: NonNullable<StockItem['stockStatus']>;
+  jobNumber?: string;
 }
+
+/** Stock screen filters (W5): stock status or expiry alert. */
+export const STOCK_FILTERS = ['Available', 'Quarantine', 'Damaged', 'Expiring', 'Expired'] as const;
 
 export interface MovementRow extends StockMovement {
   customerName: string;
@@ -122,14 +140,38 @@ export const warehouseApi = {
   },
 
   stock(params: ListParams): Promise<Page<StockRow>> {
-    const rows = [...protoDb.get().stockItems]
-      .sort((a, b) => a.location.localeCompare(b.location))
-      .map((s) => ({ ...s, customerName: lookupName.customer(s.customerId) }));
-    return latency(
-      paginate(rows, params, {
-        searchText: (r) => `${r.sku} ${r.description} ${r.customerName} ${r.location}`,
-      }),
+    const db = protoDb.get();
+    const all: StockRow[] = [...db.stockItems]
+      .sort(
+        (a, b) =>
+          a.location.localeCompare(b.location) || (a.expiryDate ?? '').localeCompare(b.expiryDate ?? ''),
+      )
+      .map((s) => ({
+        ...s,
+        customerName: lookupName.customer(s.customerId),
+        expiry: s.qtyOnHand > 0 ? expiryState(s.expiryDate, TODAY) : 'No expiry',
+        status: s.stockStatus ?? 'Available',
+        jobNumber: s.workOrderId ? db.workOrders.find((w) => w.id === s.workOrderId)?.number : undefined,
+      }));
+    const q = params.search?.trim().toLowerCase();
+    const searched = q
+      ? all.filter((r) =>
+          `${r.sku} ${r.description} ${r.customerName} ${r.location} ${r.batch ?? ''} ${r.jobNumber ?? ''}`
+            .toLowerCase()
+            .includes(q),
+        )
+      : all;
+    const matches = (r: StockRow, f: string) =>
+      f === 'Expiring' || f === 'Expired' ? r.expiry === f : r.status === f && r.qtyOnHand > 0;
+    const counts: Record<string, number> = { All: searched.length };
+    for (const f of STOCK_FILTERS) counts[f] = searched.filter((r) => matches(r, f)).length;
+    const filtered = params.status ? searched.filter((r) => matches(r, params.status!)) : searched;
+    const page = paginate(
+      filtered,
+      { ...params, search: undefined, status: undefined },
+      { searchText: () => '' },
     );
+    return latency({ ...page, counts });
   },
 
   movements(params: ListParams): Promise<Page<MovementRow>> {
@@ -306,4 +348,396 @@ export function useCreateMovement() {
 export function usePostMovement() {
   const invalidate = useInvalidate();
   return useMutation({ mutationFn: warehouseApi.post, onSuccess: invalidate });
+}
+
+// =============================================================================================
+// FLOW-003 WP-B — warehouse floor: bin locations (W4), lot inspection (W12), cycle counts (W8),
+// stock statement (W15). PROTOTYPE ADAPTER (contracts pending). Optional module: own warehouse floor.
+// =============================================================================================
+
+export const LOCATION_ZONES: WarehouseLocation['zone'][] = [
+  'Ambient',
+  'Chilled',
+  'Bulk floor',
+  'Quarantine',
+  'Dispatch',
+];
+
+export interface LocationRow extends LocationOccupancy {
+  id: string;
+}
+
+export interface CycleCountRow extends CycleCount {
+  customerName?: string;
+  counted: number;
+  differences: number;
+  maxDifference: number;
+}
+
+export interface StockStatementRow {
+  sku: string;
+  description: string;
+  batch: string;
+  expiry: string;
+  location: string;
+  qty: number;
+  uom: string;
+  status: string;
+}
+
+/** Is the optional "own warehouse floor" module switched on (bins, put-away, picking, counts)? */
+export function useWarehouseFloorEnabled(): boolean {
+  return useProtoDb((db) => !!db.company.modules?.ownWarehouseFloor);
+}
+
+function toCountRow(c: CycleCount): CycleCountRow {
+  const counted = c.lines.filter((l) => l.countedQty !== undefined);
+  return {
+    ...c,
+    customerName: c.customerId ? lookupName.customer(c.customerId) : undefined,
+    counted: counted.length,
+    differences: counted.filter((l) => l.countedQty !== l.systemQty).length,
+    maxDifference: maxCountDifference(c.lines),
+  };
+}
+
+function zoneOf(lot: StockItem, locations: WarehouseLocation[]): WarehouseLocation | undefined {
+  return locations.find((l) => isInLocation(lot, l));
+}
+
+/** Post a counted cycle count: lot quantities become the counted quantity (never below 0). */
+function postCount(id: string): CycleCount {
+  const db = protoDb.get();
+  const cc = db.cycleCounts.find((c) => c.id === id);
+  if (!cc) throw new Error('Cycle count not found');
+  if (cc.status === 'Posted') throw new Error('This count is already posted');
+  assertOpenPeriod(db.company, cc.date);
+  const diffs = cc.lines.filter((l) => l.countedQty !== undefined && l.countedQty !== l.systemQty);
+  const stock = db.stockItems.map((s) => ({ ...s }));
+  for (const l of diffs) {
+    const lot = stock.find((s) => s.id === l.stockItemId);
+    if (!lot) throw new Error(`Lot for ${l.sku} no longer exists`);
+    const next = lot.qtyOnHand + (l.countedQty! - l.systemQty);
+    if (next < 0) throw new Error(`${l.sku}: the adjustment would take stock below zero`);
+    const perPallet = lot.qtyOnHand > 0 && lot.pallets > 0 ? lot.qtyOnHand / lot.pallets : 0;
+    lot.pallets = next === 0 ? 0 : perPallet > 0 ? Math.max(1, Math.round(next / perPallet)) : lot.pallets;
+    lot.qtyOnHand = next;
+  }
+  const movements: StockMovement[] = [];
+  if (diffs.length) {
+    const byCustomer = new Map<string, typeof diffs>();
+    for (const l of diffs) {
+      const c = stock.find((s) => s.id === l.stockItemId)!.customerId;
+      byCustomer.set(c, [...(byCustomer.get(c) ?? []), l]);
+    }
+    let lastNo = Math.max(
+      0,
+      ...db.stockMovements
+        .filter((m) => m.type === 'Adjustment')
+        .map((m) => Number(m.number.split('-')[1]) || 0),
+    );
+    for (const [customerId, lines] of byCustomer) {
+      lastNo += 1;
+      movements.push({
+        id: newId('mv'),
+        number: `ADJ-${String(lastNo).padStart(4, '0')}`,
+        type: 'Adjustment',
+        customerId,
+        date: cc.date,
+        warehouse: cc.warehouse,
+        lines: lines.map((l) => ({ stockItemId: l.stockItemId, quantity: l.countedQty! - l.systemQty })),
+        status: 'Posted',
+        reference: `Cycle count ${cc.number}`,
+      });
+    }
+  }
+  const posted: CycleCount = { ...cc, status: 'Posted' };
+  protoDb.update((s) => ({
+    ...s,
+    stockItems: stock,
+    stockMovements: [...movements, ...s.stockMovements],
+    cycleCounts: s.cycleCounts.map((c) => (c.id === id ? posted : c)),
+  }));
+  logActivity({
+    entity: 'Warehouse',
+    entityId: id,
+    entityRef: cc.number,
+    action: `posted the cycle count (${diffs.length} adjustment line${diffs.length === 1 ? '' : 's'})`,
+  });
+  return posted;
+}
+
+onApprovalDecided('Stock adjustment (qty)', (req) => {
+  const cc = protoDb.get().cycleCounts.find((c) => c.id === req.entityId);
+  if (!cc) return;
+  protoDb.update((s) => ({
+    ...s,
+    cycleCounts: s.cycleCounts.map((c) =>
+      c.id === cc.id
+        ? { ...c, approval: req.record, status: req.record.status === 'Approved' ? c.status : 'Counted' }
+        : c,
+    ),
+  }));
+  if (req.record.status === 'Approved') {
+    try {
+      postCount(cc.id);
+    } catch (e) {
+      logActivity({
+        entity: 'Warehouse',
+        entityId: cc.id,
+        entityRef: cc.number,
+        action: `approved but not posted: ${e instanceof Error ? e.message : 'error'}`,
+      });
+    }
+  }
+});
+
+export const floorApi = {
+  locations(): Promise<LocationRow[]> {
+    const db = protoDb.get();
+    return latency(
+      occupancy(db.warehouseLocations, db.stockItems)
+        .map((o) => ({ ...o, id: o.location.id }))
+        .sort((a, b) => a.location.code.localeCompare(b.location.code)),
+    );
+  },
+
+  createLocation(input: {
+    code: string;
+    zone: WarehouseLocation['zone'];
+    capacityPallets: number;
+  }): Promise<WarehouseLocation> {
+    const code = input.code.trim().toUpperCase();
+    if (code.length < 2) return Promise.reject(new Error('Enter a location code, e.g. A-01-02'));
+    if (!(input.capacityPallets > 0)) return Promise.reject(new Error('Capacity must be above 0 pallets'));
+    if (protoDb.get().warehouseLocations.some((l) => l.code.toUpperCase() === code))
+      return Promise.reject(new Error(`Location ${code} already exists`));
+    const loc: WarehouseLocation = {
+      id: newId('loc'),
+      warehouse: WAREHOUSE,
+      code,
+      zone: input.zone,
+      capacityPallets: Math.round(input.capacityPallets),
+      active: true,
+    };
+    protoDb.update((s) => ({ ...s, warehouseLocations: [...s.warehouseLocations, loc] }));
+    logActivity({ entity: 'Warehouse', entityId: loc.id, entityRef: code, action: 'created a bin location' });
+    return latency(loc, 150);
+  },
+
+  setLocationActive(id: string, active: boolean): Promise<WarehouseLocation> {
+    const db = protoDb.get();
+    const loc = db.warehouseLocations.find((l) => l.id === id);
+    if (!loc) return Promise.reject(new Error('Location not found'));
+    if (!active && db.stockItems.some((s) => s.qtyOnHand > 0 && isInLocation(s, loc)))
+      return Promise.reject(new Error(`${loc.code} still holds stock — move it before deactivating`));
+    const next = { ...loc, active };
+    protoDb.update((s) => ({
+      ...s,
+      warehouseLocations: s.warehouseLocations.map((l) => (l.id === id ? next : l)),
+    }));
+    logActivity({
+      entity: 'Warehouse',
+      entityId: id,
+      entityRef: loc.code,
+      action: active ? 'reactivated the bin location' : 'deactivated the bin location',
+    });
+    return latency(next, 120);
+  },
+
+  /** W12: inspect a quarantined lot — release it to a storage bin or mark it damaged. */
+  inspectLot(lotId: string, result: 'Available' | 'Damaged', locationId?: string): Promise<StockItem> {
+    const db = protoDb.get();
+    const lot = db.stockItems.find((s) => s.id === lotId);
+    if (!lot) return Promise.reject(new Error('Lot not found'));
+    if ((lot.stockStatus ?? 'Available') !== 'Quarantine')
+      return Promise.reject(new Error('Only quarantined lots are inspected'));
+    let next: StockItem = { ...lot, stockStatus: result };
+    if (result === 'Available') {
+      const loc = db.warehouseLocations.find((l) => l.id === locationId);
+      if (!loc || !loc.active) return Promise.reject(new Error('Choose an active bin to release the lot to'));
+      if (loc.zone === 'Quarantine') return Promise.reject(new Error('Choose a storage bin, not quarantine'));
+      const occ = occupancy([loc], db.stockItems)[0]!;
+      if (occ.free < lot.pallets)
+        return Promise.reject(new Error(`${loc.code} has space for ${occ.free} pallet(s) only`));
+      next = { ...next, locationId: loc.id, location: loc.code };
+    }
+    protoDb.update((s) => ({ ...s, stockItems: s.stockItems.map((x) => (x.id === lotId ? next : x)) }));
+    logActivity({
+      entity: 'Warehouse',
+      entityId: lotId,
+      entityRef: `${lot.sku}${lot.batch ? ` / ${lot.batch}` : ''}`,
+      action:
+        result === 'Available' ? `inspected and released to ${next.location}` : 'inspected — marked damaged',
+    });
+    return latency(next, 150);
+  },
+
+  cycleCounts(params: ListParams): Promise<Page<CycleCountRow>> {
+    const rows = [...protoDb.get().cycleCounts]
+      .sort((a, b) => b.date.localeCompare(a.date) || b.number.localeCompare(a.number))
+      .map(toCountRow);
+    return latency(
+      paginate(rows, params, {
+        searchText: (r) => `${r.number} ${r.zone ?? ''} ${r.customerName ?? ''}`,
+        status: (r) => r.status,
+      }),
+    );
+  },
+
+  cycleCount(id: string): Promise<CycleCountRow> {
+    const c = protoDb.get().cycleCounts.find((x) => x.id === id);
+    return c ? latency(toCountRow(c)) : Promise.reject(new Error('Cycle count not found'));
+  },
+
+  createCycleCount(input: {
+    zone?: WarehouseLocation['zone'];
+    customerId?: string;
+    date: string;
+  }): Promise<CycleCount> {
+    const db = protoDb.get();
+    const lots = db.stockItems.filter(
+      (s) =>
+        s.qtyOnHand > 0 &&
+        (!input.customerId || s.customerId === input.customerId) &&
+        (!input.zone || zoneOf(s, db.warehouseLocations)?.zone === input.zone),
+    );
+    if (!lots.length) return Promise.reject(new Error('No stock to count for this zone / customer'));
+    const cc: CycleCount = {
+      id: newId('cc'),
+      number: nextDocNumber(
+        db.cycleCounts.map((c) => c.number),
+        'CC-',
+      ),
+      warehouse: WAREHOUSE,
+      customerId: input.customerId || undefined,
+      zone: input.zone,
+      date: input.date,
+      lines: lots
+        .sort((a, b) => a.location.localeCompare(b.location) || a.sku.localeCompare(b.sku))
+        .map((s) => ({ stockItemId: s.id, sku: s.sku, locationCode: s.location, systemQty: s.qtyOnHand })),
+      status: 'Open',
+    };
+    protoDb.update((s) => ({ ...s, cycleCounts: [cc, ...s.cycleCounts] }));
+    logActivity({
+      entity: 'Warehouse',
+      entityId: cc.id,
+      entityRef: cc.number,
+      action: `created a cycle count (${cc.lines.length} lots)`,
+    });
+    return latency(cc, 150);
+  },
+
+  /** Save counted quantities; `submit` closes counting and posts (or asks for approval). */
+  saveCounts(id: string, counted: Record<string, number | undefined>, submit: boolean): Promise<CycleCount> {
+    const db = protoDb.get();
+    const cc = db.cycleCounts.find((c) => c.id === id);
+    if (!cc) return Promise.reject(new Error('Cycle count not found'));
+    if (cc.status !== 'Open' && cc.status !== 'Counted')
+      return Promise.reject(new Error('This count can no longer be changed'));
+    if (Object.values(counted).some((q) => q !== undefined && (q < 0 || !Number.isFinite(q))))
+      return Promise.reject(new Error('Counted quantities cannot be negative'));
+    const lines = cc.lines.map((l) =>
+      l.stockItemId in counted ? { ...l, countedQty: counted[l.stockItemId] } : l,
+    );
+    if (submit && lines.some((l) => l.countedQty === undefined))
+      return Promise.reject(new Error('Enter a counted quantity on every line before submitting'));
+    let next: CycleCount = {
+      ...cc,
+      lines,
+      status: submit ? 'Counted' : cc.status,
+      countedBy: submit ? (db.session?.displayName ?? 'Prototype user') : cc.countedBy,
+    };
+    protoDb.update((s) => ({ ...s, cycleCounts: s.cycleCounts.map((c) => (c.id === id ? next : c)) }));
+    if (!submit) return latency(next, 120);
+    const maxDiff = maxCountDifference(lines);
+    const rule = maxDiff > 0 ? approvalNeeded('Stock adjustment (qty)', maxDiff) : undefined;
+    try {
+      if (rule) {
+        const approval = requestApproval({
+          docType: 'Stock adjustment (qty)',
+          rule,
+          entity: 'Warehouse',
+          entityId: cc.id,
+          entityRef: cc.number,
+          summary: `Cycle count difference up to ${maxDiff} units (${lines.filter((l) => l.countedQty !== l.systemQty).length} lines)`,
+          amount: maxDiff,
+          href: `/warehouse/cycle-counts/${cc.id}`,
+        });
+        next = { ...next, approval, status: 'Pending approval' };
+        protoDb.update((s) => ({ ...s, cycleCounts: s.cycleCounts.map((c) => (c.id === id ? next : c)) }));
+        return latency(next, 150);
+      }
+      return latency(postCount(id), 150);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  },
+};
+
+/** W15: customer stock statement rows (lot level) — used by the customer portal download. */
+export function stockStatement(customerId: string): StockStatementRow[] {
+  return protoDb
+    .get()
+    .stockItems.filter((s) => s.customerId === customerId && s.qtyOnHand > 0)
+    .sort((a, b) => a.sku.localeCompare(b.sku) || (a.expiryDate ?? '').localeCompare(b.expiryDate ?? ''))
+    .map((s) => ({
+      sku: s.sku,
+      description: s.description,
+      batch: s.batch ?? '',
+      expiry: s.expiryDate ?? '',
+      location: s.location,
+      qty: s.qtyOnHand,
+      uom: s.uom,
+      status: s.stockStatus ?? 'Available',
+    }));
+}
+
+export function useLocations() {
+  return useQuery({ queryKey: ['warehouse', 'locations'], queryFn: floorApi.locations });
+}
+
+export function useCycleCounts(params: ListParams) {
+  return useQuery({
+    queryKey: ['warehouse', 'cycle-counts', params],
+    queryFn: () => floorApi.cycleCounts(params),
+    placeholderData: (p) => p,
+  });
+}
+
+export function useCycleCount(id: string) {
+  return useQuery({ queryKey: ['warehouse', 'cycle-count', id], queryFn: () => floorApi.cycleCount(id) });
+}
+
+export type FloorAction =
+  | { kind: 'createLocation'; code: string; zone: WarehouseLocation['zone']; capacityPallets: number }
+  | { kind: 'setActive'; id: string; active: boolean }
+  | { kind: 'inspect'; lotId: string; result: 'Available' | 'Damaged'; locationId?: string }
+  | { kind: 'createCount'; zone?: WarehouseLocation['zone']; customerId?: string; date: string }
+  | { kind: 'saveCounts'; id: string; counted: Record<string, number | undefined>; submit: boolean };
+
+export function useFloorAction() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (a: FloorAction): Promise<{ id: string; number?: string; status?: string }> => {
+      switch (a.kind) {
+        case 'createLocation':
+          return floorApi.createLocation(a);
+        case 'setActive':
+          return floorApi.setLocationActive(a.id, a.active);
+        case 'inspect':
+          return floorApi.inspectLot(a.lotId, a.result, a.locationId);
+        case 'createCount':
+          return floorApi.createCycleCount(a);
+        case 'saveCounts':
+          return floorApi.saveCounts(a.id, a.counted, a.submit);
+      }
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['warehouse'] });
+      void qc.invalidateQueries({ queryKey: ['variances'] });
+      void qc.invalidateQueries({ queryKey: ['approvals'] });
+      void qc.invalidateQueries({ queryKey: ['home'] });
+    },
+  });
 }

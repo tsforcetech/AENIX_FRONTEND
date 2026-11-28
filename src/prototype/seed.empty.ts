@@ -42,4 +42,18 @@ export const company: typeof Seed.company = {
   bank: { bankName: '', accountName: '', accountNumber: '', iban: '', swift: '' },
   invoicePrefix: 'AEN',
   grnPrefix: 'GRN',
+  modules: { ownFleet: false, ownWarehouseFloor: false, multiCurrency: false },
 };
+export const approvalRules: typeof Seed.approvalRules = [];
+export const approvalRequests: typeof Seed.approvalRequests = [];
+export const variances: typeof Seed.variances = [];
+export const debitNotes: typeof Seed.debitNotes = [];
+export const creditNotes: typeof Seed.creditNotes = [];
+export const cycleCounts: typeof Seed.cycleCounts = [];
+export const accrualRuns: typeof Seed.accrualRuns = [];
+export const warehouseLocations: typeof Seed.warehouseLocations = [];
+export const vehicles: typeof Seed.vehicles = [];
+export const drivers: typeof Seed.drivers = [];
+export const trips: typeof Seed.trips = [];
+export const bankStatementLines: typeof Seed.bankStatementLines = [];
+export const expenses: typeof Seed.expenses = [];

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { Money } from '@/shared/ui/Money';
@@ -9,12 +9,17 @@ import { formatMoney, formatMoneyCompact } from '@/shared/utils/format';
 import { useReports, type ReportsData } from './api';
 import { AgeingBar, ChartTable, HorizontalBars, MarginLine, MonthlyBars } from './charts';
 import { CustomerBalancesReport } from './CustomerBalancesReport';
+import { NewReports } from './NewReports';
+import { REPORT_TABS, type ReportTab } from './tabs';
 
-type Tab = 'revenue' | 'customers' | 'lanes' | 'ageing' | 'balances';
+type Tab = ReportTab;
+const route = getRouteApi('/_app/reports');
 
 export function ReportsPage() {
   const { data, isLoading, error } = useReports();
-  const [tab, setTab] = useState<Tab>('revenue');
+  const navigate = useNavigate({ from: '/reports' });
+  const tab: Tab = route.useSearch().tab ?? 'revenue';
+  const setTab = (t: Tab) => void navigate({ search: { tab: t === 'revenue' ? undefined : t } });
   return (
     <div>
       <PageHeader
@@ -26,13 +31,7 @@ export function ReportsPage() {
           label="Reports"
           value={tab}
           onChange={(v) => setTab(v as Tab)}
-          items={[
-            { value: 'revenue', label: 'Revenue & margin' },
-            { value: 'customers', label: 'Top customers' },
-            { value: 'lanes', label: 'Jobs by type & lanes' },
-            { value: 'ageing', label: 'Receivables ageing' },
-            { value: 'balances', label: 'Customer balances' },
-          ]}
+          items={REPORT_TABS.map((t) => ({ value: t.value, label: t.label }))}
         />
       </div>
       {error ? <StatusMessage kind="error" title="Could not load reports" /> : null}
@@ -60,6 +59,8 @@ const laneColumns: Column<ReportsData['lanes'][number]>[] = [
 
 function TabContent({ tab, data }: { tab: Tab; data: ReportsData }) {
   if (tab === 'balances') return <CustomerBalancesReport rows={data.customerBalances} />;
+  if (tab === 'profit' || tab === 'vendors' || tab === 'occupancy' || tab === 'pdc')
+    return <NewReports tab={tab} data={data} />;
   if (tab === 'revenue') {
     return (
       <div className="grid gap-6 xl:grid-cols-3">

@@ -72,3 +72,11 @@ Append-only. Each entry: date, work package, branch/PR/SHAs, what changed, tests
   - owner to confirm bank details stay out of the public demo, and which address goes on invoices vs GRNs;
   - FEFO/batch stock tracking;
   - server-side PDF and stamp.
+
+### 2026-11-28 — FLOW-003 industry-standard gap closure (branch `feature/fe-flow-003-industry-gaps`)
+
+- **Asked:** close every partial/gap row of the gap analysis (67 scenarios: 26 match, 23 partial, 18 gap) in the frontend first; backend after owner confirmation.
+- **Done:** foundation (types, controls, approval service, navigation) + five parallel work packages (sales, warehouse, transport/fleet, finance, cross-cutting), reviewed (scope + safety scan) and merged; demo data; document print layout. See `docs/BUSINESS-FLOW.md` §7.
+- **Checks (local):** format, lint, typecheck clean; unit tests 131/131; build and build:prototype OK; e2e 82 passed, 2 skipped (desktop-only shortcuts on mobile) — crawl of every screen incl. 14 new routes and new tabs with 0 WCAG 2.1 AA violations; production build still has no sample data and denies by default.
+- **Gates:** owner confirmation of the prototype; owner scope decisions (own fleet, own warehouse floor, multi-currency, payroll/fixed assets); accountant sign-off on all finance screens; SEC-001 for roles; DOBIS CR; then HO-FLOW-003 backend handoff and API-DEP-31…44 contracts.
+- **AENIX ledger:** matching AENIX entry to be added with HO-FLOW-003.

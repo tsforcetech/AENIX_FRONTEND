@@ -7,6 +7,7 @@ import type {
   DocLine,
   Grn,
   Inbound,
+  JobStop,
   Milestone,
   PackingList,
   Pod,
@@ -23,10 +24,22 @@ import type {
 import { nextDocNumber } from '@/domain/numbering';
 import { reconcile } from '@/domain/reconcile';
 import { jobStock } from '@/domain/stock';
-import { milestoneLabels, primaryCategory, SERVICE_CATEGORIES } from '@/domain/workflow';
+import { deliveryStopsDone, milestoneLabels, primaryCategory, SERVICE_CATEGORIES } from '@/domain/workflow';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
+// FLOW-003 WP-B
+import { suggestPicks } from '@/domain/controls';
+import type { StockItem, WarehouseLocation } from '@/domain/types';
+import { createVarianceFromDoc } from '@/features/variances/api';
+import { estimatePallets, occupancy, suggestPutaway } from '@/features/warehouse/floor';
+import {
+  HANDLING_SERVICE_ID,
+  handlingDocs,
+  proposeHandlingCharges,
+  unitsPerPalletFromCargo,
+  type HandlingProposal,
+} from './wh-handling';
 
 /**
  * Work orders (= Jobs) data source. PROTOTYPE ADAPTER — replace the bodies of `workOrdersApi`
@@ -246,16 +259,23 @@ function buildMilestones(
 /**
  * Status follows milestone progress. Transport: 0–1 done Confirmed, 2–3 In progress, 4+ In transit,
  * all Delivered. Warehouse / direct service: 0–1 Confirmed, then In progress, all Delivered.
+ * FLOW-003 T4: a job with delivery stops is Delivered only when every delivery stop is Done.
  */
-function statusForProgress(done: number, total: number, category: ServiceCategory): WorkOrderStatus {
-  if (done >= total) return 'Delivered';
+export function statusForProgress(
+  done: number,
+  total: number,
+  category: ServiceCategory,
+  stops?: JobStop[],
+): WorkOrderStatus {
+  if (done >= total && deliveryStopsDone(stops)) return 'Delivered';
+  if (done >= total) return category === 'Transport' ? 'In transit' : 'In progress';
   if (category === 'Transport' && done >= 4) return 'In transit';
   if (done >= 2) return 'In progress';
   return 'Confirmed';
 }
 
 /** Mark the milestone with this label done (and the next one current) if it is the current one. */
-function advanceIfCurrent(w: WorkOrder, label: string): WorkOrder {
+export function advanceIfCurrent(w: WorkOrder, label: string): WorkOrder {
   const idx = w.milestones.findIndex((m) => m.status === 'Current' && m.label === label);
   if (idx < 0) return w;
   const milestones: Milestone[] = w.milestones.map((m, i) =>
@@ -263,7 +283,7 @@ function advanceIfCurrent(w: WorkOrder, label: string): WorkOrder {
   );
   const done = milestones.filter((m) => m.status === 'Done').length;
   const status = ['Confirmed', 'In progress', 'In transit'].includes(w.status)
-    ? statusForProgress(done, milestones.length, w.serviceCategory)
+    ? statusForProgress(done, milestones.length, w.serviceCategory, w.stops)
     : w.status;
   return { ...w, milestones, status };
 }
@@ -556,7 +576,11 @@ export const workOrdersApi = {
         i === idx ? { ...m, status: 'Done', at: nowIso() } : i === idx + 1 ? { ...m, status: 'Current' } : m,
       );
       const done = milestones.filter((m) => m.status === 'Done').length;
-      return { ...w, milestones, status: statusForProgress(done, milestones.length, w.serviceCategory) };
+      return {
+        ...w,
+        milestones,
+        status: statusForProgress(done, milestones.length, w.serviceCategory, w.stops),
+      };
     });
     logActivity({
       entity: 'Work order',
@@ -567,16 +591,51 @@ export const workOrdersApi = {
     return latency(updated, 200);
   },
 
+  /**
+   * FLOW-003 C9: cancel with a reason. Not allowed once invoiced or completed. Open vendor POs
+   * (Draft / Issued / Accepted) and planned own-fleet trips are cancelled with the job.
+   */
   cancel(id: string, reason: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (wo.status !== 'Draft' && wo.status !== 'Confirmed')
-      return Promise.reject(new Error('Only draft or confirmed jobs can be cancelled'));
-    const updated = patch(id, (w) => ({ ...w, status: 'Cancelled' }));
+    const db = protoDb.get();
+    if (!reason.trim()) return Promise.reject(new Error('Give a reason for cancelling the job'));
+    if (wo.status === 'Cancelled') return Promise.reject(new Error('The job is already cancelled'));
+    const invoiced =
+      !!wo.invoiceId || db.invoices.some((i) => i.workOrderId === id && i.status !== 'Cancelled');
+    if (invoiced)
+      return Promise.reject(new Error('The job is invoiced — it cannot be cancelled. Raise a credit note.'));
+    if (wo.status === 'Completed') return Promise.reject(new Error('Completed jobs cannot be cancelled.'));
+    const started = db.trips.find((t) => t.workOrderId === id && t.status === 'Started');
+    if (started)
+      return Promise.reject(
+        new Error(`Trip ${started.number} is on the road — complete or cancel it before cancelling the job.`),
+      );
+    const openPos = db.purchaseOrders.filter(
+      (p) => p.workOrderId === id && ['Draft', 'Issued', 'Accepted'].includes(p.status),
+    );
+    const plannedTrips = db.trips.filter((t) => t.workOrderId === id && t.status === 'Planned');
+    protoDb.update((s) => ({
+      ...s,
+      purchaseOrders: s.purchaseOrders.map((p) =>
+        openPos.some((o) => o.id === p.id) ? { ...p, status: 'Cancelled' as const } : p,
+      ),
+      trips: s.trips.map((t) =>
+        plannedTrips.some((x) => x.id === t.id) ? { ...t, status: 'Cancelled' as const } : t,
+      ),
+    }));
+    const updated = patch(id, (w) => ({ ...w, status: 'Cancelled', cancelReason: reason.trim() }));
+    const extra = [
+      openPos.length ? `${openPos.length} PO${openPos.length === 1 ? '' : 's'} cancelled` : '',
+      plannedTrips.length
+        ? `${plannedTrips.length} trip${plannedTrips.length === 1 ? '' : 's'} cancelled`
+        : '',
+    ].filter(Boolean);
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `cancelled the job (${reason})`,
+      action: `cancelled the job (${reason.trim()})${extra.length ? ` — ${extra.join(', ')}` : ''}`,
+      changes: [{ field: 'Status', from: wo.status, to: 'Cancelled' }],
     });
     return latency(updated, 200);
   },
@@ -792,10 +851,12 @@ export const workOrdersApi = {
       entityRef: wo.number,
       action: `raised a GRN variance on ${ib.grn.number} (${ib.number})`,
     });
+    // FLOW-003 W3: open the variance record (lines, photos, outcome, approval).
+    const variance = createVarianceFromDoc({ workOrderId: id, source: 'GRN', docId: inboundId });
     notify(
       `GRN variance on ${wo.number}`,
-      `${ib.grn.number}: ${r?.mismatches ?? 0} line(s) differ from ${ib.packingList.number}`,
-      `/work-orders/${id}`,
+      `${ib.grn.number}: ${r?.mismatches ?? 0} line(s) differ from ${ib.packingList.number} — ${variance.number}`,
+      `/variances/${variance.id}`,
     );
     return latency(updated, 200);
   },
@@ -873,6 +934,12 @@ export const workOrdersApi = {
     const req = wo.customerRequests.find((r) => r.id === requestId);
     if (!req || (req.status !== 'Sent to vendor' && req.status !== 'Open'))
       return Promise.reject(new Error('Upload a POD for an open or sent request'));
+    // FLOW-003 W7: the delivered quantities leave the picked lots (never below zero).
+    try {
+      releasePickedLots(wo, req, pod);
+    } catch (e) {
+      return Promise.reject(e);
+    }
     const updated = patch(id, (w) =>
       advanceIfCurrent(
         {
@@ -929,10 +996,12 @@ export const workOrdersApi = {
       entityRef: wo.number,
       action: `raised a POD variance on ${req.number}`,
     });
+    // FLOW-003 W3: open the variance record (lines, photos, outcome, approval).
+    const variance = createVarianceFromDoc({ workOrderId: id, source: 'POD', docId: requestId });
     notify(
       `POD variance on ${wo.number}`,
-      `${req.number}: ${r?.mismatches ?? 0} line(s) differ from ${req.pod.number}`,
-      `/work-orders/${id}`,
+      `${req.number}: ${r?.mismatches ?? 0} line(s) differ from ${req.pod.number} — ${variance.number}`,
+      `/variances/${variance.id}`,
     );
     return latency(updated, 200);
   },
@@ -1027,6 +1096,7 @@ function useInvalidate() {
     void qc.invalidateQueries({ queryKey: ['sales-orders'] });
     void qc.invalidateQueries({ queryKey: ['warehouse'] });
     void qc.invalidateQueries({ queryKey: ['purchase-orders'] });
+    void qc.invalidateQueries({ queryKey: ['fleet'] });
   };
 }
 
@@ -1069,7 +1139,19 @@ export function useCompleteWorkOrder() {
 }
 
 export type InboundHeader = Partial<
-  Pick<Inbound, 'asnNo' | 'boeNo' | 'containerNo' | 'sealNo' | 'blNo' | 'supplierName' | 'location'>
+  Pick<
+    Inbound,
+    | 'asnNo'
+    | 'boeNo'
+    | 'containerNo'
+    | 'sealNo'
+    | 'blNo'
+    | 'supplierName'
+    | 'location'
+    // FLOW-003 W1 / W12
+    | 'expectedTime'
+    | 'kind'
+  >
 >;
 
 export type DocAction =
@@ -1151,4 +1233,474 @@ export function warehouseVendorOf(wo: Pick<WorkOrder, 'vendorAssignments'>): { i
     if (v?.category === 'Warehouse') return { id: v.id, name: v.name };
   }
   return { id: 'warehouse', name: 'the warehouse team' };
+}
+
+// ---- FLOW-003 WP-B ----
+// Warehouse floor on the job (optional module "own warehouse floor"): put-away of verified GRNs into
+// bin locations as lot-level stock (W4/W12), FEFO pick lists and delivery notes (W6/W7), stock out on
+// POD, and handling charges proposed from GRN / POD activity (W14). PROTOTYPE ADAPTER.
+
+export interface PutawayLine {
+  sku: string;
+  description: string;
+  uom: string;
+  goodQty: number;
+  damagedQty: number;
+  batch?: string;
+  expiryDate?: string;
+  pallets: number;
+  /** Suggested bin (empty when no bin has space). */
+  locationId: string;
+}
+
+export interface PutawayPlan {
+  isReturn: boolean;
+  lines: PutawayLine[];
+  locations: { value: string; label: string; zone: WarehouseLocation['zone']; free: number }[];
+}
+
+export interface PickLine {
+  lotId: string;
+  sku: string;
+  batch?: string;
+  expiryDate?: string;
+  locationCode: string;
+  qty: number;
+}
+
+export interface PickPlan {
+  lines: {
+    sku: string;
+    description: string;
+    uom: string;
+    requested: number;
+    picks: PickLine[];
+    short: number;
+  }[];
+  short: number;
+}
+
+/** Lots of the customer still free to pick: on-hand minus picks confirmed on other undelivered requests. */
+function pickableLots(customerId: string, excludeRequestId?: string): StockItem[] {
+  const db = protoDb.get();
+  const reserved = new Map<string, number>();
+  for (const w of db.workOrders)
+    for (const r of w.customerRequests)
+      if (r.id !== excludeRequestId && r.picks && !r.pod && r.status !== 'Closed')
+        for (const p of r.picks) reserved.set(p.lotId, (reserved.get(p.lotId) ?? 0) + p.qty);
+  return db.stockItems
+    .filter((s) => s.customerId === customerId)
+    .map((s) => ({ ...s, qtyOnHand: Math.max(0, s.qtyOnHand - (reserved.get(s.id) ?? 0)) }));
+}
+
+function buildPickPlan(wo: WorkOrder, req: CustomerRequest): PickPlan {
+  const lots = pickableLots(wo.customerId, req.id);
+  const lines = req.lines.map((l) => {
+    const { picks, short } = suggestPicks(lots, l.sku.trim().toUpperCase(), l.quantity);
+    // Consume the suggestion so two lines of the same SKU do not pick the same units.
+    for (const p of picks) {
+      const lot = lots.find((x) => x.id === p.lot.id);
+      if (lot) lot.qtyOnHand -= p.qty;
+    }
+    return {
+      sku: l.sku,
+      description: l.description,
+      uom: l.uom,
+      requested: l.quantity,
+      picks: picks.map((p) => ({
+        lotId: p.lot.id,
+        sku: p.lot.sku,
+        batch: p.lot.batch,
+        expiryDate: p.lot.expiryDate,
+        locationCode: p.lot.location,
+        qty: p.qty,
+      })),
+      short,
+    };
+  });
+  return { lines, short: lines.reduce((s, l) => s + l.short, 0) };
+}
+
+/**
+ * W7: when the POD comes back, the delivered quantities leave the picked lots (FEFO order of the
+ * pick list). Throws — and changes nothing — if any lot would go below zero.
+ */
+function releasePickedLots(wo: WorkOrder, req: CustomerRequest, pod: Pod): void {
+  if (!req.picks?.length) return;
+  const db = protoDb.get();
+  const stock = db.stockItems.map((s) => ({ ...s }));
+  const moved: { stockItemId: string; quantity: number }[] = [];
+  for (const line of pod.lines) {
+    let left = line.deliveredQty;
+    for (const p of req.picks.filter((x) => x.sku === line.sku.trim().toUpperCase())) {
+      if (left <= 0) break;
+      const lot = stock.find((s) => s.id === p.lotId);
+      if (!lot) throw new Error(`Picked lot for ${p.sku} no longer exists`);
+      const take = Math.min(p.qty, left);
+      if (lot.qtyOnHand < take)
+        throw new Error(
+          `${p.sku} at ${p.locationCode}: only ${lot.qtyOnHand} on hand — cannot release ${take}. Check the stock first.`,
+        );
+      const perPallet = lot.qtyOnHand > 0 && lot.pallets > 0 ? lot.qtyOnHand / lot.pallets : 0;
+      lot.qtyOnHand -= take;
+      lot.pallets =
+        lot.qtyOnHand === 0
+          ? 0
+          : perPallet > 0
+            ? Math.max(1, Math.round(lot.qtyOnHand / perPallet))
+            : lot.pallets;
+      moved.push({ stockItemId: lot.id, quantity: take });
+      left -= take;
+    }
+  }
+  if (!moved.length) return;
+  const lastNo = Math.max(
+    0,
+    ...db.stockMovements.filter((m) => m.type === 'Dispatch').map((m) => Number(m.number.split('-')[1]) || 0),
+  );
+  const movement: StockMovement = {
+    id: newId('mv'),
+    number: `DSP-${String(lastNo + 1).padStart(4, '0')}`,
+    type: 'Dispatch',
+    customerId: wo.customerId,
+    workOrderId: wo.id,
+    date: pod.deliveredAt.slice(0, 10),
+    warehouse: db.stockItems.find((s) => s.id === moved[0]!.stockItemId)?.warehouse ?? 'JAFZA WH-1',
+    lines: moved,
+    status: 'Posted',
+    reference: `${req.number} · ${pod.number}${req.dispatchNoteNumber ? ` · ${req.dispatchNoteNumber}` : ''}`,
+  };
+  protoDb.update((s) => ({ ...s, stockItems: stock, stockMovements: [movement, ...s.stockMovements] }));
+}
+
+function handlingRate(wo: WorkOrder): { unitPrice: number; unitCost: number; unit: string } {
+  const db = protoDb.get();
+  const so = wo.salesOrderId ? db.salesOrders.find((o) => o.id === wo.salesOrderId) : undefined;
+  const line =
+    wo.lines.find((l) => l.serviceId === HANDLING_SERVICE_ID) ??
+    so?.lines.find((l) => l.serviceId === HANDLING_SERVICE_ID);
+  if (line) return { unitPrice: line.unitPrice, unitCost: line.unitCost, unit: line.unit };
+  const svc = db.services.find((s) => s.id === HANDLING_SERVICE_ID);
+  return { unitPrice: 0, unitCost: 0, unit: svc?.unit ?? 'Pallet' };
+}
+
+export const whApi = {
+  /** W4: suggested bin per GRN line (same SKU's bin, else first ambient with space; returns → quarantine). */
+  putawayPlan(id: string, inboundId: string): Promise<PutawayPlan> {
+    const db = protoDb.get();
+    const wo = findOrThrow(id);
+    const ib = findInbound(id, inboundId);
+    if (!ib.grn) return Promise.reject(new Error('Upload the GRN first'));
+    const isReturn = ib.kind === 'Return';
+    const planned = new Map<string, number>();
+    const lines: PutawayLine[] = ib.grn.lines.map((g) => {
+      const pl = ib.packingList.lines.find((l) => l.sku === g.sku);
+      const goodQty = Math.max(0, g.receivedQty - g.damagedQty);
+      const pallets = estimatePallets(goodQty);
+      const loc = suggestPutaway(
+        { sku: g.sku, customerId: wo.customerId, pallets, quarantine: isReturn },
+        db.warehouseLocations,
+        db.stockItems,
+        planned,
+      );
+      if (loc) planned.set(loc.id, (planned.get(loc.id) ?? 0) + pallets);
+      return {
+        sku: g.sku,
+        description: pl?.description ?? g.sku,
+        uom: pl?.uom ?? 'Unit',
+        goodQty,
+        damagedQty: g.damagedQty,
+        batch: g.batch ?? pl?.batch,
+        expiryDate: g.expiryDate ?? pl?.expiryDate,
+        pallets,
+        locationId: loc?.id ?? '',
+      };
+    });
+    const locations = occupancy(
+      db.warehouseLocations.filter((l) => l.active && l.zone !== 'Dispatch'),
+      db.stockItems,
+    )
+      .sort((a, b) => a.location.code.localeCompare(b.location.code))
+      .map((o) => ({
+        value: o.location.id,
+        label: `${o.location.code} · ${o.location.zone} · ${o.free} free`,
+        zone: o.location.zone,
+        free: o.free,
+      }));
+    return latency({ isReturn, lines, locations }, 80);
+  },
+
+  /** W4/W12: create lot-level stock at the chosen bins (damaged units go to quarantine as Damaged). */
+  confirmPutaway(
+    id: string,
+    inboundId: string,
+    lines: { sku: string; locationId: string; pallets: number }[],
+  ): Promise<WorkOrder> {
+    const db = protoDb.get();
+    const wo = findOrThrow(id);
+    const ib = findInbound(id, inboundId);
+    if (!db.company.modules?.ownWarehouseFloor)
+      return Promise.reject(new Error('The own warehouse floor module is switched off'));
+    if (!ib.grn || (ib.grn.status !== 'Verified' && ib.grn.status !== 'Variance raised'))
+      return Promise.reject(new Error('Verify the GRN (or raise its variance) before put-away'));
+    if (ib.putawayDone) return Promise.reject(new Error('Put-away is already confirmed'));
+    const isReturn = ib.kind === 'Return';
+    const planned = new Map<string, number>();
+    const quarantine = db.warehouseLocations.find((l) => l.active && l.zone === 'Quarantine');
+    const receivedAt = ib.grn.receivedAt.slice(0, 10);
+    const lots: StockItem[] = [];
+    for (const g of ib.grn.lines) {
+      const pl = ib.packingList.lines.find((l) => l.sku === g.sku);
+      const chosen = lines.find((l) => l.sku === g.sku);
+      const goodQty = Math.max(0, g.receivedQty - g.damagedQty);
+      const base = {
+        sku: g.sku,
+        customerId: wo.customerId,
+        description: pl?.description ?? g.sku,
+        uom: pl?.uom ?? 'Unit',
+        receivedAt,
+        batch: g.batch ?? pl?.batch,
+        expiryDate: g.expiryDate ?? pl?.expiryDate,
+        workOrderId: wo.id,
+      };
+      if (goodQty > 0) {
+        const loc = db.warehouseLocations.find((l) => l.id === chosen?.locationId && l.active);
+        if (!loc) return Promise.reject(new Error(`Choose a bin for ${g.sku}`));
+        const pallets = Math.round(chosen?.pallets ?? 0);
+        if (!(pallets > 0)) return Promise.reject(new Error(`Enter the pallets for ${g.sku}`));
+        planned.set(loc.id, (planned.get(loc.id) ?? 0) + pallets);
+        lots.push({
+          ...base,
+          id: newId('stk'),
+          warehouse: loc.warehouse,
+          location: loc.code,
+          locationId: loc.id,
+          qtyOnHand: goodQty,
+          pallets,
+          stockStatus: isReturn || loc.zone === 'Quarantine' ? 'Quarantine' : 'Available',
+        });
+      }
+      if (g.damagedQty > 0) {
+        const pallets = estimatePallets(g.damagedQty);
+        if (quarantine) planned.set(quarantine.id, (planned.get(quarantine.id) ?? 0) + pallets);
+        lots.push({
+          ...base,
+          id: newId('stk'),
+          warehouse: quarantine?.warehouse ?? 'JAFZA WH-1',
+          location: quarantine?.code ?? 'QUARANTINE',
+          locationId: quarantine?.id,
+          qtyOnHand: g.damagedQty,
+          pallets,
+          stockStatus: 'Damaged',
+        });
+      }
+    }
+    // Capacity check per bin (quarantine may overflow: damaged goods must be segregated anyway).
+    for (const o of occupancy(db.warehouseLocations, db.stockItems, planned)) {
+      if (
+        o.location.zone !== 'Quarantine' &&
+        planned.has(o.location.id) &&
+        o.used > o.location.capacityPallets
+      )
+        return Promise.reject(
+          new Error(
+            `${o.location.code} has space for ${o.location.capacityPallets - (o.used - planned.get(o.location.id)!)} pallet(s) only`,
+          ),
+        );
+    }
+    const lastNo = Math.max(
+      0,
+      ...db.stockMovements
+        .filter((m) => m.type === 'Receipt')
+        .map((m) => Number(m.number.split('-')[1]) || 0),
+    );
+    const movement: StockMovement = {
+      id: newId('mv'),
+      number: `GRN-${String(lastNo + 1).padStart(4, '0')}`,
+      type: 'Receipt',
+      customerId: wo.customerId,
+      workOrderId: wo.id,
+      date: receivedAt,
+      warehouse: lots[0]?.warehouse ?? 'JAFZA WH-1',
+      lines: lots.map((l) => ({ stockItemId: l.id, quantity: l.qtyOnHand })),
+      status: 'Posted',
+      reference: `${ib.number} put-away (${ib.grn.number})${isReturn ? ' — customer return' : ''}`,
+    };
+    protoDb.update((s) => ({
+      ...s,
+      stockItems: [...lots, ...s.stockItems],
+      stockMovements: lots.length ? [movement, ...s.stockMovements] : s.stockMovements,
+    }));
+    const updated = patchInbound(id, inboundId, (x) => ({ ...x, putawayDone: true }));
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `confirmed put-away of ${ib.number} (${lots.length} lot${lots.length === 1 ? '' : 's'})`,
+    });
+    return latency(updated, 200);
+  },
+
+  /** W6: FEFO pick suggestion over the customer's available lots. */
+  pickPlan(id: string, requestId: string): Promise<PickPlan> {
+    const wo = findOrThrow(id);
+    const req = wo.customerRequests.find((r) => r.id === requestId);
+    if (!req) return Promise.reject(new Error('Request not found'));
+    return latency(buildPickPlan(wo, req), 80);
+  },
+
+  confirmPicks(id: string, requestId: string): Promise<WorkOrder> {
+    const wo = findOrThrow(id);
+    const req = wo.customerRequests.find((r) => r.id === requestId);
+    if (!req) return Promise.reject(new Error('Request not found'));
+    if (req.pod) return Promise.reject(new Error('The POD is already recorded'));
+    const plan = buildPickPlan(wo, req);
+    const picks = plan.lines.flatMap((l) => l.picks);
+    if (!picks.length) return Promise.reject(new Error('No available stock to pick for this request'));
+    const updated = patch(id, (w) => ({
+      ...w,
+      customerRequests: w.customerRequests.map((r) =>
+        r.id === requestId ? { ...r, picks, pickedAt: nowIso() } : r,
+      ),
+    }));
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `confirmed the pick list for ${req.number} (${picks.length} lot${picks.length === 1 ? '' : 's'}${plan.short ? `, ${plan.short} short` : ''})`,
+    });
+    return latency(updated, 200);
+  },
+
+  /** W7: delivery note number (DLV-###) for a picked request. */
+  issueDispatchNote(id: string, requestId: string): Promise<WorkOrder> {
+    const wo = findOrThrow(id);
+    const req = wo.customerRequests.find((r) => r.id === requestId);
+    if (!req?.picks?.length) return Promise.reject(new Error('Confirm the pick list first'));
+    if (req.dispatchNoteNumber) return latency(wo, 50);
+    const existing = protoDb
+      .get()
+      .workOrders.flatMap((w) => w.customerRequests.map((r) => r.dispatchNoteNumber ?? ''));
+    const number = nextDocNumber(existing, 'DLV-');
+    const updated = patch(id, (w) => ({
+      ...w,
+      customerRequests: w.customerRequests.map((r) =>
+        r.id === requestId ? { ...r, dispatchNoteNumber: number } : r,
+      ),
+    }));
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `issued delivery note ${number} for ${req.number}`,
+    });
+    return latency(updated, 150);
+  },
+
+  /** W14: handling lines proposed from verified GRNs and closed PODs not billed yet. */
+  handlingProposal(id: string): Promise<HandlingProposal[]> {
+    const wo = findOrThrow(id);
+    return latency(
+      proposeHandlingCharges(handlingDocs(wo), wo.lines, handlingRate(wo), unitsPerPalletFromCargo(wo.cargo)),
+      80,
+    );
+  },
+
+  addHandlingCharges(
+    id: string,
+    lines: Pick<HandlingProposal, 'description' | 'quantity' | 'unit' | 'unitPrice' | 'unitCost'>[],
+  ): Promise<WorkOrder> {
+    const wo = findOrThrow(id);
+    if (wo.invoiceId)
+      return Promise.reject(new Error('This job is already invoiced — bill the handling on a new invoice'));
+    if (wo.status === 'Cancelled') return Promise.reject(new Error('The job is cancelled'));
+    const fresh = lines.filter(
+      (l) => l.quantity > 0 && !wo.lines.some((x) => x.description === l.description),
+    );
+    if (!fresh.length) return Promise.reject(new Error('Nothing new to add'));
+    if (fresh.some((l) => l.unitPrice < 0)) return Promise.reject(new Error('Rates cannot be negative'));
+    const updated = patch(id, (w) => ({
+      ...w,
+      lines: [
+        ...w.lines,
+        ...fresh.map((l): PriceLine => ({
+          id: newId('pl'),
+          serviceId: HANDLING_SERVICE_ID,
+          description: l.description,
+          quantity: l.quantity,
+          unit: l.unit,
+          unitPrice: l.unitPrice,
+          unitCost: l.unitCost,
+        })),
+      ],
+    }));
+    logActivity({
+      entity: 'Work order',
+      entityId: id,
+      entityRef: wo.number,
+      action: `added ${fresh.length} handling charge line${fresh.length === 1 ? '' : 's'} from warehouse activity`,
+    });
+    return latency(updated, 200);
+  },
+};
+
+export function usePutawayPlan(id: string, inboundId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['work-orders', 'putaway', id, inboundId],
+    queryFn: () => whApi.putawayPlan(id, inboundId),
+    enabled,
+  });
+}
+
+export function usePickPlan(id: string, requestId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['work-orders', 'pick-plan', id, requestId],
+    queryFn: () => whApi.pickPlan(id, requestId),
+    enabled,
+  });
+}
+
+export function useHandlingProposal(id: string) {
+  return useQuery({
+    queryKey: ['work-orders', 'handling', id],
+    queryFn: () => whApi.handlingProposal(id),
+  });
+}
+
+export type WhAction =
+  | {
+      kind: 'putaway';
+      id: string;
+      inboundId: string;
+      lines: { sku: string; locationId: string; pallets: number }[];
+    }
+  | { kind: 'confirmPicks'; id: string; requestId: string }
+  | { kind: 'dispatchNote'; id: string; requestId: string }
+  | {
+      kind: 'addHandling';
+      id: string;
+      lines: Pick<HandlingProposal, 'description' | 'quantity' | 'unit' | 'unitPrice' | 'unitCost'>[];
+    };
+
+export function useWhAction() {
+  const invalidate = useInvalidate();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (a: WhAction): Promise<WorkOrder> => {
+      switch (a.kind) {
+        case 'putaway':
+          return whApi.confirmPutaway(a.id, a.inboundId, a.lines);
+        case 'confirmPicks':
+          return whApi.confirmPicks(a.id, a.requestId);
+        case 'dispatchNote':
+          return whApi.issueDispatchNote(a.id, a.requestId);
+        case 'addHandling':
+          return whApi.addHandlingCharges(a.id, a.lines);
+      }
+    },
+    onSuccess: () => {
+      invalidate();
+      void qc.invalidateQueries({ queryKey: ['variances'] });
+    },
+  });
 }

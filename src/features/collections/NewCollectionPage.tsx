@@ -2,7 +2,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { Info, Wand2 } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import type { PaymentMethod } from '@/domain/types';
@@ -28,6 +29,8 @@ const schema = z
     method: z.enum(['Bank transfer', 'Cheque', 'PDC', 'Cash', 'Card']),
     reference: z.string().trim().min(2, 'Enter the bank / cheque reference').max(80),
     chequeDate: z.string().optional(),
+    chequeNo: z.string().trim().max(30).optional(),
+    bankName: z.string().trim().max(60).optional(),
     amount: z.coerce.number({ error: 'Enter an amount' }).positive('Amount must be more than 0'),
     allocations: z.array(
       z.object({
@@ -42,6 +45,12 @@ const schema = z
   .superRefine((v, ctx) => {
     if ((v.method === 'PDC' || v.method === 'Cheque') && !v.chequeDate) {
       ctx.addIssue({ code: 'custom', path: ['chequeDate'], message: 'Enter the cheque date' });
+    }
+    if ((v.method === 'PDC' || v.method === 'Cheque') && !v.chequeNo) {
+      ctx.addIssue({ code: 'custom', path: ['chequeNo'], message: 'Enter the cheque number' });
+    }
+    if ((v.method === 'PDC' || v.method === 'Cheque') && !v.bankName) {
+      ctx.addIssue({ code: 'custom', path: ['bankName'], message: 'Enter the drawee bank' });
     }
     v.allocations.forEach((a, i) => {
       if (a.amount > a.outstanding + 0.005) {
@@ -74,6 +83,7 @@ export function NewCollectionPage() {
   const toast = useToast();
   const customers = useCustomerOptions();
   const create = useCreateCollection();
+  const [saveError, setSaveError] = useState<string>();
   const presetCustomer = useMemo(
     () =>
       (search.invoiceId ? collectionsApi.invoiceCustomer(search.invoiceId) : undefined) ??
@@ -97,6 +107,8 @@ export function NewCollectionPage() {
       date: '2026-11-23',
       method: 'Bank transfer',
       reference: '',
+      chequeNo: '',
+      bankName: '',
       amount: '',
       allocations: [],
       advanceSalesOrderId: search.salesOrderId ?? '',
@@ -143,22 +155,31 @@ export function NewCollectionPage() {
   };
 
   const onSubmit = handleSubmit(async (v) => {
-    const col = await create.mutateAsync({
-      customerId: v.customerId,
-      date: v.date,
-      method: v.method,
-      reference: v.reference,
-      chequeDate: v.method === 'PDC' || v.method === 'Cheque' ? v.chequeDate : undefined,
-      amount: v.amount,
-      allocations: [
-        ...v.allocations
-          .filter((a) => a.amount > 0)
-          .map((a) => ({ invoiceId: a.invoiceId, amount: round2(a.amount) })),
-        ...(v.advanceAmount > 0 && v.advanceSalesOrderId
-          ? [{ salesOrderId: v.advanceSalesOrderId, amount: round2(v.advanceAmount) }]
-          : []),
-      ],
-    });
+    setSaveError(undefined);
+    const col = await create
+      .mutateAsync({
+        customerId: v.customerId,
+        date: v.date,
+        method: v.method,
+        reference: v.reference,
+        chequeDate: v.method === 'PDC' || v.method === 'Cheque' ? v.chequeDate : undefined,
+        chequeNo: v.method === 'PDC' || v.method === 'Cheque' ? v.chequeNo : undefined,
+        bankName: v.method === 'PDC' || v.method === 'Cheque' ? v.bankName : undefined,
+        amount: v.amount,
+        allocations: [
+          ...v.allocations
+            .filter((a) => a.amount > 0)
+            .map((a) => ({ invoiceId: a.invoiceId, amount: round2(a.amount) })),
+          ...(v.advanceAmount > 0 && v.advanceSalesOrderId
+            ? [{ salesOrderId: v.advanceSalesOrderId, amount: round2(v.advanceAmount) }]
+            : []),
+        ],
+      })
+      .catch((e: unknown) => {
+        setSaveError(e instanceof Error ? e.message : 'Could not save the receipt.');
+        return undefined;
+      });
+    if (!col) return;
     toast({
       title: `${col.number} recorded`,
       body:
@@ -223,15 +244,33 @@ export function NewCollectionPage() {
                 method === 'Bank transfer'
                   ? 'Bank reference'
                   : method === 'Cheque' || isPdc
-                    ? 'Cheque no. & bank'
+                    ? 'Deposit / slip reference'
                     : 'Reference'
               }
               required
               className="lg:col-span-2"
-              placeholder={isPdc || method === 'Cheque' ? 'e.g. CHQ 004512 — Emirates NBD' : 'e.g. TRX990341'}
+              placeholder={isPdc || method === 'Cheque' ? 'e.g. Deposit slip 7781' : 'e.g. TRX990341'}
               error={errors.reference?.message}
               {...register('reference')}
             />
+            {isPdc || method === 'Cheque' ? (
+              <>
+                <TextField
+                  label="Cheque no."
+                  required
+                  placeholder="e.g. 004512"
+                  error={errors.chequeNo?.message}
+                  {...register('chequeNo')}
+                />
+                <TextField
+                  label="Drawee bank"
+                  required
+                  placeholder="e.g. Customer's bank name"
+                  error={errors.bankName?.message}
+                  {...register('bankName')}
+                />
+              </>
+            ) : null}
             {isPdc || method === 'Cheque' ? (
               <TextField
                 label="Cheque date"
@@ -413,6 +452,10 @@ export function NewCollectionPage() {
             />
           </CardBody>
         </Card>
+
+        {saveError ? (
+          <StatusMessage kind="error" title="Cannot save the receipt" description={saveError} />
+        ) : null}
 
         <div className="flex justify-end gap-2">
           <ButtonLink to="/collections" variant="secondary">

@@ -1,6 +1,8 @@
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
+import { useState } from 'react';
 import {
+  AlertTriangle,
   Check,
   CopyPlus,
   FileSignature,
@@ -10,25 +12,30 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react';
+import { lineMargin, priceLineAmount } from '@/domain/calc';
+import { formatInCurrency } from '@/features/sales-orders/commercial-api';
 import { lookupName } from '@/shared/data/lookups';
-import { StatusBadge } from '@/shared/ui/Badge';
+import { Badge, StatusBadge } from '@/shared/ui/Badge';
+import { Dialog } from '@/shared/ui/Dialog';
+import { TextareaField } from '@/shared/ui/Field';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { Logo } from '@/shared/ui/Logo';
 import { servicesLabel } from '@/domain/workflow';
 import { locationTextMulti, ServiceTypePills } from '@/features/sales-orders/commercial-ui';
-import { DocRef, Money } from '@/shared/ui/Money';
+import { DocRef } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
-import { formatDate, formatDateTime } from '@/shared/utils/format';
+import { formatDate, formatDateTime, formatMoney } from '@/shared/utils/format';
 import {
   totals,
   useCreateContractFromQuotation,
   useQuotation,
   useQuotationAction,
   useReviseQuotation,
+  useSubmitQuotation,
   type QuotationAction,
   type QuotationDetail,
 } from './api';
@@ -39,7 +46,6 @@ const route = getRouteApi('/_app/quotations/$id');
 const STEPS = ['Draft', 'Pending approval', 'Sent', 'Accepted'] as const;
 
 const actionToast: Record<QuotationAction, string> = {
-  submit: 'submitted for approval',
   approve: 'approved and sent',
   sendBack: 'returned to draft',
   accept: 'marked accepted',
@@ -52,6 +58,8 @@ export function QuotationDetailPage() {
   const act = useQuotationAction();
   const revise = useReviseQuotation();
   const toContract = useCreateContractFromQuotation();
+  const submit = useSubmitQuotation();
+  const [rejecting, setRejecting] = useState(false);
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -65,19 +73,37 @@ export function QuotationDetailPage() {
     );
   if (isLoading || !q) return <StatusMessage kind="loading" title="Loading quotation…" />;
 
-  const run = (action: QuotationAction) =>
+  const run = (action: QuotationAction, reason?: string) =>
     act.mutate(
-      { id: q.id, action },
+      { id: q.id, action, reason },
       { onSuccess: () => toast({ title: `${q.number} ${actionToast[action]}` }) },
     );
-  const pending = act.isPending || revise.isPending || toContract.isPending;
+  const pending = act.isPending || revise.isPending || toContract.isPending || submit.isPending;
   const t = totals(q.lines);
+  const cur = q.currency ?? 'AED';
+  const fmt = (n: number) => (cur === 'AED' ? formatMoney(n) : formatInCurrency(n, cur));
+  const onSubmit = () =>
+    submit.mutate(q.id, {
+      onSuccess: (res) =>
+        toast(
+          res.status === 'Pending approval'
+            ? {
+                title: `${q.number} sent for approval`,
+                body: `${res.reasons.join('; ')}. Waiting for the ${res.approverRole ?? 'approver'}.`,
+              }
+            : {
+                title: `${q.number} sent to the customer`,
+                body: 'No approval needed — discount and margin are inside the approval matrix limits.',
+              },
+        ),
+      onError: (e) => toast({ title: 'Could not submit', body: e.message }),
+    });
 
   const actions = (() => {
     switch (q.status) {
       case 'Draft':
         return (
-          <Button icon={<Send aria-hidden="true" />} busy={pending} onClick={() => run('submit')}>
+          <Button icon={<Send aria-hidden="true" />} busy={pending} onClick={onSubmit}>
             Submit for approval
           </Button>
         );
@@ -88,7 +114,7 @@ export function QuotationDetailPage() {
               variant="secondary"
               icon={<RotateCcw aria-hidden="true" />}
               disabled={pending}
-              onClick={() => run('sendBack')}
+              onClick={() => setRejecting(true)}
             >
               Return to draft
             </Button>
@@ -185,6 +211,25 @@ export function QuotationDetailPage() {
 
       <StatusTrack status={q.status} />
 
+      {q.status === 'Draft' && q.approval?.status === 'Rejected' ? (
+        <div
+          role="note"
+          className="mt-4 flex items-start gap-2 rounded-lg bg-danger-subtle px-4 py-3 text-body-s text-danger"
+        >
+          <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <strong className="font-semibold">Returned by the approver</strong>
+            {q.approval.decidedBy ? ` (${q.approval.decidedBy}` : ''}
+            {q.approval.decidedAt
+              ? `, ${formatDateTime(q.approval.decidedAt)})`
+              : q.approval.decidedBy
+                ? ')'
+                : ''}
+            {q.approval.reason ? ` — ${q.approval.reason}` : ''}. Change the price or cost and submit again.
+          </span>
+        </div>
+      ) : null}
+
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card>
@@ -228,24 +273,35 @@ export function QuotationDetailPage() {
                       ),
                   },
                   {
-                    label: 'Margin',
+                    label: 'Margin (internal)',
                     value: (
                       <span
                         className={clsx('font-semibold', t.marginPct < 15 ? 'text-warning' : 'text-success')}
                       >
-                        {t.marginPct}%
+                        {t.marginPct}%{t.marginPct < 15 ? ' · low' : ''}
                       </span>
                     ),
                   },
+                  ...(q.currency && q.currency !== 'AED'
+                    ? [
+                        {
+                          label: 'Currency',
+                          value: `${q.currency} · 1 ${q.currency} = AED ${q.exchangeRate}`,
+                        },
+                      ]
+                    : []),
                 ]}
               />
             </CardBody>
           </Card>
 
           <Card>
-            <CardHeader title="Price lines" description="Cost and margin are internal" />
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-body-s">
+            <CardHeader
+              title="Price lines"
+              description={`${cur} excl. VAT · cost and margin are internal — not printed`}
+            />
+            <div className="overflow-x-auto" role="region" aria-label="Quotation price lines" tabIndex={0}>
+              <table className="w-full min-w-[720px] text-left text-body-s">
                 <caption className="sr-only">Price lines</caption>
                 <thead>
                   <tr className="border-y border-border-subtle bg-canvas/60 text-caption uppercase tracking-wide text-fg-muted">
@@ -258,47 +314,78 @@ export function QuotationDetailPage() {
                     <th scope="col" className="px-3 py-2.5 text-right font-medium">
                       Unit price
                     </th>
-                    <th scope="col" className="hidden px-3 py-2.5 text-right font-medium md:table-cell">
-                      Unit cost
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Amount
+                    </th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-medium">
+                      Est. cost
                     </th>
                     <th scope="col" className="px-5 py-2.5 text-right font-medium">
-                      Amount
+                      Margin
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {q.lines.map((l) => (
-                    <tr key={l.id} className="border-b border-border-subtle last:border-0">
-                      <td className="px-5 py-3">
-                        <p className="font-medium">{l.description}</p>
-                        <p className="text-caption text-fg-muted">{lookupName.service(l.serviceId)}</p>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums">
-                        {l.quantity} <span className="text-fg-muted">{l.unit}</span>
-                      </td>
-                      <td className="px-3 py-3 text-right">
-                        <Money amount={l.unitPrice} />
-                      </td>
-                      <td className="hidden px-3 py-3 text-right md:table-cell">
-                        <Money amount={l.unitCost} muted />
-                      </td>
-                      <td className="px-5 py-3 text-right font-medium">
-                        <Money amount={l.quantity * l.unitPrice} />
-                      </td>
-                    </tr>
-                  ))}
+                  {q.lines.map((l) => {
+                    const m = lineMargin(l);
+                    return (
+                      <tr key={l.id} className="border-b border-border-subtle last:border-0">
+                        <td className="px-5 py-3">
+                          <p className="font-medium">{l.description}</p>
+                          <p className="text-caption text-fg-muted">
+                            {lookupName.service(l.serviceId)}
+                            {l.minimumCharge ? ` · min. charge ${fmt(l.minimumCharge)}` : ''}
+                            {l.customerApproved ? ' · customer approved' : ''}
+                          </p>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums">
+                          {l.quantity} <span className="text-fg-muted">{l.unit}</span>
+                        </td>
+                        <td className="px-3 py-3 text-right tabular-nums">{fmt(l.unitPrice)}</td>
+                        <td className="px-3 py-3 text-right font-medium tabular-nums">{fmt(m.amount)}</td>
+                        <td className="px-3 py-3 text-right tabular-nums text-fg-muted">{fmt(m.cost)}</td>
+                        <td
+                          className={clsx(
+                            'whitespace-nowrap px-5 py-3 text-right tabular-nums',
+                            m.margin < 0 ? 'font-medium text-danger' : 'text-fg-secondary',
+                          )}
+                        >
+                          {fmt(m.margin)}
+                          <span className="block text-caption">{m.marginPct}%</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
             <CardBody className="border-t border-border-subtle">
-              <QuotationTotals t={t} />
+              <QuotationTotals t={t} currency={cur} rate={q.exchangeRate} />
             </CardBody>
           </Card>
 
           <CustomerPreview q={q} />
         </div>
+        <RejectDialog
+          open={rejecting}
+          number={q.number}
+          busy={act.isPending}
+          onClose={() => setRejecting(false)}
+          onConfirm={(reason) =>
+            act.mutate(
+              { id: q.id, action: 'sendBack', reason },
+              {
+                onSuccess: () => {
+                  setRejecting(false);
+                  toast({ title: `${q.number} returned to draft`, body: `Reason: ${reason}` });
+                },
+              },
+            )
+          }
+        />
 
         <div className="space-y-6">
+          <ApprovalCard q={q} />
           <Card>
             <CardHeader title="Sales orders" description="Customer orders confirmed from this quotation" />
             <CardBody>
@@ -424,6 +511,116 @@ export function QuotationDetailPage() {
   );
 }
 
+/** C2: approval matrix result and the approval record (who / when / role / reason). */
+function ApprovalCard({ q }: { q: QuotationDetail }) {
+  const a = q.approval;
+  const tone = a?.status === 'Approved' ? 'success' : a?.status === 'Rejected' ? 'danger' : 'warning';
+  return (
+    <Card>
+      <CardHeader title="Approval" description="Approval matrix: discount vs rate card and margin" />
+      <CardBody className="space-y-4 text-body-s">
+        <dl className="grid grid-cols-2 gap-3">
+          <div>
+            <dt className="text-caption text-fg-muted">Max. discount vs rate card</dt>
+            <dd className="font-semibold tabular-nums">{q.pricingCheck.maxDiscountPct}%</dd>
+          </div>
+          <div>
+            <dt className="text-caption text-fg-muted">Margin</dt>
+            <dd className="font-semibold tabular-nums">{q.pricingCheck.marginPct}%</dd>
+          </div>
+        </dl>
+        {a ? (
+          <div className="space-y-1.5 rounded-lg border border-border-subtle p-3">
+            <p className="flex items-center justify-between gap-2">
+              <span className="font-medium">{a.approverRole}</span>
+              <Badge tone={tone}>{a.status}</Badge>
+            </p>
+            {q.approvalRequest ? (
+              <p className="text-caption text-fg-secondary">
+                {q.approvalRequest.docType}: {q.approvalRequest.summary}
+              </p>
+            ) : null}
+            <p className="text-caption text-fg-muted">
+              Requested by {a.requestedBy} · {formatDateTime(a.requestedAt)}
+            </p>
+            {a.decidedBy ? (
+              <p className="text-caption text-fg-muted">
+                {a.status} by {a.decidedBy}
+                {a.decidedAt ? ` · ${formatDateTime(a.decidedAt)}` : ''}
+              </p>
+            ) : null}
+            {a.reason ? <p className="text-caption text-fg-secondary">Reason: {a.reason}</p> : null}
+            {a.status === 'Pending' ? (
+              <Link to="/approvals" className="text-caption font-medium text-brand underline">
+                Open the approvals inbox
+              </Link>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-caption text-fg-muted">
+            {q.status === 'Draft'
+              ? 'On submit, the approval matrix decides if a manager must approve. Inside the limits it is sent straight away.'
+              : 'No approval was needed by the approval matrix.'}
+          </p>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function RejectDialog({
+  open,
+  number,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  number: string;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [touched, setTouched] = useState(false);
+  const error =
+    touched && reason.trim().length < 3 ? 'Give a short reason (at least 3 characters)' : undefined;
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={`Return ${number} to draft`}
+      description="The reason is shown to the sales person on the quotation."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            busy={busy}
+            onClick={() => {
+              setTouched(true);
+              if (reason.trim().length >= 3) onConfirm(reason.trim());
+            }}
+          >
+            Return to draft
+          </Button>
+        </>
+      }
+    >
+      <TextareaField
+        label="Reason"
+        required
+        placeholder="e.g. Discount too high for this lane — keep at least 12% margin"
+        value={reason}
+        error={error}
+        onChange={(e) => setReason(e.target.value)}
+      />
+    </Dialog>
+  );
+}
+
 function StatusTrack({ status }: { status: QuotationDetail['status'] }) {
   const terminal = status === 'Rejected' || status === 'Expired';
   const idx = STEPS.indexOf(status as (typeof STEPS)[number]);
@@ -472,6 +669,8 @@ function StatusTrack({ status }: { status: QuotationDetail['status'] }) {
 /** Document-style preview of what the customer receives (no cost/margin). */
 function CustomerPreview({ q }: { q: QuotationDetail }) {
   const t = totals(q.lines);
+  const cur = q.currency ?? 'AED';
+  const fmtIn = (n: number) => (cur === 'AED' ? formatMoney(n) : formatInCurrency(n, cur));
   return (
     <Card>
       <CardHeader
@@ -531,18 +730,14 @@ function CustomerPreview({ q }: { q: QuotationDetail }) {
                   <td className="whitespace-nowrap py-2.5 text-right tabular-nums">
                     {l.quantity} {l.unit}
                   </td>
-                  <td className="py-2.5 text-right">
-                    <Money amount={l.unitPrice} />
-                  </td>
-                  <td className="py-2.5 text-right">
-                    <Money amount={l.quantity * l.unitPrice} />
-                  </td>
+                  <td className="py-2.5 text-right tabular-nums">{fmtIn(l.unitPrice)}</td>
+                  <td className="py-2.5 text-right tabular-nums">{fmtIn(priceLineAmount(l))}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div className="mt-5">
-            <QuotationTotals t={t} showMargin={false} />
+            <QuotationTotals t={t} showMargin={false} currency={cur} rate={q.exchangeRate} />
           </div>
           <p className="mt-6 border-t border-border-subtle pt-4 text-caption leading-5 text-fg-muted">
             {q.terms}

@@ -13,6 +13,8 @@ import { Tabs } from '@/shared/ui/Tabs';
 import { formatDate } from '@/shared/utils/format';
 import { useArAgeing, useJournals, useTrialBalance, type JournalRow } from './api';
 import { ChartOfAccountsView } from './ChartOfAccountsView';
+import { useLockedUntil } from './closing';
+import { ButtonLink } from '@/shared/ui/Button';
 
 const route = getRouteApi('/_app/accounting');
 const SOURCES: JournalEntry['source'][] = [
@@ -21,6 +23,11 @@ const SOURCES: JournalEntry['source'][] = [
   'Collection',
   'Payment',
   'Vendor bill',
+  'Credit note',
+  'Debit note',
+  'Write-off',
+  'Expense',
+  'Accrual',
   'Manual',
 ];
 
@@ -71,12 +78,39 @@ export function AccountingPage() {
   const search = route.useSearch();
   const navigate = useNavigate({ from: '/accounting' });
   const view = search.view ?? 'journals';
+  const lockedUntil = useLockedUntil();
 
   return (
     <div>
       <PageHeader
         title="Accounting"
         description="Journals from invoices, receipts, purchase invoices and payments; the chart of accounts where staff add ledger accounts."
+        meta={
+          lockedUntil.data ? (
+            <Badge tone="dark">{`Books locked up to ${formatDate(lockedUntil.data)}`}</Badge>
+          ) : lockedUntil.data === null ? (
+            <Badge tone="warning">No period locked</Badge>
+          ) : null
+        }
+        actions={
+          <>
+            <ButtonLink to="/accounting/accruals" variant="secondary" size="sm">
+              Accruals
+            </ButtonLink>
+            <ButtonLink to="/accounting/bank-reconciliation" variant="secondary" size="sm">
+              Bank reconciliation
+            </ButtonLink>
+            <ButtonLink to="/accounting/vat-return" variant="secondary" size="sm">
+              VAT return
+            </ButtonLink>
+            <ButtonLink to="/accounting/period-close" variant="secondary" size="sm">
+              Period close
+            </ButtonLink>
+            <ButtonLink to="/expenses" variant="secondary" size="sm">
+              Expenses
+            </ButtonLink>
+          </>
+        }
       />
       <div
         role="note"
