@@ -9,6 +9,7 @@ import { SERVICE_CATEGORIES, serviceCategoryLabel } from '@/domain/workflow';
 import { useCustomerOptions, useServiceOptions } from '@/shared/data/lookups';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
+import { PlaceField } from '@/features/sales-orders/master-fields';
 import { inputClasses, SelectField, TextField } from '@/shared/ui/Field';
 import { JobKindIcon, modeIcons } from '@/shared/ui/ModeIcon';
 import { Money } from '@/shared/ui/Money';
@@ -126,6 +127,8 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
   const plLines = useFieldArray({ control, name: 'plLines' });
   const isTransport = selected.includes('Transport');
   const isWarehouse = selected.includes('Warehouse') && !isTransport;
+  // MASTERS M2: origin / destination / service location suggest places; a warehouse site does not.
+  const OriginField = isWarehouse ? TextField : PlaceField;
   const includesWarehouse = selected.includes('Warehouse');
   const lines = useFieldArray({ control, name: 'lines' });
   const watchedLines = useWatch({ control, name: 'lines' });
@@ -330,7 +333,7 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
                 </div>
               </fieldset>
             ) : null}
-            <TextField
+            <OriginField
               label={isTransport ? 'Origin' : isWarehouse ? 'Warehouse / site' : 'Service location'}
               required
               placeholder={
@@ -341,7 +344,7 @@ function WorkOrderForm({ prefill }: { prefill: WorkOrderPrefill }) {
               {...register('origin')}
             />
             {isTransport ? (
-              <TextField
+              <PlaceField
                 label="Destination"
                 required
                 placeholder="e.g. Riyadh"

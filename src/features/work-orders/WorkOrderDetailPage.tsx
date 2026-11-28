@@ -16,7 +16,7 @@ import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { Dialog } from '@/shared/ui/Dialog';
-import { TextareaField } from '@/shared/ui/Field';
+import { ReasonField } from '@/features/sales-orders/master-fields';
 import { JobKindIcon } from '@/shared/ui/ModeIcon';
 import { servicesLabel } from '@/domain/workflow';
 import { DocRef, Money } from '@/shared/ui/Money';
@@ -349,7 +349,8 @@ export function WorkOrderDetailPage() {
             </>
           }
         >
-          <TextareaField
+          <ReasonField
+            kind="Cancellation"
             label="Reason"
             required
             value={reason}

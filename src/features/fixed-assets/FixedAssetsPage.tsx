@@ -16,14 +16,15 @@ import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatMoney } from '@/shared/utils/format';
 import { PROTO_TODAY } from '@/prototype/seed';
 import {
-  ASSET_CATEGORIES,
   previewDepreciation,
   useAssetRegister,
   useCreateAsset,
   useDisposeAsset,
   useRunDepreciation,
+  useAssetCategoryOptions,
   type AssetRow,
 } from './api';
+import { categoryPrefill, residualFromPct } from './asset-defaults';
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : 'Please try again.');
 
@@ -217,13 +218,16 @@ function NewAssetForm({
 }) {
   const create = useCreateAsset();
   const toast = useToast();
+  const categories = useAssetCategoryOptions();
+  // Residual % of the chosen category; cleared once the residual value is typed by hand.
+  const [residualPct, setResidualPct] = useState<number | null>(null);
   const [f, setF] = useState({
     name: '',
-    category: 'Vehicles' as AssetCategory,
+    category: '' as AssetCategory,
     acquisitionDate: PROTO_TODAY,
     cost: '',
     residualValue: '0',
-    usefulLifeMonths: '60',
+    usefulLifeMonths: '',
     location: '',
     supplier: '',
     vehicleId: '',
@@ -231,6 +235,13 @@ function NewAssetForm({
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
     setF((p) => ({ ...p, [k]: e.target.value }));
+  const categoryOptions = categories.data ?? [];
+  const chooseCategory = (e: { target: { value: string } }) => {
+    const c = categoryOptions.find((x) => x.value === e.target.value);
+    setResidualPct(c ? c.residualPct : null);
+    setF((p) => ({ ...p, category: e.target.value, ...(c ? categoryPrefill(c, p.cost) : {}) }));
+  };
+  const chosen = categoryOptions.find((x) => x.value === f.category);
   return (
     <form
       className="space-y-4"
@@ -263,9 +274,15 @@ function NewAssetForm({
         <SelectField
           label="Category"
           required
-          options={ASSET_CATEGORIES.map((c) => ({ value: c, label: c }))}
+          placeholder="Select category"
+          hint={
+            chosen
+              ? `Default ${chosen.usefulLifeMonths} months, residual ${chosen.residualPct}% of cost`
+              : 'From the Asset categories master'
+          }
+          options={categoryOptions.map(({ value, label }) => ({ value, label }))}
           value={f.category}
-          onChange={set('category')}
+          onChange={chooseCategory}
         />
         <TextField
           label="Acquisition date"
@@ -280,14 +297,26 @@ function NewAssetForm({
           step="0.01"
           required
           value={f.cost}
-          onChange={set('cost')}
+          onChange={(e) => {
+            const cost = e.target.value;
+            setF((p) => ({
+              ...p,
+              cost,
+              ...(residualPct !== null
+                ? { residualValue: String(residualFromPct(Number(cost), residualPct)) }
+                : {}),
+            }));
+          }}
         />
         <TextField
           label="Residual value (AED)"
           type="number"
           step="0.01"
           value={f.residualValue}
-          onChange={set('residualValue')}
+          onChange={(e) => {
+            setResidualPct(null);
+            set('residualValue')(e);
+          }}
         />
         <TextField
           label="Useful life (months)"

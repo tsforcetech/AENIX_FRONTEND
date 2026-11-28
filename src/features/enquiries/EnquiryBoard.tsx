@@ -19,7 +19,8 @@ import { Avatar } from '@/shared/ui/Avatar';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Dialog } from '@/shared/ui/Dialog';
-import { TextareaField, TextField } from '@/shared/ui/Field';
+import { TextField } from '@/shared/ui/Field';
+import { ReasonField } from '@/features/sales-orders/master-fields';
 import { DocRef } from '@/shared/ui/Money';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
@@ -620,7 +621,8 @@ export function LostReasonDialog({
         </>
       }
     >
-      <TextareaField
+      <ReasonField
+        kind="Lost enquiry"
         label="Reason"
         required
         placeholder="e.g. Price too high, customer chose another forwarder"

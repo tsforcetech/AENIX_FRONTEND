@@ -150,7 +150,11 @@ function pricingCheckOf(q: Quotation) {
   const { maxDiscountPct, marginPct: margin } = quotationApprovalCheck(
     q.lines.map((l) => ({
       ...l,
-      listPriceAed: rateCardPriceAed(l.serviceId, { origin: q.origin, destination: q.destination }),
+      listPriceAed: rateCardPriceAed(
+        l.serviceId,
+        { origin: q.origin, destination: q.destination },
+        q.customerId,
+      ),
     })),
     rate,
   );

@@ -70,6 +70,20 @@ const staffPaths = [
   '/reports?tab=occupancy',
   '/reports?tab=pdc',
   '/fixed-assets',
+  '/masters',
+  '/masters/serviceTypes',
+  '/masters/unitsOfMeasure',
+  '/masters/customerCategories',
+  '/masters/vendorCategories',
+  '/masters/places',
+  '/masters/currencies',
+  '/masters/taxCodes',
+  '/masters/paymentTerms',
+  '/masters/bankAccounts',
+  '/masters/assetCategories',
+  '/masters/reasonCodes',
+  '/masters/numberSeries',
+  '/masters/warehouses',
 ];
 const customerPaths = ['/portal', '/portal/approvals', '/portal/invoices'];
 const vendorPaths = ['/vendor-portal', '/vendor-portal/assignments', '/vendor-portal/bills'];

@@ -8,21 +8,14 @@ import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { SelectField, TextField } from '@/shared/ui/Field';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToast } from '@/shared/ui/Toast';
-import { useCreateVendor } from './api';
-
-const CATEGORIES: VendorCategory[] = [
-  'Transporter',
-  'Shipping line',
-  'Airline',
-  'Customs broker',
-  'Warehouse',
-];
+import { usePaymentTermOptions } from '@/features/sales-orders/master-fields';
+import { StatusMessage } from '@/shared/ui/StatusMessage';
+import { useCreateVendor, useVendorCategoryOptions } from './api';
 
 const schema = z.object({
   name: z.string().trim().min(2, 'Enter the legal name').max(120),
-  category: z.enum(['Transporter', 'Shipping line', 'Airline', 'Customs broker', 'Warehouse'], {
-    message: 'Choose a category',
-  }),
+  /** Vendor categories master id; the vendor stores the category's behaviour. */
+  categoryId: z.string().min(1, 'Choose a category'),
   city: z.string().trim().min(2, 'Enter the city').max(60),
   country: z.string().trim().min(2, 'Enter the country').max(60),
   contactName: z.string().trim().min(2, 'Enter a contact name').max(80),
@@ -33,6 +26,20 @@ type FormInput = z.input<typeof schema>;
 type FormOutput = z.output<typeof schema>;
 
 export function NewVendorPage() {
+  // MASTERS M2: category and payment terms come from the masters; wait so the selects show defaults.
+  const categories = useVendorCategoryOptions();
+  const terms = usePaymentTermOptions();
+  if (categories.isLoading || terms.isLoading) return <StatusMessage kind="loading" title="Loading…" />;
+  return <NewVendorForm categories={categories.data ?? []} terms={terms.options} />;
+}
+
+function NewVendorForm({
+  categories,
+  terms,
+}: {
+  categories: { value: string; label: string; behaves: VendorCategory }[];
+  terms: { value: string; label: string }[];
+}) {
   const navigate = useNavigate();
   const toast = useToast();
   const create = useCreateVendor();
@@ -46,7 +53,9 @@ export function NewVendorPage() {
   });
 
   const onSubmit = handleSubmit(async (v) => {
-    const { vendor, ledgerCode } = await create.mutateAsync(v);
+    const { categoryId, ...rest } = v;
+    const behaves = categories.find((c) => c.value === categoryId)?.behaves ?? 'Transporter';
+    const { vendor, ledgerCode } = await create.mutateAsync({ ...rest, category: behaves });
     toast({
       title: `${vendor.name} added`,
       body: `${vendor.code} created with its payable ledger ${ledgerCode}. Ready for rates and purchase orders.`,
@@ -76,15 +85,15 @@ export function NewVendorPage() {
               label="Category"
               required
               placeholder="Select category"
-              options={CATEGORIES.map((c) => ({ value: c, label: c }))}
-              error={errors.category?.message}
-              {...register('category')}
+              hint="From the Vendor categories master"
+              options={categories.map(({ value, label }) => ({ value, label }))}
+              error={errors.categoryId?.message}
+              {...register('categoryId')}
             />
-            <TextField
-              label="Payment terms (days)"
-              type="number"
-              inputMode="numeric"
+            <SelectField
+              label="Payment terms"
               required
+              options={terms}
               error={errors.paymentTermsDays?.message}
               {...register('paymentTermsDays')}
             />

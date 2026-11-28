@@ -90,3 +90,10 @@ Append-only. Each entry: date, work package, branch/PR/SHAs, what changed, tests
 - Next gate: owner confirmation, then HO-FLOW-003 backend handoff to Antigravity; accountant sign-off on finance screens.
 
 - 2026-11-28 (same branch, after owner feedback on the warehouse screen): warehouse switcher + add warehouse; **Upload Excel** for PL / GRN / release request / POD from the warehouse screen. Checks: unit 138/138; e2e 85 passed, 2 skipped (new test uploads a CSV product list on desktop and mobile with 0 axe violations).
+
+### 2026-11-28 — Masters area (branch `feature/fe-masters`)
+
+- Owner asked for every master; audit sheet lists 51 masters (33 missing, 11 partial, 7 exist).
+- Built: Masters hub (`/masters`), 12 generic master lists + warehouses master, services (add / edit / deactivate), buying and selling rates (add / edit / expire / Excel import), pricing order customer rate → price list → cost + 20%, customer and vendor edit, masters used in forms (currencies, places, reasons, categories, payment terms, asset categories).
+- Checks: format, lint, typecheck clean; unit 170/170; build OK; e2e 99 passed, 2 skipped (0 WCAG 2.1 AA violations).
+- Next: 12 must-have masters still to add (contacts and addresses, prospects, pipeline stages, lead sources, sales team, quotation terms, Incoterms, vendor contacts, equipment types, cargo types, item / SKU, branches / cost centres); API-DEP-47.

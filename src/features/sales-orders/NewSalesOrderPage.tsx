@@ -37,6 +37,7 @@ import { suggestLine, useCommercialSettings, useServiceMeta } from './commercial
 import { locationLabel, ModePicker, serviceFitsTypes, ServiceTypesPicker } from './commercial-ui';
 import { ConfirmationFilePicker, type PickedFile } from './ConfirmationFilePicker';
 import { CurrencyFields, rateError } from './CurrencyFields';
+import { PlaceField } from './master-fields';
 import { fuelSurchargeAmount } from './pricing';
 
 const route = getRouteApi('/_app/sales-orders/new');
@@ -148,6 +149,8 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
   const mode = useController({ control, name: 'mode' });
   const customer = useController({ control, name: 'customerId' });
   const { fields, append, remove } = useFieldArray({ control, name: 'lines' });
+  // MASTERS M2: where each line's suggested price came from, by line key.
+  const [priceSources, setPriceSources] = useState<Record<string, string | undefined>>({});
   const watchedLines = useWatch({ control, name: 'lines' }) ?? [];
   const selected = cats.field.value;
   // Types found on the price lines are always included (one order can mix services).
@@ -181,7 +184,7 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
 
   const allowed = new Set(serviceChoices.map((c) => c.value));
   const serviceOptions = (serviceCombo.data ?? []).filter((o) => allowed.has(o.value));
-  const gridLines: GridLine[] = watchedLines.map((l) => ({
+  const gridLines: GridLine[] = watchedLines.map((l, idx) => ({
     serviceId: l?.serviceId ?? '',
     description: l?.description ?? '',
     quantity: String(l?.quantity ?? ''),
@@ -190,6 +193,7 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
     unitCost: String(l?.unitCost ?? ''),
     minimumCharge: l?.minimumCharge,
     customerApproved: l?.customerApproved,
+    priceSource: priceSources[fields[idx]?.id ?? ''],
   }));
   const patchLine = (i: number, p: Partial<GridLine>) => {
     const o = { shouldDirty: true };
@@ -201,9 +205,16 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
     if (p.unitCost !== undefined) setValue(`lines.${i}.unitCost`, p.unitCost, o);
     if ('minimumCharge' in p) setValue(`lines.${i}.minimumCharge`, p.minimumCharge, o);
     if (p.customerApproved !== undefined) setValue(`lines.${i}.customerApproved`, p.customerApproved, o);
+    if ('priceSource' in p) {
+      const key = fields[i]?.id;
+      if (key) setPriceSources((m) => ({ ...m, [key]: p.priceSource }));
+    }
   };
   const suggest = (serviceId: string) =>
-    suggestLine(serviceId, { origin: getValues('origin'), destination: getValues('destination') }, fxRate);
+    suggestLine(serviceId, { origin: getValues('origin'), destination: getValues('destination') }, fxRate, {
+      customerId: getValues('customerId'),
+      currency: fx.currency,
+    });
 
   const save = (confirm: boolean) => async (v: FormOutput) => {
     setConfirmMode(confirm);
@@ -353,14 +364,14 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
                 <ModePicker name={mode.field.name} value={mode.field.value} onChange={mode.field.onChange} />
               </div>
             ) : null}
-            <TextField
+            <PlaceField
               label={transport ? 'Origin' : locationLabel(locationKind)}
               required
               error={errors.origin?.message}
               {...register('origin')}
             />
             {transport ? (
-              <TextField
+              <PlaceField
                 label="Destination"
                 required
                 error={errors.destination?.message}
@@ -373,7 +384,7 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
         <Card>
           <CardHeader
             title="Price lines"
-            description={`Type to find a service — cost and a suggested price come from the rate card. Unit cost and margin are internal and never printed.${fx.currency !== 'AED' ? ` Amounts in ${fx.currency}.` : ''}`}
+            description={`Type to find a service — the price comes from the customer’s rates, then the price list, then cost + 20%. Unit cost and margin are internal and never printed.${fx.currency !== 'AED' ? ` Amounts in ${fx.currency}.` : ''}`}
           />
           <CardBody>
             <PriceLinesGrid

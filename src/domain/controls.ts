@@ -88,10 +88,10 @@ export function assertOpenPeriod(company: Pick<CompanyProfile, 'lockedUntil'>, d
 // ---------- C10: currency ----------
 export const CURRENCIES: readonly Currency[] = ['AED', 'USD', 'EUR', 'SAR'];
 /** Prototype reference rates to AED (the backend/accountant sets the daily rate). */
-export const DEFAULT_RATES: Record<Currency, number> = { AED: 1, USD: 3.6725, EUR: 3.98, SAR: 0.979 };
+export const DEFAULT_RATES: Record<string, number> = { AED: 1, USD: 3.6725, EUR: 3.98, SAR: 0.979 };
 
 export function toAed(amount: number, currency: Currency = 'AED', rate?: number): number {
-  const r = currency === 'AED' ? 1 : (rate ?? DEFAULT_RATES[currency]);
+  const r = currency === 'AED' ? 1 : (rate ?? DEFAULT_RATES[currency] ?? 1);
   return Math.round(amount * r * 100) / 100;
 }
 

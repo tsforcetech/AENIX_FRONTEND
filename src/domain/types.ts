@@ -74,6 +74,17 @@ export interface Service {
   isSurcharge?: boolean;
   /** FLOW-003 S6/W13: minimum charge per order line in AED (0 / undefined = none). */
   minimumCharge?: number;
+  // MASTERS M2
+  /** Service type master id (sets `mode`). */
+  serviceTypeId?: Id;
+  /** Default tax code (Tax codes master id). */
+  taxCodeId?: Id;
+  /** Income / cost ledger accounts (default from the service type). */
+  incomeAccountId?: Id;
+  costAccountId?: Id;
+  /** Inactive services are not offered on new quotations, orders or jobs (missing = active). */
+  active?: boolean;
+  // end MASTERS M2
 }
 
 export interface VendorRate {
@@ -726,7 +737,8 @@ export interface CompanyProfile {
 }
 
 // ===================== FLOW-003 (industry-standard gap closure) =====================
-export type Currency = 'AED' | 'USD' | 'EUR' | 'SAR';
+/** ISO 4217 code (AED, USD, EUR, SAR, GBP…) — the list is the Currencies master. */
+export type Currency = string;
 export type Emirate =
   'Abu Dhabi' | 'Dubai' | 'Sharjah' | 'Ajman' | 'Umm Al Quwain' | 'Ras Al Khaimah' | 'Fujairah';
 export type PdcStatus = 'Pending' | 'Deposited' | 'Cleared' | 'Bounced';
@@ -996,12 +1008,8 @@ export interface Expense {
 }
 
 // ---------- Fixed assets (owner decision 2026-11-28: register in AENIX; payroll stays outside) ----------
-export type AssetCategory =
-  | 'Vehicles'
-  | 'Material handling equipment'
-  | 'Racking and storage'
-  | 'IT equipment'
-  | 'Furniture and fittings';
+/** Name from the Asset categories master (e.g. Vehicles, Racking and storage). */
+export type AssetCategory = string;
 
 export interface FixedAsset {
   id: Id;
@@ -1045,5 +1053,104 @@ export interface WarehouseSite {
   vendorId?: Id;
   city: string;
   palletCapacity: number;
+  active: boolean;
+}
+
+// ===================== Master data (Masters area) =====================
+/** Common shape for simple masters: code, name, active. */
+export interface MasterBase {
+  id: Id;
+  code: string;
+  name: string;
+  active: boolean;
+  /** System entries are used by the workflow and cannot be deleted (only renamed / deactivated where allowed). */
+  system?: boolean;
+}
+
+/** Service type: groups services; drives the job's milestones and the posting accounts. */
+export interface ServiceTypeMaster extends MasterBase {
+  category: ServiceCategory;
+  mode: ServiceMode;
+  incomeAccountId?: Id;
+  costAccountId?: Id;
+}
+
+export interface UnitOfMeasure extends MasterBase {
+  kind: 'Count' | 'Weight' | 'Volume' | 'Area' | 'Time' | 'Trip' | 'Container';
+}
+
+export type CustomerCategoryMaster = MasterBase;
+
+export interface VendorCategoryMaster extends MasterBase {
+  /** System behaviour of vendors in this category (POs, warehouse sites, transport). */
+  behaves: VendorCategory;
+}
+
+export interface Place extends MasterBase {
+  kind: 'City' | 'Port' | 'Airport' | 'Free zone' | 'Border crossing';
+  country: string;
+  emirate?: Emirate;
+}
+
+export interface CurrencyMaster extends MasterBase {
+  /** code = ISO 4217, e.g. USD. */
+  symbol: string;
+  rateToAed: number;
+  rateDate: IsoDate;
+  base?: boolean;
+}
+
+export interface TaxCode extends MasterBase {
+  rate: number;
+  treatment: 'Standard' | 'Zero-rated' | 'Exempt' | 'Out of scope';
+}
+
+export interface PaymentTerm extends MasterBase {
+  days: number;
+}
+
+export interface BankAccountMaster extends MasterBase {
+  bankName: string;
+  /** Masked in the prototype; real numbers are kept by the backend, never in code. */
+  accountNoMasked: string;
+  ibanMasked: string;
+  currency: Currency;
+  ledgerAccountId?: Id;
+}
+
+export interface AssetCategoryMaster extends MasterBase {
+  usefulLifeMonths: number;
+  residualPct: number;
+}
+
+export type ReasonKind =
+  'Lost enquiry' | 'Variance' | 'Stock adjustment' | 'Cancellation' | 'Credit note' | 'Write-off';
+
+export interface ReasonCode extends MasterBase {
+  kind: ReasonKind;
+}
+
+export interface NumberSeries {
+  id: Id;
+  docType: string;
+  prefix: string;
+  digits: number;
+  nextNumber: number;
+  resetYearly: boolean;
+  example?: string;
+}
+
+/** Selling rate: a customer's own price, or the standard price list when customerId is empty. */
+export interface CustomerRate {
+  id: Id;
+  customerId?: Id;
+  serviceId: Id;
+  origin?: string;
+  destination?: string;
+  unit: string;
+  price: number;
+  currency: Currency;
+  validFrom: IsoDate;
+  validTo: IsoDate;
   active: boolean;
 }
