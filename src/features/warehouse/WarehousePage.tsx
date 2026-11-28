@@ -3,15 +3,21 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Boxes,
+  CalendarClock,
   ClipboardCheck,
+  ClipboardList,
+  MapPin,
   PackageCheck,
+  SearchCheck,
   SlidersHorizontal,
   Truck,
 } from 'lucide-react';
 import { useState } from 'react';
-import { StatusBadge } from '@/shared/ui/Badge';
-import { Button } from '@/shared/ui/Button';
-import { Card } from '@/shared/ui/Card';
+import { Badge, StatusBadge, type Tone } from '@/shared/ui/Badge';
+import { Button, ButtonLink } from '@/shared/ui/Button';
+import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
+import { Dialog } from '@/shared/ui/Dialog';
+import { SelectField } from '@/shared/ui/Field';
 import { DataTable, Pagination, type Column } from '@/shared/ui/DataTable';
 import { KpiCard } from '@/shared/ui/KpiCard';
 import { ListToolbar, statusTabs } from '@/shared/ui/ListToolbar';
@@ -21,61 +27,115 @@ import { Tabs } from '@/shared/ui/Tabs';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatNumber } from '@/shared/utils/format';
 import {
+  STOCK_FILTERS,
+  useFloorAction,
+  useLocations,
   usePostMovement,
   useMovements,
   useStock,
+  useWarehouseFloorEnabled,
   useWarehouseKpis,
   type MovementRow,
   type StockRow,
 } from './api';
 import { CustomerStockView, InboundView, OutboundView } from './DocViews';
-import { useInbound, useOutbound } from './docs';
+import { useArrivals, useInbound, useOutbound } from './docs';
 import { MovementDialog, type MovementKind } from './MovementDialog';
 
 const route = getRouteApi('/_app/warehouse');
 const TYPES = ['Receipt', 'Dispatch', 'Transfer', 'Adjustment'] as const;
 
-const stockColumns: Column<StockRow>[] = [
-  {
-    key: 'sku',
-    header: 'SKU',
-    cell: (r) => (
-      <div>
-        <span className="font-mono text-[13px] font-medium">{r.sku}</span>
-        <p className="text-caption text-fg-muted">{r.description}</p>
-      </div>
-    ),
-  },
-  {
-    key: 'customer',
-    header: 'Owner',
-    cell: (r) => <span className="whitespace-nowrap">{r.customerName}</span>,
-  },
-  {
-    key: 'location',
-    header: 'Location',
-    hideOnMobile: true,
-    cell: (r) => <span className="font-mono text-[13px]">{r.location}</span>,
-  },
-  {
-    key: 'qty',
-    header: 'On hand',
-    align: 'right',
-    cell: (r) => (
-      <span className={r.qtyOnHand === 0 ? 'text-fg-muted' : 'font-medium'}>
-        {formatNumber(r.qtyOnHand)}{' '}
-        <span className="text-caption font-normal text-fg-muted">{r.uom.toLowerCase()}</span>
-      </span>
-    ),
-  },
-  { key: 'pallets', header: 'Pallets', align: 'right', cell: (r) => formatNumber(r.pallets) },
-  {
-    key: 'received',
-    header: 'Received',
-    hideOnMobile: true,
-    cell: (r) => <span className="whitespace-nowrap">{formatDate(r.receivedAt)}</span>,
-  },
-];
+const statusTone: Record<StockRow['status'], Tone> = {
+  Available: 'success',
+  Quarantine: 'warning',
+  Damaged: 'danger',
+};
+
+function stockColumns(onInspect: (r: StockRow) => void): Column<StockRow>[] {
+  return [
+    {
+      key: 'sku',
+      header: 'SKU',
+      cell: (r) => (
+        <div>
+          <span className="font-mono text-[13px] font-medium">{r.sku}</span>
+          <p className="text-caption text-fg-muted">{r.description}</p>
+        </div>
+      ),
+    },
+    {
+      key: 'customer',
+      header: 'Owner',
+      cell: (r) => (
+        <div>
+          <span className="whitespace-nowrap">{r.customerName}</span>
+          {r.jobNumber ? <p className="font-mono text-caption text-fg-muted">{r.jobNumber}</p> : null}
+        </div>
+      ),
+    },
+    {
+      key: 'location',
+      header: 'Location',
+      hideOnMobile: true,
+      cell: (r) => <span className="font-mono text-[13px]">{r.location}</span>,
+    },
+    {
+      key: 'lot',
+      header: 'Batch / expiry',
+      hideOnMobile: true,
+      cell: (r) =>
+        r.batch || r.expiryDate ? (
+          <div className="whitespace-nowrap">
+            <p className="font-mono text-[13px]">{r.batch ?? '—'}</p>
+            {r.expiryDate ? (
+              <p className="text-caption text-fg-muted">Exp. {formatDate(r.expiryDate)}</p>
+            ) : null}
+          </div>
+        ) : (
+          <span className="text-caption text-fg-muted">—</span>
+        ),
+    },
+    {
+      key: 'qty',
+      header: 'On hand',
+      align: 'right',
+      cell: (r) => (
+        <span className={r.qtyOnHand === 0 ? 'text-fg-muted' : 'font-medium'}>
+          {formatNumber(r.qtyOnHand)}{' '}
+          <span className="text-caption font-normal text-fg-muted">{r.uom.toLowerCase()}</span>
+        </span>
+      ),
+    },
+    { key: 'pallets', header: 'Pallets', align: 'right', cell: (r) => formatNumber(r.pallets) },
+    {
+      key: 'status',
+      header: 'Status',
+      cell: (r) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge tone={statusTone[r.status]}>{r.status}</Badge>
+          {r.expiry === 'Expired' ? <Badge tone="danger">Expired</Badge> : null}
+          {r.expiry === 'Expiring' ? <Badge tone="warning">Expires soon</Badge> : null}
+          {r.status === 'Quarantine' && r.qtyOnHand > 0 ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<SearchCheck aria-hidden="true" />}
+              onClick={() => onInspect(r)}
+            >
+              Inspect
+            </Button>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: 'received',
+      header: 'Received',
+      hideOnMobile: true,
+      cell: (r) => <span className="whitespace-nowrap">{formatDate(r.receivedAt)}</span>,
+    },
+  ];
+}
 
 export function WarehousePage() {
   const search = route.useSearch();
@@ -87,6 +147,7 @@ export function WarehousePage() {
   const outboundOpen = outbound.data?.filter((r) => r.request.status !== 'Closed').length ?? 0;
   const kpis = useWarehouseKpis();
   const [dialog, setDialog] = useState<MovementKind | null>(null);
+  const floor = useWarehouseFloorEnabled();
   const k = kpis.data;
 
   return (
@@ -96,6 +157,20 @@ export function WarehousePage() {
         description="JAFZA WH-1 · 3PL stock held for customers. Runs with or without a transport job."
         actions={
           <>
+            {floor ? (
+              <>
+                <ButtonLink to="/warehouse/locations" variant="ghost" icon={<MapPin aria-hidden="true" />}>
+                  Locations
+                </ButtonLink>
+                <ButtonLink
+                  to="/warehouse/cycle-counts"
+                  variant="ghost"
+                  icon={<ClipboardList aria-hidden="true" />}
+                >
+                  Cycle counts
+                </ButtonLink>
+              </>
+            ) : null}
             <Button
               variant="ghost"
               icon={<SlidersHorizontal aria-hidden="true" />}
@@ -158,6 +233,8 @@ export function WarehousePage() {
         />
       </section>
 
+      <ArrivalsCard />
+
       <Card>
         <div className="px-5 pt-3">
           <Tabs
@@ -213,17 +290,38 @@ export function WarehousePage() {
 function StockView() {
   const search = route.useSearch();
   const navigate = useNavigate({ from: '/warehouse' });
-  const { data, isLoading, isFetching, error } = useStock({ page: search.page, search: search.q });
+  const [inspecting, setInspecting] = useState<StockRow>();
+  const { data, isLoading, isFetching, error } = useStock({
+    page: search.page,
+    search: search.q,
+    status: search.status,
+  });
+  const expiring = (data?.counts?.Expiring ?? 0) + (data?.counts?.Expired ?? 0);
   return (
     <>
+      {expiring > 0 && !search.status ? (
+        <p
+          role="status"
+          className="mx-5 mt-4 flex items-center gap-2 rounded-lg bg-warning-subtle px-3 py-2.5 text-body-s text-warning"
+        >
+          <CalendarClock aria-hidden="true" className="size-4 shrink-0" />
+          {data?.counts?.Expired ?? 0} lot(s) expired and {data?.counts?.Expiring ?? 0} expiring within 30
+          days. Use the Expired / Expiring filters to see them.
+        </p>
+      ) : null}
       <ListToolbar
+        tabs={statusTabs(STOCK_FILTERS, data?.counts)}
+        status={search.status}
+        onStatus={(s) =>
+          void navigate({ search: (p) => ({ ...p, status: s === 'All' ? undefined : s, page: undefined }) })
+        }
         search={search.q ?? ''}
         onSearch={(q) => void navigate({ search: (p) => ({ ...p, q: q || undefined, page: undefined }) })}
-        searchPlaceholder="Search SKU, description, owner, location…"
+        searchPlaceholder="Search SKU, batch, owner, location…"
       />
       <DataTable
         caption="Stock on hand"
-        columns={stockColumns}
+        columns={stockColumns(setInspecting)}
         rows={data?.items}
         rowKey={(r) => r.id}
         loading={isLoading || isFetching}
@@ -240,7 +338,119 @@ function StockView() {
           ) : null
         }
       />
+      {inspecting ? <InspectDialog lot={inspecting} onClose={() => setInspecting(undefined)} /> : null}
     </>
+  );
+}
+
+/** W12: inspect a quarantined lot (customer return / suspect goods): release to a bin or mark damaged. */
+function InspectDialog({ lot, onClose }: { lot: StockRow; onClose: () => void }) {
+  const locations = useLocations();
+  const action = useFloorAction();
+  const toast = useToast();
+  const [result, setResult] = useState<'Available' | 'Damaged'>('Available');
+  const [locationId, setLocationId] = useState('');
+  const options = (locations.data ?? [])
+    .filter((l) => l.location.active && l.location.zone !== 'Quarantine' && l.location.zone !== 'Dispatch')
+    .map((l) => ({ value: l.id, label: `${l.location.code} · ${l.location.zone} · ${l.free} free` }));
+  const submit = () =>
+    action.mutate(
+      { kind: 'inspect', lotId: lot.id, result, locationId: result === 'Available' ? locationId : undefined },
+      {
+        onSuccess: () => {
+          toast({
+            title: result === 'Available' ? `${lot.sku} released to stock` : `${lot.sku} marked damaged`,
+          });
+          onClose();
+        },
+      },
+    );
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Inspect ${lot.sku}`}
+      description={`${formatNumber(lot.qtyOnHand)} ${lot.uom.toLowerCase()} in quarantine at ${lot.location}${lot.batch ? ` · batch ${lot.batch}` : ''}.`}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button busy={action.isPending} onClick={submit}>
+            Save inspection
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <SelectField
+          label="Inspection result"
+          options={[
+            { value: 'Available', label: 'Good — release to stock' },
+            { value: 'Damaged', label: 'Damaged — keep in quarantine' },
+          ]}
+          value={result}
+          onChange={(e) => setResult(e.target.value as 'Available' | 'Damaged')}
+        />
+        {result === 'Available' ? (
+          <SelectField
+            label="Move to bin"
+            required
+            placeholder={locations.isLoading ? 'Loading…' : 'Choose a bin'}
+            options={options}
+            value={locationId}
+            onChange={(e) => setLocationId(e.target.value)}
+          />
+        ) : null}
+        {action.error ? (
+          <p role="alert" className="text-caption font-medium text-danger">
+            {action.error instanceof Error ? action.error.message : 'Not saved.'}
+          </p>
+        ) : null}
+      </div>
+    </Dialog>
+  );
+}
+
+/** W1: consignments expected in the next 7 days, by date and time (dock planning). */
+function ArrivalsCard() {
+  const { data } = useArrivals();
+  if (!data?.length) return null;
+  return (
+    <Card className="mb-6">
+      <CardHeader
+        title="Arrivals — next 7 days"
+        description="Inbound consignments with no GRN yet, by expected date and time."
+      />
+      <CardBody>
+        <ul className="divide-y divide-border-subtle">
+          {data.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
+              <div className="min-w-0">
+                <p className="flex flex-wrap items-center gap-2">
+                  <span className="whitespace-nowrap font-medium tabular-nums">
+                    {formatDate(r.expectedAt)}
+                    {r.expectedTime ? ` · ${r.expectedTime}` : ' · time not set'}
+                  </span>
+                  <DocRef>{r.inboundNumber}</DocRef>
+                  {r.kind === 'Return' ? <Badge tone="warning">Customer return</Badge> : null}
+                </p>
+                <p className="truncate text-caption text-fg-muted">
+                  {r.customerName} · {r.reference || 'No reference'} · {r.expected} units on {r.pl.number}
+                </p>
+              </div>
+              <Link
+                to="/work-orders/$id"
+                params={{ id: r.workOrderId }}
+                className="font-mono text-[13px] font-medium text-brand hover:underline"
+              >
+                {r.jobNumber}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </CardBody>
+    </Card>
   );
 }
 

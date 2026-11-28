@@ -8,10 +8,12 @@ import {
   FileText,
   PackageCheck,
   Plus,
+  Warehouse,
   Send,
   Trash2,
   Upload,
 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { jobStock } from '@/domain/stock';
 import type { CustomerRequest, DocLine, Inbound } from '@/domain/types';
@@ -50,15 +52,24 @@ import {
   type InboundHeader,
   type WorkOrderDetail,
 } from './api';
+import {
+  HandlingChargesCard,
+  JobVariancesCard,
+  PutawayDialog,
+  RequestPickActions,
+  useFloorModule,
+} from './wh-panels';
 
 const PROTO_TODAY = '2026-11-23';
 
 function useRun() {
   const doc = useDocAction();
   const toast = useToast();
+  const qc = useQueryClient();
   const run = (a: DocAction, ok: string, onDone?: () => void) =>
     doc.mutate(a, {
       onSuccess: () => {
+        void qc.invalidateQueries({ queryKey: ['variances'] }); // FLOW-003 W3: variance records
         toast({ title: ok });
         onDone?.();
       },
@@ -263,6 +274,8 @@ function InboundItem({
   const [editPl, setEditPl] = useState(false);
   const [grnOpen, setGrnOpen] = useState(false);
   const [docOpen, setDocOpen] = useState(false);
+  const [putawayOpen, setPutawayOpen] = useState(false);
+  const floor = useFloorModule();
   const pl = ib.packingList;
   const grn = ib.grn;
   const stage = inboundStage(ib);
@@ -306,10 +319,12 @@ function InboundItem({
                 }
               />
             ) : null}
+            {ib.kind === 'Return' ? <StatusBadge status="Customer return" /> : null}
+            {ib.putawayDone ? <StatusBadge status="Put away" /> : null}
           </span>
           <span className="mt-0.5 block truncate text-caption text-fg-muted">
-            {ib.reference || 'No reference'} · expected {formatDate(ib.expectedAt)} · {pl.number}:{' '}
-            {pl.lines.length} SKU
+            {ib.reference || 'No reference'} · expected {formatDate(ib.expectedAt)}
+            {ib.expectedTime ? ` ${ib.expectedTime}` : ''} · {pl.number}: {pl.lines.length} SKU
             {pl.lines.length === 1 ? '' : 's'}, {plQty} units{grn ? ` · ${grn.number}` : ''}
           </span>
         </span>
@@ -438,6 +453,26 @@ function InboundItem({
                   {grn.customerGrnNumber ? 'View customer GRN' : 'Issue customer GRN'}
                 </Button>
               </div>
+              {floor && (grn.status === 'Verified' || grn.status === 'Variance raised') ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-canvas px-3 py-2">
+                  <span className="text-caption text-fg-muted">
+                    {ib.putawayDone
+                      ? 'Put-away confirmed — lots are on the stock screen with bin, batch and expiry.'
+                      : ib.kind === 'Return'
+                        ? 'Customer return: put the goods in quarantine until inspected.'
+                        : 'Assign each line to a bin to create lot-level stock.'}
+                  </span>
+                  {!ib.putawayDone && !closed ? (
+                    <Button
+                      size="sm"
+                      icon={<Warehouse aria-hidden="true" />}
+                      onClick={() => setPutawayOpen(true)}
+                    >
+                      Confirm put-away
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
           ) : null}
         </div>
@@ -446,6 +481,7 @@ function InboundItem({
       {docOpen && grn ? <CustomerGrnDialog wo={wo} ib={ib} onClose={() => setDocOpen(false)} /> : null}
       {editPl ? <PlEditorDialog wo={wo} ib={ib} onClose={() => setEditPl(false)} /> : null}
       {grnOpen ? <GrnUploadDialog wo={wo} ib={ib} onClose={() => setGrnOpen(false)} /> : null}
+      {putawayOpen ? <PutawayDialog wo={wo} ib={ib} onClose={() => setPutawayOpen(false)} /> : null}
     </li>
   );
 }
@@ -631,7 +667,7 @@ function NewInboundDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
   const toast = useToast();
   const [reference, setReference] = useState('');
   const [expectedAt, setExpectedAt] = useState('2026-11-30');
-  const [header, setHeader] = useState<InboundHeader>({});
+  const [header, setHeader] = useState<InboundHeader>({ kind: 'Receipt' });
   const [lines, setLines] = useState<DraftLine[]>([blankLine()]);
   const [file, setFile] = useState<{ name: string; sizeKb: number }>();
   const [send, setSend] = useState(true);
@@ -705,12 +741,31 @@ function NewInboundDialog({ wo, onClose }: { wo: WorkOrderDetail; onClose: () =>
               value={reference}
               onChange={(e) => setReference(e.target.value)}
             />
-            <TextField
-              label="Expected on"
-              type="date"
-              required
-              value={expectedAt}
-              onChange={(e) => setExpectedAt(e.target.value)}
+            <div className="grid grid-cols-[1fr_8rem] gap-3">
+              <TextField
+                label="Expected on"
+                type="date"
+                required
+                value={expectedAt}
+                onChange={(e) => setExpectedAt(e.target.value)}
+              />
+              <TextField
+                label="Time"
+                type="time"
+                value={header.expectedTime ?? ''}
+                onChange={(e) => setHeader((h) => ({ ...h, expectedTime: e.target.value || undefined }))}
+              />
+            </div>
+            <SelectField
+              label="Type"
+              options={[
+                { value: 'Receipt', label: 'Receipt (new stock)' },
+                { value: 'Return', label: 'Customer return (to quarantine)' },
+              ]}
+              value={header.kind ?? 'Receipt'}
+              onChange={(e) =>
+                setHeader((h) => ({ ...h, kind: e.target.value === 'Return' ? 'Return' : 'Receipt' }))
+              }
             />
           </div>
           <details className="rounded-lg border border-border-subtle px-3 py-2">
@@ -1155,7 +1210,7 @@ function GrnUploadDialog({ wo, ib, onClose }: { wo: WorkOrderDetail; ib: Inbound
 // Outbound: customer request → vendor / warehouse → POD upload → comparison
 // ---------------------------------------------------------------------------------------------
 
-export function CustomerRequestsCard({ wo }: { wo: WorkOrderDetail }) {
+function CustomerRequestsList({ wo }: { wo: WorkOrderDetail }) {
   const [newOpen, setNewOpen] = useState(false);
   const closed = wo.status === 'Completed' || wo.status === 'Cancelled' || wo.status === 'Draft';
   return (
@@ -1195,6 +1250,17 @@ export function CustomerRequestsCard({ wo }: { wo: WorkOrderDetail }) {
       </CardBody>
       {newOpen ? <NewRequestDialog wo={wo} onClose={() => setNewOpen(false)} /> : null}
     </Card>
+  );
+}
+
+/** Outbound releases plus the FLOW-003 job panels: variances (W3) and handling charges (W14). */
+export function CustomerRequestsCard({ wo }: { wo: WorkOrderDetail }) {
+  return (
+    <>
+      <CustomerRequestsList wo={wo} />
+      <JobVariancesCard wo={wo} />
+      <HandlingChargesCard wo={wo} />
+    </>
   );
 }
 
@@ -1278,9 +1344,15 @@ function RequestItem({ wo, req }: { wo: WorkOrderDetail; req: CustomerRequest })
               <p className="text-caption text-fg-muted">
                 <DocRef>{req.pod.number}</DocRef> · delivered {formatDateTime(req.pod.deliveredAt)} · received
                 by {req.pod.receivedBy}
+                {req.pod.receiverContact ? ` (${req.pod.receiverContact})` : ''}
                 {vendorName ? ` · ${vendorName}` : ''}
               </p>
             </div>
+            {req.pod.exceptions ? (
+              <p className="rounded-lg bg-warning-subtle px-3 py-2 text-body-s text-warning">
+                <span className="font-semibold">Exceptions on POD:</span> {req.pod.exceptions}
+              </p>
+            ) : null}
             <ReconciliationTable
               result={result}
               expectedLabel="Requested"
@@ -1292,6 +1364,8 @@ function RequestItem({ wo, req }: { wo: WorkOrderDetail; req: CustomerRequest })
           <LinesTable lines={req.lines} caption={`${req.number} lines`} />
         )}
       </div>
+
+      <RequestPickActions wo={wo} req={req} locked={locked} />
 
       {sendOpen ? <SendRequestDialog wo={wo} req={req} onClose={() => setSendOpen(false)} /> : null}
       {podOpen ? <PodUploadDialog wo={wo} req={req} onClose={() => setPodOpen(false)} /> : null}
@@ -1613,6 +1687,9 @@ function PodUploadDialog({
   const [number, setNumber] = useState('');
   const [date, setDate] = useState(PROTO_TODAY);
   const [receivedBy, setReceivedBy] = useState('');
+  // FLOW-003 T5: receiver's designation / phone and exception remarks written on the POD.
+  const [receiverContact, setReceiverContact] = useState('');
+  const [exceptions, setExceptions] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [imported, setImported] = useState<string>();
   const [vendorId, setVendorId] = useState(wo.assignments[0]?.vendorId ?? '');
@@ -1674,6 +1751,8 @@ function PodUploadDialog({
           vendorId: vendorId || undefined,
           deliveredAt: `${date}T12:00:00+04:00`,
           receivedBy: receivedBy.trim(),
+          receiverContact: receiverContact.trim() || undefined,
+          exceptions: exceptions.trim() || undefined,
           attachment: asAttachment(file!),
           lines: rows.map((r) => ({
             sku: r.sku,
@@ -1735,6 +1814,18 @@ function PodUploadDialog({
             value={receivedBy}
             onChange={(e) => setReceivedBy(e.target.value)}
             error={errors.receivedBy}
+          />
+          <TextField
+            label="Receiver contact"
+            placeholder="Designation / mobile"
+            value={receiverContact}
+            onChange={(e) => setReceiverContact(e.target.value)}
+          />
+          <TextField
+            label="Exceptions noted"
+            placeholder="e.g. 2 cartons wet, seal broken"
+            value={exceptions}
+            onChange={(e) => setExceptions(e.target.value)}
           />
           {vendorOptions.length ? (
             <SelectField

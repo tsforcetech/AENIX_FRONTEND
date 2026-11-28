@@ -38,7 +38,14 @@ const inboundColumns: Column<InboundRow>[] = [
       <div className="min-w-36">
         <DocRef>{r.inboundNumber}</DocRef>
         <p className="max-w-52 truncate text-caption text-fg-muted">{r.reference || '—'}</p>
-        <p className="whitespace-nowrap text-caption text-fg-muted">Expected {formatDate(r.expectedAt)}</p>
+        <p className="whitespace-nowrap text-caption text-fg-muted">
+          Expected {formatDate(r.expectedAt)}
+          {r.expectedTime ? ` · ${r.expectedTime}` : ''}
+        </p>
+        {r.kind === 'Return' ? (
+          <p className="text-caption font-medium text-warning">Customer return</p>
+        ) : null}
+        {r.putawayDone ? <p className="text-caption text-fg-muted">Put away</p> : null}
       </div>
     ),
   },
