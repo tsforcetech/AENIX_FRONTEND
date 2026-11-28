@@ -46,7 +46,24 @@ import type {
   Vehicle,
   WarehouseLocation,
 } from '@/domain/types';
-import type { DepreciationRun, FixedAsset, WarehouseSite } from '@/domain/types';
+import type {
+  AssetCategoryMaster,
+  BankAccountMaster,
+  CurrencyMaster,
+  CustomerCategoryMaster,
+  CustomerRate,
+  DepreciationRun,
+  FixedAsset,
+  NumberSeries,
+  PaymentTerm,
+  Place,
+  ReasonCode,
+  ServiceTypeMaster,
+  TaxCode,
+  UnitOfMeasure,
+  VendorCategoryMaster,
+  WarehouseSite,
+} from '@/domain/types';
 import { accumulatedTo } from '@/domain/fixedAssets';
 import { categoriesFromLines, milestoneLabels, primaryCategory } from '@/domain/workflow';
 import { invoiceTotals } from '@/domain/calc';
@@ -2272,6 +2289,325 @@ export const warehouses: WarehouseSite[] = [
     vendorId: 'ven-7',
     city: 'Jebel Ali',
     palletCapacity: 400,
+    active: true,
+  },
+];
+
+// ===================== Masters (sample lists — owner to confirm) =====================
+const m = <T extends object>(prefix: string, rows: T[]) =>
+  rows.map((r, i) => ({ id: `${prefix}-${i + 1}`, active: true, ...r }));
+
+export const serviceTypes: ServiceTypeMaster[] = m('st', [
+  {
+    code: 'ROAD',
+    name: 'Road freight',
+    category: 'Transport' as const,
+    mode: 'Road' as const,
+    incomeAccountId: 'la-4100',
+    costAccountId: 'la-5100',
+    system: true,
+  },
+  {
+    code: 'SEA',
+    name: 'Sea freight',
+    category: 'Transport' as const,
+    mode: 'Sea' as const,
+    incomeAccountId: 'la-4100',
+    costAccountId: 'la-5100',
+    system: true,
+  },
+  {
+    code: 'AIR',
+    name: 'Air freight',
+    category: 'Transport' as const,
+    mode: 'Air' as const,
+    incomeAccountId: 'la-4100',
+    costAccountId: 'la-5100',
+    system: true,
+  },
+  {
+    code: 'WH',
+    name: 'Warehousing',
+    category: 'Warehouse' as const,
+    mode: 'Warehouse' as const,
+    incomeAccountId: 'la-4200',
+    costAccountId: 'la-5100',
+    system: true,
+  },
+  {
+    code: 'CUS',
+    name: 'Customs and other services',
+    category: 'Service' as const,
+    mode: 'Customs' as const,
+    incomeAccountId: 'la-4300',
+    costAccountId: 'la-5100',
+    system: true,
+  },
+]);
+
+export const unitsOfMeasure: UnitOfMeasure[] = m('uom', [
+  { code: 'TRUCK', name: 'Truck', kind: 'Trip' as const },
+  { code: 'TRIP', name: 'Trip', kind: 'Trip' as const },
+  { code: 'DROP', name: 'Drop', kind: 'Trip' as const },
+  { code: 'CNTR', name: 'Container', kind: 'Container' as const },
+  { code: 'PLT', name: 'Pallet', kind: 'Count' as const },
+  { code: 'PLTDAY', name: 'Pallet-day', kind: 'Time' as const },
+  { code: 'CTN', name: 'Carton', kind: 'Count' as const },
+  { code: 'PCS', name: 'Pcs', kind: 'Count' as const },
+  { code: 'KG', name: 'Kg', kind: 'Weight' as const },
+  { code: 'CBM', name: 'CBM', kind: 'Volume' as const },
+  { code: 'SQFT', name: 'Sq.ft', kind: 'Area' as const },
+  { code: 'HR', name: 'Hour', kind: 'Time' as const },
+  { code: 'DAY', name: 'Day', kind: 'Time' as const },
+  { code: 'DECL', name: 'Declaration', kind: 'Count' as const },
+  { code: 'SHPT', name: 'Shipment', kind: 'Count' as const },
+]);
+
+export const customerCategories: CustomerCategoryMaster[] = m('cc', [
+  { code: 'RET', name: 'Retail' },
+  { code: 'FMCG', name: 'Food & beverage' },
+  { code: 'HLTH', name: 'Healthcare' },
+  { code: 'IND', name: 'Industrial' },
+  { code: 'CON', name: 'Construction' },
+  { code: 'ELEC', name: 'Electronics' },
+  { code: 'TRD', name: 'General trading' },
+  { code: 'CONS', name: 'Consumer goods' },
+]);
+
+export const vendorCategories: VendorCategoryMaster[] = m('vc', [
+  { code: 'TRN', name: 'Transporter', behaves: 'Transporter' as const, system: true },
+  { code: 'SHL', name: 'Shipping line', behaves: 'Shipping line' as const, system: true },
+  { code: 'AIRL', name: 'Airline', behaves: 'Airline' as const, system: true },
+  { code: 'CUSB', name: 'Customs broker', behaves: 'Customs broker' as const, system: true },
+  { code: 'WHV', name: 'Warehouse', behaves: 'Warehouse' as const, system: true },
+]);
+
+export const places: Place[] = m('pl', [
+  { code: 'AEJEA', name: 'Jebel Ali', kind: 'Port' as const, country: 'UAE', emirate: 'Dubai' as const },
+  {
+    code: 'AEKLF',
+    name: 'Khalifa Port',
+    kind: 'Port' as const,
+    country: 'UAE',
+    emirate: 'Abu Dhabi' as const,
+  },
+  {
+    code: 'AESHJ',
+    name: 'Sharjah (Khalid Port)',
+    kind: 'Port' as const,
+    country: 'UAE',
+    emirate: 'Sharjah' as const,
+  },
+  {
+    code: 'DXB',
+    name: 'Dubai International Airport',
+    kind: 'Airport' as const,
+    country: 'UAE',
+    emirate: 'Dubai' as const,
+  },
+  {
+    code: 'DWC',
+    name: 'Al Maktoum Airport (DWC)',
+    kind: 'Airport' as const,
+    country: 'UAE',
+    emirate: 'Dubai' as const,
+  },
+  { code: 'JAFZA', name: 'JAFZA', kind: 'Free zone' as const, country: 'UAE', emirate: 'Dubai' as const },
+  { code: 'DXBC', name: 'Dubai', kind: 'City' as const, country: 'UAE', emirate: 'Dubai' as const },
+  { code: 'AUHC', name: 'Abu Dhabi', kind: 'City' as const, country: 'UAE', emirate: 'Abu Dhabi' as const },
+  { code: 'SHJC', name: 'Sharjah', kind: 'City' as const, country: 'UAE', emirate: 'Sharjah' as const },
+  {
+    code: 'GHW',
+    name: 'Ghuwaifat border',
+    kind: 'Border crossing' as const,
+    country: 'UAE',
+    emirate: 'Abu Dhabi' as const,
+  },
+  { code: 'SARUH', name: 'Riyadh', kind: 'City' as const, country: 'Saudi Arabia' },
+  { code: 'SADMM', name: 'Dammam', kind: 'Port' as const, country: 'Saudi Arabia' },
+  { code: 'OMMCT', name: 'Muscat', kind: 'City' as const, country: 'Oman' },
+  { code: 'CNSHA', name: 'Shanghai', kind: 'Port' as const, country: 'China' },
+  { code: 'INBOM', name: 'Mumbai', kind: 'Port' as const, country: 'India' },
+]);
+
+export const currencies: CurrencyMaster[] = m('cur', [
+  {
+    code: 'AED',
+    name: 'UAE dirham',
+    symbol: 'AED',
+    rateToAed: 1,
+    rateDate: '2026-11-23',
+    base: true,
+    system: true,
+  },
+  { code: 'USD', name: 'US dollar', symbol: '$', rateToAed: 3.6725, rateDate: '2026-11-23' },
+  { code: 'EUR', name: 'Euro', symbol: '€', rateToAed: 3.98, rateDate: '2026-11-23' },
+  { code: 'SAR', name: 'Saudi riyal', symbol: 'SAR', rateToAed: 0.979, rateDate: '2026-11-23' },
+  { code: 'GBP', name: 'Pound sterling', symbol: '£', rateToAed: 4.65, rateDate: '2026-11-23' },
+  { code: 'OMR', name: 'Omani rial', symbol: 'OMR', rateToAed: 9.54, rateDate: '2026-11-23' },
+]);
+
+export const taxCodes: TaxCode[] = m('tax', [
+  { code: 'SR', name: 'Standard rated 5%', rate: 0.05, treatment: 'Standard' as const, system: true },
+  {
+    code: 'ZR',
+    name: 'Zero rated 0% (exports, international transport)',
+    rate: 0,
+    treatment: 'Zero-rated' as const,
+    system: true,
+  },
+  { code: 'EX', name: 'Exempt', rate: 0, treatment: 'Exempt' as const, system: true },
+  {
+    code: 'OS',
+    name: 'Out of scope (disbursements)',
+    rate: 0,
+    treatment: 'Out of scope' as const,
+    system: true,
+  },
+]);
+
+export const paymentTerms: PaymentTerm[] = m('pt', [
+  { code: 'ADV', name: 'Advance', days: 0 },
+  { code: 'COD', name: 'Cash on delivery', days: 0 },
+  { code: 'N15', name: '15 days', days: 15 },
+  { code: 'N30', name: '30 days', days: 30 },
+  { code: 'N45', name: '45 days', days: 45 },
+  { code: 'N60', name: '60 days', days: 60 },
+  { code: 'N90', name: '90 days', days: 90 },
+]);
+
+export const bankAccounts: BankAccountMaster[] = m('bank', [
+  {
+    code: 'CUR-AED',
+    name: 'Current account (AED)',
+    bankName: 'Bank name (set in Settings)',
+    accountNoMasked: '•••• 4410',
+    ibanMasked: 'AE•• •••• •••• •••• 4410',
+    currency: 'AED',
+    ledgerAccountId: 'la-1110',
+    system: true,
+  },
+  {
+    code: 'CUR-USD',
+    name: 'USD account',
+    bankName: 'Bank name (set in Settings)',
+    accountNoMasked: '•••• 7702',
+    ibanMasked: 'AE•• •••• •••• •••• 7702',
+    currency: 'USD',
+  },
+]);
+
+export const assetCategories: AssetCategoryMaster[] = m('ac', [
+  { code: 'VEH', name: 'Vehicles', usefulLifeMonths: 60, residualPct: 15 },
+  { code: 'MHE', name: 'Material handling equipment', usefulLifeMonths: 60, residualPct: 10 },
+  { code: 'RACK', name: 'Racking and storage', usefulLifeMonths: 120, residualPct: 0 },
+  { code: 'IT', name: 'IT equipment', usefulLifeMonths: 36, residualPct: 0 },
+  { code: 'FF', name: 'Furniture and fittings', usefulLifeMonths: 60, residualPct: 0 },
+]);
+
+export const reasonCodes: ReasonCode[] = m('rsn', [
+  { code: 'L-PRICE', name: 'Price too high', kind: 'Lost enquiry' as const },
+  { code: 'L-TIME', name: 'Transit time not acceptable', kind: 'Lost enquiry' as const },
+  { code: 'L-NOREP', name: 'No reply from customer', kind: 'Lost enquiry' as const },
+  { code: 'V-SHORT', name: 'Short received', kind: 'Variance' as const },
+  { code: 'V-DMG', name: 'Damaged in transit', kind: 'Variance' as const },
+  { code: 'V-EXC', name: 'Excess received', kind: 'Variance' as const },
+  { code: 'A-COUNT', name: 'Cycle count difference', kind: 'Stock adjustment' as const },
+  { code: 'A-DMG', name: 'Damaged in warehouse', kind: 'Stock adjustment' as const },
+  { code: 'C-CUST', name: 'Cancelled by customer', kind: 'Cancellation' as const },
+  { code: 'C-CAP', name: 'No capacity', kind: 'Cancellation' as const },
+  { code: 'CN-PRICE', name: 'Price correction', kind: 'Credit note' as const },
+  { code: 'CN-CLAIM', name: 'Customer claim accepted', kind: 'Credit note' as const },
+  { code: 'W-BAD', name: 'Customer insolvent', kind: 'Write-off' as const },
+]);
+
+export const numberSeries: NumberSeries[] = [
+  ['Enquiry', 'ENQ-', 4, 1087],
+  ['Quotation', 'QT-', 4, 1090],
+  ['Sales order', 'SO-', 4, 5112],
+  ['Job (work order)', 'JOB-', 4, 2056],
+  ['Purchase order', 'PO-', 4, 6110],
+  ['Tax invoice', 'AEN', 3, 79],
+  ['Customer GRN', 'GRN', 3, 62],
+  ['Receipt', 'RCPT-', 4, 4425],
+  ['Payment voucher', 'PV-', 4, 6],
+  ['Credit note', 'CN-', 3, 1],
+  ['Debit note', 'DN-', 3, 1],
+].map(([docType, prefix, digits, nextNumber], i) => ({
+  id: `ns-${i + 1}`,
+  docType: docType as string,
+  prefix: prefix as string,
+  digits: digits as number,
+  nextNumber: nextNumber as number,
+  resetYearly: false,
+}));
+
+/** Selling rates: customer-specific prices and the standard price list (customerId empty). */
+export const customerRates: CustomerRate[] = [
+  {
+    id: 'cr-1',
+    serviceId: 'svc-1',
+    origin: 'Jebel Ali',
+    destination: 'Al Quoz',
+    unit: 'Truck',
+    price: 850,
+    currency: 'AED',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    active: true,
+  },
+  {
+    id: 'cr-2',
+    serviceId: 'svc-7',
+    unit: 'Pallet-day',
+    price: 3.5,
+    currency: 'AED',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    active: true,
+  },
+  {
+    id: 'cr-3',
+    serviceId: 'svc-8',
+    unit: 'Pallet',
+    price: 18,
+    currency: 'AED',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    active: true,
+  },
+  {
+    id: 'cr-4',
+    serviceId: 'svc-6',
+    unit: 'Declaration',
+    price: 450,
+    currency: 'AED',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
+    active: true,
+  },
+  {
+    id: 'cr-5',
+    customerId: 'cus-3',
+    serviceId: 'svc-7',
+    unit: 'Pallet-day',
+    price: 3.2,
+    currency: 'AED',
+    validFrom: '2026-06-01',
+    validTo: '2027-05-31',
+    active: true,
+  },
+  {
+    id: 'cr-6',
+    customerId: 'cus-1',
+    serviceId: 'svc-1',
+    origin: 'Dubai',
+    destination: 'Riyadh',
+    unit: 'Truck',
+    price: 6300,
+    currency: 'AED',
+    validFrom: '2026-01-01',
+    validTo: '2026-12-31',
     active: true,
   },
 ];

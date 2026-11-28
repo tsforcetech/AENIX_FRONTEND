@@ -2,7 +2,8 @@ import { nextDocNumber } from '@/domain/numbering';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { daysBetween, invoiceTotals } from '@/domain/calc';
 import { customerBalance, invoiceAed, invoiceSettlement } from '@/domain/balances';
-import { assertOpenPeriod, DEFAULT_RATES } from '@/domain/controls';
+import { assertOpenPeriod } from '@/domain/controls';
+import { rateFor } from '@/shared/data/currency';
 import type {
   ApprovalRequest,
   Collection,
@@ -92,7 +93,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 /** Rate to AED for one unit of the invoice currency. */
 export function rateOf(doc: { currency?: Currency; exchangeRate?: number }): number {
   const cur = doc.currency ?? 'AED';
-  return cur === 'AED' ? 1 : (doc.exchangeRate ?? DEFAULT_RATES[cur]);
+  return cur === 'AED' ? 1 : (doc.exchangeRate ?? rateFor(cur));
 }
 
 function toRow(inv: Invoice): InvoiceRow {
@@ -422,7 +423,7 @@ export const invoicesApi = {
       paid: 0,
       status: 'Draft',
       ...(currency !== 'AED'
-        ? { currency, exchangeRate: firstSo.exchangeRate ?? DEFAULT_RATES[currency] }
+        ? { currency, exchangeRate: firstSo.exchangeRate ?? rateFor(currency) }
         : {}),
       emirate: customer ? emirateFor(customer) : undefined,
     };
@@ -789,7 +790,7 @@ export function invoiceableSalesOrders(customerId: string): InvoiceableSalesOrde
             .reduce((s, l) => s + l.quantity * l.unitPrice * (1 + l.vatRate), 0),
         ),
         currency,
-        exchangeRate: currency === 'AED' ? 1 : (so.exchangeRate ?? DEFAULT_RATES[currency]),
+        exchangeRate: currency === 'AED' ? 1 : (so.exchangeRate ?? rateFor(currency)),
         jobs: db.workOrders
           .filter((w) => w.salesOrderId === so.id)
           .map((w) => ({ id: w.id, number: w.number, status: w.status })),

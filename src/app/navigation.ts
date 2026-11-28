@@ -21,6 +21,7 @@ import {
   type LucideIcon,
   Building,
   CarFront,
+  Database,
   CheckCheck,
   CreditCard,
   History,
@@ -98,6 +99,7 @@ export const staffNavigation: NavGroup[] = [
   {
     label: 'Masters',
     items: [
+      { label: 'All masters', to: '/masters', icon: Database, phase: 2 },
       { label: 'Customers', to: '/customers', icon: Building2, phase: 2 },
       { label: 'Vendors', to: '/vendors', icon: Handshake, phase: 2 },
       { label: 'Services & rates', to: '/services', icon: Tags, phase: 2 },

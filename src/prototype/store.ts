@@ -50,6 +50,20 @@ function initialState() {
     fixedAssets: structuredClone(seed.fixedAssets),
     depreciationRuns: structuredClone(seed.depreciationRuns),
     warehouses: structuredClone(seed.warehouses),
+    // Masters
+    serviceTypes: structuredClone(seed.serviceTypes),
+    unitsOfMeasure: structuredClone(seed.unitsOfMeasure),
+    customerCategories: structuredClone(seed.customerCategories),
+    vendorCategories: structuredClone(seed.vendorCategories),
+    places: structuredClone(seed.places),
+    currencies: structuredClone(seed.currencies),
+    taxCodes: structuredClone(seed.taxCodes),
+    paymentTerms: structuredClone(seed.paymentTerms),
+    bankAccounts: structuredClone(seed.bankAccounts),
+    assetCategories: structuredClone(seed.assetCategories),
+    reasonCodes: structuredClone(seed.reasonCodes),
+    numberSeries: structuredClone(seed.numberSeries),
+    customerRates: structuredClone(seed.customerRates),
     session: null as SessionPrincipal | null,
   };
 }
@@ -61,7 +75,7 @@ export type ProtoDb = ReturnType<typeof initialState>;
  * is kept in this tab's sessionStorage so a reload does not lose the demo. Never used outside
  * prototype mode; real sessions follow ADR-004 and never touch web storage.
  */
-const STORAGE_KEY = 'aenix-prototype-db-v8'; // bump when the sample schema changes
+const STORAGE_KEY = 'aenix-prototype-db-v9'; // bump when the sample schema changes
 
 function load(): ProtoDb {
   if (!PROTOTYPE_MODE) return initialState();

@@ -26,6 +26,7 @@ import { auditRoutes } from '@/features/audit/routes';
 import { variancesRoutes } from '@/features/variances/routes';
 import { expensesRoutes } from '@/features/expenses/routes';
 import { fixedAssetsRoutes } from '@/features/fixed-assets/routes';
+import { mastersRoutes } from '@/features/masters/routes';
 import { appLayoutRoute, rootRoute } from './routes-base';
 
 const indexRoute = createRoute({
@@ -70,6 +71,7 @@ const routeTree = rootRoute.addChildren([
     ...variancesRoutes(p),
     ...expensesRoutes(p),
     ...fixedAssetsRoutes(p),
+    ...mastersRoutes(p),
   ]),
 ]);
 
