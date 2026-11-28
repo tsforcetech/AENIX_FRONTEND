@@ -14,6 +14,10 @@ export interface InboundRow {
   inboundNumber: string;
   reference: string;
   expectedAt: string;
+  /** FLOW-003 W1 / W12 / W4 */
+  expectedTime?: string;
+  kind: 'Receipt' | 'Return';
+  putawayDone: boolean;
   pl: PackingList;
   grn?: Grn;
   expected: number;
@@ -56,6 +60,9 @@ function inbound(): InboundRow[] {
           inboundNumber: ib.number,
           reference: ib.reference,
           expectedAt: ib.expectedAt,
+          expectedTime: ib.expectedTime,
+          kind: ib.kind ?? 'Receipt',
+          putawayDone: !!ib.putawayDone,
           pl: ib.packingList,
           grn: ib.grn,
           expected: ib.packingList.lines.reduce((s, l) => s + l.quantity, 0),
@@ -134,6 +141,23 @@ function outbound(): OutboundRow[] {
       }),
     )
     .sort((a, b) => b.request.requestedAt.localeCompare(a.request.requestedAt));
+}
+
+/** FLOW-003 W1: consignments expected in the next 7 days (no GRN yet), by date and time. */
+export const ARRIVALS_TODAY = '2026-11-23';
+function arrivals(): InboundRow[] {
+  const end = new Date(Date.parse(`${ARRIVALS_TODAY}T00:00:00Z`) + 7 * 86_400_000).toISOString().slice(0, 10);
+  return inbound()
+    .filter((r) => !r.grn && r.expectedAt >= ARRIVALS_TODAY && r.expectedAt <= end)
+    .sort(
+      (a, b) =>
+        a.expectedAt.localeCompare(b.expectedAt) ||
+        (a.expectedTime ?? '99:99').localeCompare(b.expectedTime ?? '99:99'),
+    );
+}
+
+export function useArrivals() {
+  return useQuery({ queryKey: ['warehouse', 'arrivals'], queryFn: () => latency(arrivals()) });
 }
 
 export function useInbound() {

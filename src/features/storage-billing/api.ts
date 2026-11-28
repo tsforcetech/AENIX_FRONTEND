@@ -18,6 +18,7 @@ import type { Invoice, StorageBillingRun } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, protoDb } from '@/prototype/store';
+import { storageCharge, type StorageCharge } from './charge';
 
 /**
  * Storage billing data source (independent of transport jobs). PROTOTYPE ADAPTER — replace with
@@ -30,6 +31,8 @@ export interface StorageRunRow extends StorageBillingRun {
   customerName: string;
   amount: number;
   invoiceNumber?: string;
+  /** FLOW-003 W13 */
+  minimumApplied: boolean;
 }
 
 export interface GenerateRunInput {
@@ -39,6 +42,16 @@ export interface GenerateRunInput {
   palletDays: number;
   /** Charging basis; quantity and rate are in this basis' units. */
   basis: StorageBasis;
+  /** FLOW-003 W13: free days (day-based bases) and minimum charge for the period (AED). */
+  freeDays?: number;
+  minimumCharge?: number;
+}
+
+/** FLOW-003 W13: storage terms of the customer's active contract (defaults for a run). */
+export interface StorageTerms {
+  contractNumber?: string;
+  minimumCharge?: number;
+  freeDays?: number;
 }
 
 export function daysInMonth(month: string): number {
@@ -52,13 +65,25 @@ export function monthLabel(month: string): string {
   );
 }
 
-const amountOf = (r: StorageBillingRun) => Math.round(r.palletDays * r.ratePerPalletDay * 100) / 100;
+/** Run charge: `palletDays` is the chargeable quantity (free days already removed); minimum applies. */
+export function runCharge(r: StorageBillingRun): StorageCharge {
+  return storageCharge({
+    basis: r.basis ?? 'Pallet-day',
+    quantity: r.palletDays,
+    rate: r.ratePerPalletDay,
+    daysInPeriod: daysInMonth(r.periodFrom.slice(0, 7)),
+    minimumCharge: r.minimumCharge,
+  });
+}
+
+const amountOf = (r: StorageBillingRun) => runCharge(r).amount;
 
 function toRow(r: StorageBillingRun): StorageRunRow {
   return {
     ...r,
     customerName: lookupName.customer(r.customerId),
     amount: amountOf(r),
+    minimumApplied: runCharge(r).minimumApplied,
     invoiceNumber: r.invoiceId ? protoDb.get().invoices.find((i) => i.id === r.invoiceId)?.number : undefined,
   };
 }
@@ -82,6 +107,21 @@ export const storageBillingApi = {
     return pallets * daysInMonth(month);
   },
 
+  /** W13: minimum monthly storage and free days from the customer's active contract, if any. */
+  storageTerms(customerId: string): StorageTerms {
+    const c = protoDb
+      .get()
+      .contracts.find(
+        (x) =>
+          x.customerId === customerId &&
+          (x.status === 'Active' || x.status === 'Expiring') &&
+          (x.minimumMonthlyStorage !== undefined || x.storageFreeDays !== undefined),
+      );
+    return c
+      ? { contractNumber: c.number, minimumCharge: c.minimumMonthlyStorage, freeDays: c.storageFreeDays }
+      : {};
+  },
+
   generate(input: GenerateRunInput): Promise<StorageBillingRun> {
     const db = protoDb.get();
     const periodFrom = `${input.month}-01`;
@@ -93,6 +133,15 @@ export const storageBillingApi = {
         ),
       );
     }
+    if ((input.freeDays ?? 0) < 0 || (input.minimumCharge ?? 0) < 0)
+      return Promise.reject(new Error('Free days and minimum charge cannot be negative'));
+    const charge = storageCharge({
+      basis: input.basis,
+      quantity: input.palletDays,
+      rate: input.ratePerPalletDay,
+      daysInPeriod: daysInMonth(input.month),
+      freeDays: input.freeDays,
+    });
     const customerNo = input.customerId.replace(/\D/g, '').padStart(2, '0');
     const run: StorageBillingRun = {
       id: newId('sbr'),
@@ -101,9 +150,11 @@ export const storageBillingApi = {
       periodFrom,
       periodTo,
       basis: input.basis,
-      palletDays: input.palletDays,
+      palletDays: charge.chargeableQty,
       ratePerPalletDay: input.ratePerPalletDay,
       status: 'Draft',
+      minimumCharge: input.minimumCharge || undefined,
+      freeDays: input.freeDays || undefined,
     };
     protoDb.update((s) => ({ ...s, storageRuns: [run, ...s.storageRuns] }));
     logActivity({
@@ -142,6 +193,19 @@ export const storageBillingApi = {
           unitPrice: run.ratePerPalletDay,
           vatRate: 0.05,
         },
+        // FLOW-003 W13: top-up to the contract's minimum monthly storage charge.
+        ...(runCharge(run).minimumApplied
+          ? [
+              {
+                id: newId('il'),
+                uom: 'Lump sum',
+                description: `Minimum monthly storage charge top-up (minimum ${run.minimumCharge})`,
+                quantity: 1,
+                unitPrice: runCharge(run).topUp,
+                vatRate: 0.05,
+              },
+            ]
+          : []),
       ],
       paid: 0,
       status: 'Draft',

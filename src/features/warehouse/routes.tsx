@@ -1,5 +1,7 @@
 import { createRoute } from '@tanstack/react-router';
 import { validateListSearch, type AppParentRoute, type ListSearch } from '@/app/routes-base';
+import { CycleCountDetailPage, CycleCountsPage } from './CycleCountsPage';
+import { LocationsPage } from './LocationsPage';
 import { WarehousePage } from './WarehousePage';
 
 export interface WarehouseSearch extends ListSearch {
@@ -23,6 +25,20 @@ export function warehouseRoutes(parent: AppParentRoute) {
       path: 'warehouse',
       validateSearch: validateWarehouseSearch,
       component: WarehousePage,
+    }),
+    // FLOW-003 W4: bin locations and occupancy (own warehouse floor).
+    createRoute({ getParentRoute: () => parent, path: 'warehouse/locations', component: LocationsPage }),
+    // FLOW-003 W8: cycle counts.
+    createRoute({
+      getParentRoute: () => parent,
+      path: 'warehouse/cycle-counts',
+      validateSearch: validateListSearch,
+      component: CycleCountsPage,
+    }),
+    createRoute({
+      getParentRoute: () => parent,
+      path: 'warehouse/cycle-counts/$id',
+      component: CycleCountDetailPage,
     }),
   ] as const;
 }
