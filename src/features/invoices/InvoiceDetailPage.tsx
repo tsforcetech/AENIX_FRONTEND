@@ -109,7 +109,7 @@ function TaxInvoiceDocument({ inv }: { inv: InvoiceDetail }) {
     </tr>
   );
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden" data-print-root="">
       <article
         aria-label={`Tax invoice ${inv.number}`}
         className="bg-white px-6 pb-8 pt-4 text-[13px] text-[#1a1a1a] sm:px-10"

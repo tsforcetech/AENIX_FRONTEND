@@ -20,7 +20,7 @@ export function PurchaseOrderPrintPage() {
   const vat = Math.round((po.total - po.amount) * 100) / 100;
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="mx-auto max-w-4xl" data-print-root="">
       <PageHeader
         crumbs={[
           { label: 'Purchase orders', to: '/purchase-orders' },

@@ -19,7 +19,7 @@ export function PaymentVoucherPage() {
   const money = (n: number) => formatNumber(n, 2);
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="mx-auto max-w-4xl" data-print-root="">
       <PageHeader
         crumbs={[{ label: 'Payments', to: '/payments' }, { label: pv.number }]}
         title={pv.number}

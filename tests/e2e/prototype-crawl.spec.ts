@@ -62,6 +62,13 @@ const staffPaths = [
   '/accounting/bank-reconciliation',
   '/accounting/vat-return',
   '/accounting/period-close',
+  '/settings?tab=company',
+  '/settings?tab=approvals',
+  '/settings?tab=roles',
+  '/reports?tab=profit',
+  '/reports?tab=vendors',
+  '/reports?tab=occupancy',
+  '/reports?tab=pdc',
 ];
 const customerPaths = ['/portal', '/portal/approvals', '/portal/invoices'];
 const vendorPaths = ['/vendor-portal', '/vendor-portal/assignments', '/vendor-portal/bills'];

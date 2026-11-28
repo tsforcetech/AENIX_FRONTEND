@@ -367,7 +367,11 @@ export function DeliveryNoteDialog({
         </>
       }
     >
-      <article aria-label="Delivery note" className="bg-surface px-4 py-4 text-[12px] text-fg">
+      <article
+        aria-label="Delivery note"
+        data-print-root=""
+        className="bg-surface px-4 py-4 text-[12px] text-fg"
+      >
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <Logo height={36} />

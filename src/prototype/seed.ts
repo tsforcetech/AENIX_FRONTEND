@@ -2114,3 +2114,74 @@ export const expenses: Expense[] = [
     status: 'Posted',
   },
 ];
+
+// ---------- FLOW-003 demo state (so the new screens show examples) ----------
+for (const e of enquiries) {
+  if (e.id === 'enq-1085') e.nextFollowUp = PROTO_TODAY; // due today
+  if (e.id === 'enq-1086') e.nextFollowUp = '2026-11-20'; // overdue
+}
+const firstQuoted = enquiries.find((e) => e.status === 'Quoted');
+if (firstQuoted) firstQuoted.nextFollowUp = '2026-11-26';
+
+// Lot-level detail on existing stock: bin, batch, expiry, status.
+for (const item of stockItems) {
+  item.locationId = warehouseLocations.find((l) => l.code === item.location)?.id;
+  item.stockStatus = 'Available';
+}
+const lotDetail: Record<string, { batch: string; expiryDate?: string }> = {
+  'stk-9': { batch: 'NG-2611', expiryDate: '2026-12-10' },
+  'stk-10': { batch: 'PS-2609', expiryDate: '2026-11-15' },
+  'stk-6': { batch: 'LT14-B07' },
+  'stk-7': { batch: 'MN27-B03' },
+};
+for (const item of stockItems) Object.assign(item, lotDetail[item.id] ?? {});
+stockItems.push({
+  id: 'stk-11',
+  sku: 'HRG-APP-001',
+  customerId: 'cus-3',
+  description: 'Apparel cartons — winter range (customer return)',
+  warehouse: 'JAFZA WH-1',
+  location: 'Q-01',
+  locationId: 'loc-12',
+  qtyOnHand: 24,
+  uom: 'Carton',
+  pallets: 1,
+  receivedAt: '2026-11-21',
+  stockStatus: 'Quarantine',
+});
+
+// A pending approval in the inbox: an expense above the matrix threshold.
+expenses.push({
+  id: 'exp-3',
+  number: 'EXP-003',
+  date: '2026-11-22',
+  accountId: 'la-6300',
+  description: 'Warehouse racking repair',
+  amount: 8600,
+  vatRate: 0.05,
+  paidFrom: 'Bank',
+  payee: 'Racking services contractor',
+  status: 'Pending approval',
+  approval: {
+    status: 'Pending',
+    requestedBy: 'Aisha Khan',
+    requestedAt: '2026-11-22T09:30:00.000Z',
+    approverRole: 'Finance manager',
+  },
+});
+approvalRequests.push({
+  id: 'apq-seed-1',
+  docType: 'Expense',
+  entity: 'Expense',
+  entityId: 'exp-3',
+  entityRef: 'EXP-003',
+  summary: 'Warehouse racking repair — Racking services contractor',
+  amount: 9030,
+  href: '/expenses',
+  record: {
+    status: 'Pending',
+    requestedBy: 'Aisha Khan',
+    requestedAt: '2026-11-22T09:30:00.000Z',
+    approverRole: 'Finance manager',
+  },
+});

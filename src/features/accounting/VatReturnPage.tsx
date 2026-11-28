@@ -21,7 +21,7 @@ export function VatReturnPage() {
   const td = 'px-4 py-2.5';
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="mx-auto max-w-4xl" data-print-root="">
       <PageHeader
         crumbs={[{ label: 'Accounting', to: '/accounting' }, { label: 'VAT return' }]}
         title="VAT return (draft)"

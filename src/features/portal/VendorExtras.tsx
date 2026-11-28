@@ -180,7 +180,7 @@ export function VendorPoPrintPage() {
           </Button>
         }
       />
-      <Card className="mx-auto max-w-3xl print:border-0 print:shadow-none">
+      <Card className="mx-auto max-w-3xl print:border-0 print:shadow-none" data-print-root="">
         <CardBody className="space-y-6">
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border-subtle pb-4">
             <div>
