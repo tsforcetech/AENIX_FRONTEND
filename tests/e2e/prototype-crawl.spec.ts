@@ -47,6 +47,21 @@ const staffPaths = [
   '/services',
   '/reports',
   '/settings',
+  // FLOW-003
+  '/approvals',
+  '/audit',
+  '/fleet',
+  '/variances',
+  '/warehouse/locations',
+  '/warehouse/cycle-counts',
+  '/collections/pdc',
+  '/collections/follow-up',
+  '/vendor-bills/debit-notes',
+  '/expenses',
+  '/accounting/accruals',
+  '/accounting/bank-reconciliation',
+  '/accounting/vat-return',
+  '/accounting/period-close',
 ];
 const customerPaths = ['/portal', '/portal/approvals', '/portal/invoices'];
 const vendorPaths = ['/vendor-portal', '/vendor-portal/assignments', '/vendor-portal/bills'];
@@ -55,6 +70,7 @@ async function check(page: Page, path: string, errors: string[]) {
   await page.goto(path);
   await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible();
   await expect(page.getByText('This prototype screen is being built')).toHaveCount(0);
+  await expect(page.getByText('Coming in FLOW-003')).toHaveCount(0);
   await page.waitForTimeout(400); // let simulated latency settle
   const { violations } = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
