@@ -1,3 +1,4 @@
+import { lineAmount } from './controls';
 import type { Invoice, PriceLine, VendorBill, WorkOrder } from './types';
 
 /** Prototype display maths only — the backend is the calculation authority for real data. */
@@ -5,12 +6,27 @@ export const VAT_RATE = 0.05;
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-export function linesRevenue(lines: PriceLine[]): number {
-  return round2(lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0));
+type PricedLine = Pick<PriceLine, 'quantity' | 'unitPrice'> & { minimumCharge?: number };
+type CostedLine = Pick<PriceLine, 'quantity' | 'unitCost'>;
+
+/** FLOW-003 S6: line amount = quantity × price, raised to the line's minimum charge when lower. */
+export function priceLineAmount(l: PricedLine): number {
+  return lineAmount(l.quantity, l.unitPrice, l.minimumCharge);
 }
 
-export function linesCost(lines: PriceLine[]): number {
+export function linesRevenue(lines: PricedLine[]): number {
+  return round2(lines.reduce((s, l) => s + priceLineAmount(l), 0));
+}
+
+export function linesCost(lines: CostedLine[]): number {
   return round2(lines.reduce((s, l) => s + l.quantity * l.unitCost, 0));
+}
+
+/** FLOW-003 C3: estimated cost, margin amount and margin % of one line (staff only). */
+export function lineMargin(l: PricedLine & CostedLine) {
+  const amount = priceLineAmount(l);
+  const cost = round2(l.quantity * l.unitCost);
+  return { amount, cost, margin: round2(amount - cost), marginPct: marginPct(amount, cost) };
 }
 
 export function marginPct(revenue: number, cost: number): number {

@@ -208,6 +208,16 @@ export interface SalesOrder {
   /** FLOW-003 C10 */
   currency?: Currency;
   exchangeRate?: number;
+  // FLOW-003 WP-A
+  /** C8: change requested after confirmation, waiting for the 'Sales order change' approval. */
+  pendingAmendment?: {
+    lines: PriceLine[];
+    notes: string;
+    note: string;
+    /** Change in order value (AED, excl. VAT): new − old. */
+    valueChange: number;
+    approval: ApprovalRecord;
+  };
 }
 
 export type ContractStatus = 'Draft' | 'Active' | 'Expiring' | 'Expired';

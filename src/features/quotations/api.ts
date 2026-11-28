@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { marginPct, VAT_RATE } from '@/domain/calc';
+import { linesRevenue, marginPct, VAT_RATE } from '@/domain/calc';
+import { toAed } from '@/domain/controls';
 import type {
+  ApprovalRequest,
   Contract,
+  Currency,
   PriceLine,
   Quotation,
   QuotationStatus,
@@ -12,6 +15,15 @@ import type {
 } from '@/domain/types';
 import { categoriesFromLines, primaryCategory, servicesLabel } from '@/domain/workflow';
 import { locationTextMulti } from '@/features/sales-orders/commercial-ui';
+import { rateCardPriceAed, suggestLine } from '@/features/sales-orders/commercial-api';
+import { quotationApprovalCheck } from '@/features/sales-orders/pricing';
+import {
+  approvalFor,
+  approvalNeeded,
+  decideApproval,
+  onApprovalDecided,
+  requestApproval,
+} from '@/shared/data/approvals';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
@@ -29,6 +41,10 @@ export interface QuotationRow extends Quotation {
 }
 
 export interface QuotationDetail extends QuotationRow {
+  /** C2: discount vs rate card and margin checked by the approval matrix. */
+  pricingCheck: { maxDiscountPct: number; marginPct: number };
+  /** Latest approval request in the approvals inbox (C2). */
+  approvalRequest?: Pick<ApprovalRequest, 'id' | 'docType' | 'summary'>;
   enquiryNumber?: string;
   salesOrders: Pick<SalesOrder, 'id' | 'number' | 'status' | 'customerPoRef'>[];
   workOrders: Pick<WorkOrder, 'id' | 'number' | 'status' | 'salesOrderId'>[];
@@ -49,6 +65,17 @@ export interface QuotationInput {
   terms: string;
   lines: Omit<PriceLine, 'id'>[];
   submit: boolean;
+  /** C10: document currency and rate to AED (multi-currency module only). */
+  currency?: Currency;
+  exchangeRate?: number;
+}
+
+/** Result of "Submit for approval" (C2): pending with the matrix, or sent straight away. */
+export interface SubmitResult {
+  quotation: Quotation;
+  status: QuotationStatus;
+  reasons: string[];
+  approverRole?: string;
 }
 
 export interface QuotationDraftPrefill {
@@ -62,9 +89,11 @@ export interface QuotationDraftPrefill {
   lines: Omit<PriceLine, 'id'>[];
 }
 
-export function totals(lines: Pick<PriceLine, 'quantity' | 'unitPrice' | 'unitCost'>[]) {
+export function totals(
+  lines: (Pick<PriceLine, 'quantity' | 'unitPrice' | 'unitCost'> & { minimumCharge?: number })[],
+) {
   const r2 = (n: number) => Math.round(n * 100) / 100;
-  const subtotal = r2(lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0));
+  const subtotal = linesRevenue(lines);
   const cost = r2(lines.reduce((s, l) => s + l.quantity * l.unitCost, 0));
   const vat = Math.round(subtotal * VAT_RATE * 100) / 100;
   return {
@@ -113,6 +142,129 @@ function transition(id: string, status: QuotationStatus, action: string) {
   return latency(undefined, 250);
 }
 
+const QUOTE_APPROVALS = ['Quotation discount %', 'Quotation margin % below'] as const;
+
+/** C2: worst discount vs the rate card and overall margin, as the approval matrix sees them. */
+function pricingCheckOf(q: Quotation) {
+  const rate = q.currency && q.currency !== 'AED' ? (q.exchangeRate ?? 1) : 1;
+  const { maxDiscountPct, marginPct: margin } = quotationApprovalCheck(
+    q.lines.map((l) => ({
+      ...l,
+      listPriceAed: rateCardPriceAed(l.serviceId, { origin: q.origin, destination: q.destination }),
+    })),
+    rate,
+  );
+  return { maxDiscountPct, marginPct: margin };
+}
+
+function pendingQuoteRequest(id: string): ApprovalRequest | undefined {
+  return protoDb
+    .get()
+    .approvalRequests.find(
+      (r) =>
+        r.entityId === id &&
+        r.record.status === 'Pending' &&
+        (QUOTE_APPROVALS as readonly string[]).includes(r.docType),
+    );
+}
+
+function patchQuotation(id: string, patch: Partial<Quotation>) {
+  protoDb.update((s) => ({
+    ...s,
+    quotations: s.quotations.map((x) => (x.id === id ? { ...x, ...patch } : x)),
+  }));
+}
+
+/** C2: "Submit for approval" — the approval matrix decides whether an approver must see it. */
+function submitQuotation(id: string): SubmitResult {
+  const q = protoDb.get().quotations.find((x) => x.id === id);
+  if (!q) throw new Error('Not found');
+  if (q.status !== 'Draft') throw new Error(`Only a draft can be submitted (this one is ${q.status}).`);
+  const check = pricingCheckOf(q);
+  const disc = approvalNeeded('Quotation discount %', check.maxDiscountPct);
+  const marg = approvalNeeded('Quotation margin % below', check.marginPct);
+  const reasons: string[] = [];
+  if (disc) reasons.push(`Discount ${check.maxDiscountPct}% below the rate card (limit ${disc.threshold}%)`);
+  if (marg) reasons.push(`Margin ${check.marginPct}% is below ${marg.threshold}%`);
+  const rule = disc ?? marg;
+  const ref = `${q.number} v${q.version}`;
+  if (rule) {
+    const rate = q.currency && q.currency !== 'AED' ? q.exchangeRate : undefined;
+    const record = requestApproval({
+      docType: rule.docType,
+      rule,
+      entity: 'Quotation',
+      entityId: q.id,
+      entityRef: ref,
+      summary: `${lookupName.customer(q.customerId)} — ${reasons.join('; ')}`,
+      amount: toAed(linesRevenue(q.lines), q.currency, rate),
+      href: `/quotations/${q.id}`,
+    });
+    patchQuotation(id, { status: 'Pending approval', approval: record });
+    logActivity({
+      entity: 'Quotation',
+      entityId: id,
+      entityRef: q.number,
+      action: `submitted for approval (${rule.approverRole})`,
+    });
+    const updated = protoDb.get().quotations.find((x) => x.id === id)!;
+    return { quotation: updated, status: 'Pending approval', reasons, approverRole: rule.approverRole };
+  }
+  patchQuotation(id, { status: 'Sent', approval: undefined });
+  setEnquiryStatus(q.enquiryId, 'Quoted');
+  logActivity({
+    entity: 'Quotation',
+    entityId: id,
+    entityRef: q.number,
+    action: 'sent to the customer (no approval needed by the approval matrix)',
+  });
+  const updated = protoDb.get().quotations.find((x) => x.id === id)!;
+  return { quotation: updated, status: 'Sent', reasons };
+}
+
+/** Applies the approver's decision (from the approvals inbox or this page). */
+function applyQuoteDecision(req: ApprovalRequest) {
+  if (req.entity !== 'Quotation') return;
+  const q = protoDb.get().quotations.find((x) => x.id === req.entityId);
+  if (!q || q.status !== 'Pending approval') return;
+  const approved = req.record.status === 'Approved';
+  patchQuotation(q.id, { status: approved ? 'Sent' : 'Draft', approval: req.record });
+  if (approved) setEnquiryStatus(q.enquiryId, 'Quoted');
+  logActivity({
+    entity: 'Quotation',
+    entityId: q.id,
+    entityRef: q.number,
+    action: approved
+      ? 'approved and sent to the customer'
+      : `returned to draft${req.record.reason ? ` — ${req.record.reason}` : ''}`,
+  });
+}
+for (const docType of QUOTE_APPROVALS) onApprovalDecided(docType, applyQuoteDecision);
+
+/** Approve / reject a pending quotation through its approval request (legacy: direct transition). */
+function decideQuotation(id: string, decision: 'Approved' | 'Rejected', reason?: string) {
+  const req = pendingQuoteRequest(id);
+  if (req) {
+    decideApproval(req.id, decision, reason);
+    return latency(undefined, 250);
+  }
+  if (decision === 'Approved') return transition(id, 'Sent', 'approved and sent to the customer');
+  const q = protoDb.get().quotations.find((x) => x.id === id);
+  if (q && reason)
+    patchQuotation(id, {
+      approval: {
+        status: 'Rejected',
+        requestedBy: q.owner,
+        requestedAt: q.createdAt,
+        approverRole: 'Sales manager',
+        decidedBy: protoDb.get().session?.displayName ?? 'Prototype user',
+        decidedAt: nowIso(),
+        reason,
+      },
+    });
+  return transition(id, 'Draft', `returned the quotation to draft${reason ? ` — ${reason}` : ''}`);
+}
+
 export const quotationsApi = {
   list(params: ListParams): Promise<Page<QuotationRow>> {
     const rows = [...protoDb.get().quotations]
@@ -130,8 +282,11 @@ export const quotationsApi = {
     const db = protoDb.get();
     const q = db.quotations.find((x) => x.id === id);
     if (!q) return Promise.reject(new Error('Not found'));
+    const req = approvalFor(id, 'Quotation discount %') ?? approvalFor(id, 'Quotation margin % below');
     return latency({
       ...toRow(q),
+      pricingCheck: pricingCheckOf(q),
+      approvalRequest: req ? { id: req.id, docType: req.docType, summary: req.summary } : undefined,
       enquiryNumber: db.enquiries.find((e) => e.id === q.enquiryId)?.number,
       salesOrders: db.salesOrders
         .filter((so) => so.quotationId === id)
@@ -164,18 +319,16 @@ export const quotationsApi = {
     if (!e) return latency(null);
     const lines = e.serviceIds.map((serviceId) => {
       const svc = db.services.find((s) => s.id === serviceId);
-      const rate =
-        db.vendorRates.find(
-          (r) => r.serviceId === serviceId && r.origin === e.origin && r.destination === e.destination,
-        ) ?? db.vendorRates.find((r) => r.serviceId === serviceId);
-      const unitCost = rate?.rate ?? 0;
+      // C3: cost from the cheapest vendor rate valid today (lane match preferred).
+      const sug = suggestLine(serviceId, { origin: e.origin, destination: e.destination });
       return {
         serviceId,
         description: `${svc?.name ?? 'Service'} — ${locationTextMulti(e.serviceCategories, e.origin, e.destination)}`,
         quantity: 1,
         unit: svc?.unit ?? 'Unit',
-        unitCost,
-        unitPrice: Math.round(unitCost * 1.2 * 100) / 100,
+        unitCost: Number(sug.unitCost ?? 0),
+        unitPrice: Number(sug.unitPrice ?? 0),
+        minimumCharge: sug.minimumCharge,
       };
     });
     return latency(
@@ -192,7 +345,7 @@ export const quotationsApi = {
       120,
     );
   },
-  create(input: QuotationInput): Promise<Quotation> {
+  create(input: QuotationInput): Promise<SubmitResult> {
     const db = protoDb.get();
     const next = Math.max(...db.quotations.map((q) => Number(q.number.split('-')[1]))) + 1;
     const { submit, lines, serviceCategories: selected, ...rest } = input;
@@ -204,7 +357,7 @@ export const quotationsApi = {
       id: newId('qt'),
       number: `QT-${next}`,
       version: 1,
-      status: submit ? 'Pending approval' : 'Draft',
+      status: 'Draft',
       createdAt: nowIso(),
       owner: db.session?.displayName ?? 'Prototype user',
       lines: lines.map((l) => ({ ...l, id: newId('ln') })),
@@ -216,13 +369,26 @@ export const quotationsApi = {
       entity: 'Quotation',
       entityId: q.id,
       entityRef: q.number,
-      action: submit ? 'submitted a quotation for approval' : 'started a draft quotation',
+      action: 'started a draft quotation',
     });
-    return latency(q, 300);
+    if (submit) {
+      try {
+        return latency(submitQuotation(q.id), 300);
+      } catch (e) {
+        return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    }
+    return latency({ quotation: q, status: q.status, reasons: [] }, 300);
   },
-  submit: (id: string) => transition(id, 'Pending approval', 'submitted for approval'),
-  approve: (id: string) => transition(id, 'Sent', 'approved and sent to the customer'),
-  sendBack: (id: string) => transition(id, 'Draft', 'returned the quotation to draft'),
+  submit(id: string): Promise<SubmitResult> {
+    try {
+      return latency(submitQuotation(id), 250);
+    } catch (e) {
+      return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+    }
+  },
+  approve: (id: string) => decideQuotation(id, 'Approved'),
+  sendBack: (id: string, reason?: string) => decideQuotation(id, 'Rejected', reason),
   accept: (id: string) => transition(id, 'Accepted', 'marked the quotation accepted'),
   reject: (id: string) => transition(id, 'Rejected', 'marked the quotation rejected'),
   revise(id: string): Promise<Quotation> {
@@ -239,6 +405,7 @@ export const quotationsApi = {
       id: newId('qt'),
       version: maxVersion + 1,
       status: 'Draft',
+      approval: undefined,
       createdAt: nowIso(),
       lines: q.lines.map((l) => ({ ...l, id: newId('ln') })),
     };
@@ -319,6 +486,7 @@ function useInvalidate() {
     void qc.invalidateQueries({ queryKey: ['contracts'] });
     void qc.invalidateQueries({ queryKey: ['sales-orders'] });
     void qc.invalidateQueries({ queryKey: ['home'] });
+    void qc.invalidateQueries({ queryKey: ['approvals'] });
   };
 }
 
@@ -327,14 +495,20 @@ export function useCreateQuotation() {
   return useMutation({ mutationFn: quotationsApi.create, onSuccess: invalidate });
 }
 
-export type QuotationAction = 'submit' | 'approve' | 'sendBack' | 'accept' | 'reject';
+export type QuotationAction = 'approve' | 'sendBack' | 'accept' | 'reject';
 
 export function useQuotationAction() {
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: ({ id, action }: { id: string; action: QuotationAction }) => quotationsApi[action](id),
+    mutationFn: ({ id, action, reason }: { id: string; action: QuotationAction; reason?: string }) =>
+      action === 'sendBack' ? quotationsApi.sendBack(id, reason) : quotationsApi[action](id),
     onSuccess: invalidate,
   });
+}
+
+export function useSubmitQuotation() {
+  const invalidate = useInvalidate();
+  return useMutation({ mutationFn: quotationsApi.submit, onSuccess: invalidate });
 }
 
 export function useReviseQuotation() {

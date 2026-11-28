@@ -1,7 +1,21 @@
-import { getRouteApi, Link } from '@tanstack/react-router';
+import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { Ban, Check, CheckCircle2, Plus, Receipt, Wallet } from 'lucide-react';
+import { useState } from 'react';
+import {
+  AlertTriangle,
+  Ban,
+  Check,
+  CheckCircle2,
+  History,
+  PencilLine,
+  Plus,
+  Receipt,
+  Wallet,
+} from 'lucide-react';
+import { lineMargin } from '@/domain/calc';
 import { servicesLabel } from '@/domain/workflow';
+import { AttachmentChip } from '@/shared/ui/Attachment';
+import { Dialog } from '@/shared/ui/Dialog';
 import { totals } from '@/features/quotations/api';
 import { QuotationTotals } from '@/features/quotations/QuotationTotals';
 import { lookupName } from '@/shared/data/lookups';
@@ -13,8 +27,11 @@ import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
-import { formatDate, formatMoney } from '@/shared/utils/format';
+import { formatDate, formatDateTime, formatMoney } from '@/shared/utils/format';
 import { useSalesOrder, useSetSalesOrderStatus, type SalesOrderDetail } from './api';
+import { formatInCurrency } from './commercial-api';
+import { CreditPanel } from './CreditPanel';
+import { AmendDialog, CancelDialog, ConfirmDialog, CreditOverrideForm } from './SalesOrderDialogs';
 import {
   locationLabel,
   locationTextMulti,
@@ -31,6 +48,8 @@ export function SalesOrderDetailPage() {
   const { data: so, isLoading, error } = useSalesOrder(id);
   const setStatus = useSetSalesOrderStatus();
   const toast = useToast();
+  const navigate = useNavigate();
+  const [dialog, setDialog] = useState<'confirm' | 'amend' | 'cancel' | 'credit' | null>(null);
 
   if (error)
     return (
@@ -48,8 +67,28 @@ export function SalesOrderDetailPage() {
   const warehouseSite = transport ? siteFromNotes(so.notes, 'Warehouse') : undefined;
   const serviceLocation = siteFromNotes(so.notes, 'Service');
   const notes = withoutSiteLines(so.notes);
-  const change = (status: 'Confirmed' | 'Cancelled' | 'Completed', msg: string) =>
+  const change = (status: 'Completed', msg: string) =>
     setStatus.mutate({ id: so.id, status }, { onSuccess: () => toast({ title: `${so.number} ${msg}` }) });
+  const cur = so.currency ?? 'AED';
+  const fmt = (n: number) => (cur === 'AED' ? formatMoney(n) : formatInCurrency(n, cur));
+  const canAmend =
+    (so.status === 'Confirmed' || so.status === 'In progress') &&
+    so.pendingAmendment?.approval.status !== 'Pending';
+  const canCancel =
+    so.status !== 'Cancelled' &&
+    so.status !== 'Completed' &&
+    so.billing.invoiced <= 0.005 &&
+    so.invoices.length === 0;
+  const creditHold = so.credit.blocked && !so.credit.overrideApproved;
+  const onCreateJob = () => {
+    // C5: the credit check runs again before work starts.
+    if (creditHold) setDialog('credit');
+    else
+      void navigate({
+        to: '/work-orders/new',
+        search: { salesOrderId: so.id, customerId: undefined, quotationId: undefined, contractId: undefined },
+      });
+  };
 
   return (
     <div>
@@ -57,27 +96,27 @@ export function SalesOrderDetailPage() {
         crumbs={[{ label: 'Sales orders', to: '/sales-orders' }, { label: so.number }]}
         title={so.number}
         meta={<StatusBadge status={so.status} />}
-        description={`${so.customerName} · PO ${so.customerPoRef} · ordered ${formatDate(so.orderDate)}`}
+        description={`${so.customerName} · PO ${so.customerPoRef} · ordered ${formatDate(so.orderDate)} · v${so.version ?? 1}`}
         actions={
           <>
+            {canCancel ? (
+              <Button variant="ghost" icon={<Ban aria-hidden="true" />} onClick={() => setDialog('cancel')}>
+                Cancel order
+              </Button>
+            ) : null}
+            {canAmend ? (
+              <Button
+                variant="secondary"
+                icon={<PencilLine aria-hidden="true" />}
+                onClick={() => setDialog('amend')}
+              >
+                Amend order
+              </Button>
+            ) : null}
             {so.status === 'Draft' ? (
-              <>
-                <Button
-                  variant="ghost"
-                  icon={<Ban aria-hidden="true" />}
-                  busy={setStatus.isPending}
-                  onClick={() => change('Cancelled', 'cancelled')}
-                >
-                  Cancel order
-                </Button>
-                <Button
-                  icon={<CheckCircle2 aria-hidden="true" />}
-                  busy={setStatus.isPending}
-                  onClick={() => change('Confirmed', 'confirmed')}
-                >
-                  Confirm sales order
-                </Button>
-              </>
+              <Button icon={<CheckCircle2 aria-hidden="true" />} onClick={() => setDialog('confirm')}>
+                Confirm sales order
+              </Button>
             ) : null}
             {so.status === 'In progress' &&
             so.workOrderCount > 0 &&
@@ -92,19 +131,77 @@ export function SalesOrderDetailPage() {
               </Button>
             ) : null}
             {canCreateWo ? (
-              <ButtonLink
-                to="/work-orders/new"
-                search={{ salesOrderId: so.id }}
-                icon={<Plus aria-hidden="true" />}
-              >
+              <Button icon={<Plus aria-hidden="true" />} onClick={onCreateJob}>
                 Create job
-              </ButtonLink>
+              </Button>
             ) : null}
           </>
         }
       />
 
       <FlowTracker so={so} />
+
+      {so.status === 'Cancelled' ? (
+        <div
+          role="note"
+          className="mb-6 flex items-start gap-2 rounded-lg bg-surface-muted px-4 py-3 text-body-s text-fg-secondary"
+        >
+          <Ban aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <strong className="font-semibold text-fg">Cancelled</strong>
+            {so.cancelReason ? ` — ${so.cancelReason}` : ''}
+            {so.cancellationFee ? (
+              <>
+                {' '}
+                · cancellation fee{' '}
+                <strong className="font-semibold text-fg">{formatMoney(so.cancellationFee)}</strong> billable
+                to the customer
+              </>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
+      {so.status === 'Draft' && creditHold ? (
+        <div
+          role="note"
+          className="mb-6 flex items-start gap-2 rounded-lg bg-danger-subtle px-4 py-3 text-body-s text-danger"
+        >
+          <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <strong className="font-semibold">Credit check would block confirmation:</strong>{' '}
+            {so.credit.reasons.join('; ')}.
+            {so.creditOverride?.status === 'Pending'
+              ? ` Credit override waiting for the ${so.creditOverride.approverRole}.`
+              : ' Confirm to request a credit override.'}
+          </span>
+        </div>
+      ) : null}
+      {so.pendingAmendment ? (
+        <div
+          role="note"
+          className={clsx(
+            'mb-6 flex items-start gap-2 rounded-lg px-4 py-3 text-body-s',
+            so.pendingAmendment.approval.status === 'Rejected'
+              ? 'bg-danger-subtle text-danger'
+              : 'bg-warning-subtle text-warning',
+          )}
+        >
+          <History aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <strong className="font-semibold">
+              {so.pendingAmendment.approval.status === 'Rejected'
+                ? 'Requested change was rejected'
+                : `Change waiting for the ${so.pendingAmendment.approval.approverRole}`}
+            </strong>{' '}
+            — “{so.pendingAmendment.note}”, value {so.pendingAmendment.valueChange >= 0 ? '+' : ''}
+            {formatMoney(so.pendingAmendment.valueChange)}
+            {so.pendingAmendment.approval.status === 'Rejected' && so.pendingAmendment.approval.reason
+              ? `. Reason: ${so.pendingAmendment.approval.reason}`
+              : ''}
+            .
+          </span>
+        </div>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
@@ -142,6 +239,23 @@ export function SalesOrderDetailPage() {
                     value: <span className="font-mono text-[13px]">{so.customerPoRef}</span>,
                   },
                   { label: 'Order date', value: formatDate(so.orderDate) },
+                  {
+                    label: 'Customer confirmation',
+                    value: so.confirmationAttachment ? (
+                      <AttachmentChip file={so.confirmationAttachment} />
+                    ) : (
+                      <span className="text-fg-muted">Not attached</span>
+                    ),
+                  },
+                  { label: 'Version', value: `v${so.version ?? 1}` },
+                  ...(so.currency && so.currency !== 'AED'
+                    ? [
+                        {
+                          label: 'Currency',
+                          value: `${so.currency} · 1 ${so.currency} = AED ${so.exchangeRate}`,
+                        },
+                      ]
+                    : []),
                   {
                     label: 'Services included',
                     value: <ServiceTypePills categories={so.serviceCategories} mode={so.mode} />,
@@ -205,10 +319,13 @@ export function SalesOrderDetailPage() {
           </Card>
 
           <Card>
-            <CardHeader title="Price lines" description="AED, excluding VAT" />
+            <CardHeader
+              title="Price lines"
+              description={`${cur}, excluding VAT · cost and margin are internal — not printed`}
+            />
             <CardBody>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-body-s">
+              <div className="overflow-x-auto" role="region" aria-label="Sales order lines" tabIndex={0}>
+                <table className="w-full min-w-[720px] text-left text-body-s">
                   <caption className="sr-only">Sales order lines</caption>
                   <thead>
                     <tr className="border-b border-border-subtle text-caption uppercase tracking-wide text-fg-muted">
@@ -222,39 +339,52 @@ export function SalesOrderDetailPage() {
                         Unit price
                       </th>
                       <th scope="col" className="pb-2 pr-3 text-right font-medium">
-                        Unit cost
+                        Amount
+                      </th>
+                      <th scope="col" className="pb-2 pr-3 text-right font-medium">
+                        Est. cost
                       </th>
                       <th scope="col" className="pb-2 text-right font-medium">
-                        Amount
+                        Margin
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {so.lines.map((l) => (
-                      <tr key={l.id} className="border-b border-border-subtle last:border-0">
-                        <td className="py-3 pr-3">
-                          <p className="font-medium">{l.description}</p>
-                          <p className="text-caption text-fg-muted">{lookupName.service(l.serviceId)}</p>
-                        </td>
-                        <td className="py-3 pr-3 text-right tabular-nums">
-                          {l.quantity} <span className="text-caption text-fg-muted">{l.unit}</span>
-                        </td>
-                        <td className="py-3 pr-3 text-right">
-                          <Money amount={l.unitPrice} />
-                        </td>
-                        <td className="py-3 pr-3 text-right">
-                          <Money amount={l.unitCost} muted />
-                        </td>
-                        <td className="py-3 text-right font-medium">
-                          <Money amount={l.quantity * l.unitPrice} />
-                        </td>
-                      </tr>
-                    ))}
+                    {so.lines.map((l) => {
+                      const m = lineMargin(l);
+                      return (
+                        <tr key={l.id} className="border-b border-border-subtle last:border-0">
+                          <td className="py-3 pr-3">
+                            <p className="font-medium">{l.description}</p>
+                            <p className="text-caption text-fg-muted">
+                              {lookupName.service(l.serviceId)}
+                              {l.minimumCharge ? ` · min. charge ${fmt(l.minimumCharge)}` : ''}
+                              {l.customerApproved ? ' · customer approved' : ''}
+                            </p>
+                          </td>
+                          <td className="whitespace-nowrap py-3 pr-3 text-right tabular-nums">
+                            {l.quantity} <span className="text-caption text-fg-muted">{l.unit}</span>
+                          </td>
+                          <td className="py-3 pr-3 text-right tabular-nums">{fmt(l.unitPrice)}</td>
+                          <td className="py-3 pr-3 text-right font-medium tabular-nums">{fmt(m.amount)}</td>
+                          <td className="py-3 pr-3 text-right tabular-nums text-fg-muted">{fmt(m.cost)}</td>
+                          <td
+                            className={clsx(
+                              'whitespace-nowrap py-3 text-right tabular-nums',
+                              m.margin < 0 ? 'font-medium text-danger' : 'text-fg-secondary',
+                            )}
+                          >
+                            {fmt(m.margin)}
+                            <span className="block text-caption">{m.marginPct}%</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
               <div className="mt-5 border-t border-border-subtle pt-5">
-                <QuotationTotals t={t} />
+                <QuotationTotals t={t} currency={cur} rate={so.exchangeRate} />
               </div>
             </CardBody>
           </Card>
@@ -313,8 +443,62 @@ export function SalesOrderDetailPage() {
             </CardBody>
           </Card>
           <BillingCard so={so} margin={t.marginPct} />
+          <Card>
+            <CardHeader
+              title="Customer credit"
+              description="AED incl. VAT · checked on confirm and on job creation"
+            />
+            <CardBody>
+              <CreditPanel credit={so.credit} override={so.creditOverride} title="Credit position" />
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader title="Order history" description="Changes after confirmation" />
+            <CardBody>
+              {(so.revisions ?? []).length === 0 ? (
+                <p className="text-body-s text-fg-muted">
+                  v{so.version ?? 1} — no changes since it was created.
+                </p>
+              ) : (
+                <ol className="space-y-2 text-body-s">
+                  {[...(so.revisions ?? [])].reverse().map((r) => (
+                    <li
+                      key={`${r.version}-${r.at}`}
+                      className="rounded-lg border border-border-subtle px-3 py-2"
+                    >
+                      <p className="font-medium">
+                        v{r.version} — {formatDate(r.at)} — by {r.by}
+                      </p>
+                      <p className="text-caption text-fg-secondary">{r.note}</p>
+                      <p className="text-caption text-fg-muted">{formatDateTime(r.at)}</p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </CardBody>
+          </Card>
         </div>
       </div>
+
+      {dialog === 'confirm' ? <ConfirmDialog so={so} open onClose={() => setDialog(null)} /> : null}
+      {dialog === 'amend' ? <AmendDialog so={so} open onClose={() => setDialog(null)} /> : null}
+      {dialog === 'cancel' ? <CancelDialog so={so} open onClose={() => setDialog(null)} /> : null}
+      {dialog === 'credit' ? (
+        <Dialog
+          open
+          size="lg"
+          onClose={() => setDialog(null)}
+          title="Credit check blocks a new job"
+          description="Work cannot start for this customer until the credit position is cleared or an override is approved."
+          footer={
+            <Button variant="secondary" onClick={() => setDialog(null)}>
+              Close
+            </Button>
+          }
+        >
+          <CreditOverrideForm so={so} credit={so.credit} onDone={() => setDialog(null)} />
+        </Dialog>
+      ) : null}
     </div>
   );
 }
@@ -342,6 +526,17 @@ function BillingCard({ so, margin }: { so: SalesOrderDetail; margin: number }) {
       <CardHeader title="Billing & balance" description="AED incl. VAT · from the customer ledger" />
       <CardBody className="space-y-4">
         <dl className="space-y-2.5 text-body-s">
+          {so.cancellationFee ? (
+            <div className="flex items-start justify-between gap-3">
+              <dt className="text-fg-secondary">
+                Cancellation fee
+                <span className="block text-caption text-fg-muted">billable · excl. VAT</span>
+              </dt>
+              <dd className="tabular-nums">
+                <Money amount={so.cancellationFee} />
+              </dd>
+            </div>
+          ) : null}
           {rows.map((r) => (
             <div key={r.label} className="flex items-start justify-between gap-3">
               <dt className="text-fg-secondary">

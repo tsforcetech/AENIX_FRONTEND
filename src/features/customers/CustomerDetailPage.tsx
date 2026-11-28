@@ -1,9 +1,10 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { FileText, Plus, Wallet } from 'lucide-react';
+import { FileText, Plus, Printer, Wallet } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { StatusBadge } from '@/shared/ui/Badge';
-import { ButtonLink } from '@/shared/ui/Button';
+import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody } from '@/shared/ui/Card';
+import { CreditPanel } from '@/features/sales-orders/CreditPanel';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
@@ -12,6 +13,7 @@ import { Tabs } from '@/shared/ui/Tabs';
 import { formatDate, formatMoneyCompact } from '@/shared/utils/format';
 import { BalanceTiles, SalesOrderBalanceTable } from './AccountBalance';
 import { useCustomer, type CustomerDetail } from './api';
+import { PrintableStatement } from './PrintableStatement';
 import { StatementTable } from './StatementTable';
 
 const route = getRouteApi('/_app/customers/$id');
@@ -43,6 +45,9 @@ export function CustomerDetailPage() {
         description={`${c.code} · ledger ${c.ledgerCode} · ${c.industry} · ${c.city}, ${c.country}`}
         actions={
           <>
+            <Button variant="secondary" icon={<Printer aria-hidden="true" />} onClick={() => window.print()}>
+              Print statement
+            </Button>
             <ButtonLink to="/enquiries/new" variant="secondary" icon={<Plus aria-hidden="true" />}>
               New enquiry
             </ButtonLink>
@@ -73,6 +78,14 @@ export function CustomerDetailPage() {
           <span className="font-medium text-danger"> · {formatMoneyCompact(kpis.overdue)} overdue</span>
         ) : null}
       </p>
+
+      <Card className="mb-6">
+        <CardBody>
+          <CreditPanel credit={data.credit} title="Credit position (AED incl. VAT)" />
+        </CardBody>
+      </Card>
+
+      <PrintableStatement data={data} />
 
       <Card>
         <div className="px-5 pt-3">

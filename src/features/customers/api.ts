@@ -2,6 +2,9 @@ import { servicesLabel } from '@/domain/workflow';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { invoiceTotals, workOrderFinancials } from '@/domain/calc';
 import { customerBalance } from '@/domain/balances';
+import { creditCheck } from '@/domain/controls';
+import { creditInputs } from '@/features/sales-orders/credit';
+import { PROTO_TODAY } from '@/prototype/seed';
 import type { Customer, LedgerAccount } from '@/domain/types';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, protoDb } from '@/prototype/store';
@@ -126,7 +129,30 @@ export const customersApi = {
         revenue: workOrderFinancials(w).revenue,
       })),
       statement: buildStatement(invoices, collections, db.salesOrders),
+      statementDate: PROTO_TODAY,
+      company: {
+        legalName: db.company.legalName,
+        officeAddress: db.company.officeAddress,
+        trn: db.company.trn,
+        phone: db.company.phone,
+        email: db.company.email,
+      },
       balance: balanceOf(id),
+      credit: (() => {
+        // C5: credit position (AED incl. VAT) — open balance + confirmed orders not yet invoiced.
+        const inputs = creditInputs({
+          balance: balanceOf(id),
+          invoices: db.invoices,
+          customerId: id,
+          today: PROTO_TODAY,
+        });
+        return {
+          ...creditCheck({ customer: c, ...inputs, orderValue: 0 }),
+          ...inputs,
+          creditLimit: c.creditLimit,
+          customerStatus: c.status,
+        };
+      })(),
     });
   },
   create(input: CustomerInput): Promise<{ customer: Customer; ledgerCode: string }> {

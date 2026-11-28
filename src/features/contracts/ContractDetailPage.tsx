@@ -1,24 +1,112 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
 import clsx from 'clsx';
-import { ShoppingCart } from 'lucide-react';
+import { useState } from 'react';
+import { PencilLine, ShoppingCart } from 'lucide-react';
 import { lookupName } from '@/shared/data/lookups';
 import { StatusBadge } from '@/shared/ui/Badge';
-import { ButtonLink } from '@/shared/ui/Button';
+import { Button, ButtonLink } from '@/shared/ui/Button';
+import { Dialog } from '@/shared/ui/Dialog';
+import { TextField } from '@/shared/ui/Field';
+import { useToast } from '@/shared/ui/Toast';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
-import { formatDate } from '@/shared/utils/format';
+import { formatDate, formatMoney } from '@/shared/utils/format';
 import { locationTextMulti } from '@/features/sales-orders/commercial-ui';
-import { useContract } from './api';
+import {
+  useContract,
+  useUpdateContractTerms,
+  validateContractTerms,
+  type ContractDetail,
+  type ContractTermsInput,
+} from './api';
 import { remainingLabel } from './ContractsListPage';
 
 const route = getRouteApi('/_app/contracts/$id');
 
+/** C6: edit fuel surcharge % and storage terms (validated). */
+function TermsDialog({ c, onClose }: { c: ContractDetail; onClose: () => void }) {
+  const update = useUpdateContractTerms();
+  const toast = useToast();
+  const [form, setForm] = useState({
+    fuelSurchargePct: String(c.fuelSurchargePct ?? 0),
+    minimumMonthlyStorage: String(c.minimumMonthlyStorage ?? 0),
+    storageFreeDays: String(c.storageFreeDays ?? 0),
+  });
+  const [touched, setTouched] = useState(false);
+  const parsed: ContractTermsInput = {
+    fuelSurchargePct: form.fuelSurchargePct.trim() === '' ? 0 : Number(form.fuelSurchargePct),
+    minimumMonthlyStorage: form.minimumMonthlyStorage.trim() === '' ? 0 : Number(form.minimumMonthlyStorage),
+    storageFreeDays: form.storageFreeDays.trim() === '' ? 0 : Number(form.storageFreeDays),
+  };
+  const errors = touched ? validateContractTerms(parsed) : {};
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+  const submit = () => {
+    setTouched(true);
+    if (Object.keys(validateContractTerms(parsed)).length) return;
+    update.mutate(
+      { id: c.id, ...parsed },
+      {
+        onSuccess: () => {
+          toast({ title: `${c.number} terms updated` });
+          onClose();
+        },
+        onError: (e) => toast({ title: 'Could not save the terms', body: e.message }),
+      },
+    );
+  };
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Edit terms — ${c.number}`}
+      description="Changes apply to new sales orders and storage billing runs."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button busy={update.isPending} onClick={submit}>
+            Save terms
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-3">
+        <TextField
+          label="Fuel surcharge %"
+          inputMode="decimal"
+          hint="0 = none"
+          value={form.fuelSurchargePct}
+          error={errors.fuelSurchargePct}
+          onChange={set('fuelSurchargePct')}
+        />
+        <TextField
+          label="Min. monthly storage (AED)"
+          inputMode="decimal"
+          value={form.minimumMonthlyStorage}
+          error={errors.minimumMonthlyStorage}
+          onChange={set('minimumMonthlyStorage')}
+        />
+        <TextField
+          label="Storage free days"
+          inputMode="numeric"
+          value={form.storageFreeDays}
+          error={errors.storageFreeDays}
+          onChange={set('storageFreeDays')}
+        />
+      </div>
+    </Dialog>
+  );
+}
+
 export function ContractDetailPage() {
   const { id } = route.useParams();
   const { data: c, isLoading, error } = useContract(id);
+  const [editing, setEditing] = useState(false);
 
   if (error)
     return (
@@ -178,6 +266,45 @@ export function ContractDetailPage() {
 
         <div className="space-y-6">
           <Card>
+            <CardHeader
+              title="Commercial terms"
+              description="Surcharge and storage clauses"
+              actions={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<PencilLine aria-hidden="true" />}
+                  onClick={() => setEditing(true)}
+                >
+                  Edit terms
+                </Button>
+              }
+            />
+            <CardBody>
+              <DescriptionList
+                items={[
+                  {
+                    label: 'Fuel surcharge',
+                    value: c.fuelSurchargePct
+                      ? `${c.fuelSurchargePct}% on transport lines`
+                      : 'None',
+                  },
+                  {
+                    label: 'Minimum monthly storage',
+                    value: c.minimumMonthlyStorage ? formatMoney(c.minimumMonthlyStorage) : 'None',
+                  },
+                  {
+                    label: 'Storage free days',
+                    value: c.storageFreeDays ? `${c.storageFreeDays} days` : 'None',
+                  },
+                ]}
+              />
+              <p className="mt-3 text-caption text-fg-muted">
+                New sales orders under this contract add the fuel surcharge as a line on the transport subtotal.
+              </p>
+            </CardBody>
+          </Card>
+          <Card>
             <CardHeader title="Details" />
             <CardBody>
               <DescriptionList
@@ -211,6 +338,7 @@ export function ContractDetailPage() {
               />
             </CardBody>
           </Card>
+          {editing ? <TermsDialog c={c} onClose={() => setEditing(false)} /> : null}
           {c.status === 'Expiring' ? (
             <StatusMessage
               kind="denied"

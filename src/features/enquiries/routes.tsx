@@ -10,10 +10,14 @@ export function enquiriesRoutes(parent: AppParentRoute) {
     createRoute({
       getParentRoute: () => parent,
       path: 'enquiries',
-      validateSearch: (s: Record<string, unknown>): TypedListSearch & { view?: 'list' } => ({
+      validateSearch: (
+        s: Record<string, unknown>,
+      ): TypedListSearch & { view?: 'list'; followUp?: 'due' } => ({
         ...validateTypedListSearch(s),
         // Board is the default view; only `list` is kept in the URL.
         view: s.view === 'list' ? 'list' : undefined,
+        // C1: "Follow-ups due" filter.
+        followUp: s.followUp === 'due' ? 'due' : undefined,
       }),
       component: EnquiriesListPage,
     }),

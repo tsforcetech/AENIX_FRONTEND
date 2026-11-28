@@ -1,13 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { CheckCircle2, Info } from 'lucide-react';
+import { CheckCircle2, Fuel, Info } from 'lucide-react';
 import { useState } from 'react';
 import { useController, useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
+import type { Currency } from '@/domain/types';
 import { totals } from '@/features/quotations/api';
 import { QuotationTotals } from '@/features/quotations/QuotationTotals';
 import {
-  suggestServiceRate,
   useCustomerComboOptions,
   useCustomerOptions,
   useServiceComboOptions,
@@ -33,7 +33,11 @@ import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
 import { useCreateSalesOrder, useSalesOrderPrefill, type SalesOrderPrefill } from './api';
 import { categoriesFromLines, serviceCategoryLabel } from '@/domain/workflow';
+import { suggestLine, useCommercialSettings, useServiceMeta } from './commercial-api';
 import { locationLabel, ModePicker, serviceFitsTypes, ServiceTypesPicker } from './commercial-ui';
+import { ConfirmationFilePicker, type PickedFile } from './ConfirmationFilePicker';
+import { CurrencyFields, rateError } from './CurrencyFields';
+import { fuelSurchargeAmount } from './pricing';
 
 const route = getRouteApi('/_app/sales-orders/new');
 
@@ -44,6 +48,8 @@ const lineSchema = z.object({
   unit: z.string().trim().min(1, 'Unit').max(30),
   unitPrice: z.coerce.number().min(0, '≥ 0'),
   unitCost: z.coerce.number().min(0, '≥ 0'),
+  minimumCharge: z.number().optional(),
+  customerApproved: z.boolean().optional(),
 });
 
 const schema = z
@@ -55,7 +61,7 @@ const schema = z
     mode: z.enum(['Road', 'Sea', 'Air']),
     origin: z.string().trim().min(2, 'Enter a location').max(80),
     destination: z.string().trim().max(80),
-    customerPoRef: z.string().trim().min(2, 'Enter the customer’s PO reference').max(40),
+    customerPoRef: z.string().trim().min(2, 'Enter the customer’s PO / reference').max(40),
     orderDate: z.string().min(1, 'Choose a date'),
     notes: z.string().max(1000),
     lines: z.array(lineSchema).min(1, 'Add at least one price line'),
@@ -104,6 +110,18 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
   const create = useCreateSalesOrder();
   const [confirmMode, setConfirmMode] = useState(false);
   const priced = prefill.source === 'quotation' || prefill.source === 'contract';
+  const settings = useCommercialSettings();
+  const serviceMeta = useServiceMeta();
+  const multiCurrency = !!settings.data?.multiCurrency || !!(prefill.currency && prefill.currency !== 'AED');
+  const [fx, setFx] = useState<{ currency: Currency; rate: string }>({
+    currency: prefill.currency ?? 'AED',
+    rate: String(prefill.exchangeRate ?? 1),
+  });
+  const [fxTouched, setFxTouched] = useState(false);
+  const fxError = fxTouched ? rateError(fx.currency, fx.rate) : undefined;
+  const fxRate = fx.currency === 'AED' ? 1 : Number(fx.rate) || 1;
+  const [file, setFile] = useState<PickedFile | undefined>();
+  const [fileError, setFileError] = useState<string | undefined>();
 
   const {
     register,
@@ -139,12 +157,21 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
   );
   const transport = selected.includes('Transport') || lineTypes.includes('Transport');
   const locationKind = transport ? 'Transport' : selected.includes('Warehouse') ? 'Warehouse' : 'Service';
+  const numericLines = watchedLines.map((l) => ({
+    serviceId: l?.serviceId ?? '',
+    quantity: Number(l?.quantity) || 0,
+    unitPrice: Number(l?.unitPrice) || 0,
+    unitCost: Number(l?.unitCost) || 0,
+    minimumCharge: l?.minimumCharge,
+  }));
+  // C6: contract fuel surcharge on the transport subtotal (added as a line on save).
+  const fuelPct = prefill.fuelSurchargePct ?? 0;
+  const fuel = fuelSurchargeAmount(numericLines, fuelPct, (id) => {
+    const m = services.data?.find((s) => s.value === id)?.mode;
+    return m === 'Road' || m === 'Sea' || m === 'Air';
+  });
   const t = totals(
-    watchedLines.map((l) => ({
-      quantity: Number(l?.quantity) || 0,
-      unitPrice: Number(l?.unitPrice) || 0,
-      unitCost: Number(l?.unitCost) || 0,
-    })),
+    fuel > 0 ? [...numericLines, { quantity: 1, unitPrice: fuel, unitCost: 0 }] : numericLines,
   );
   const serviceChoices = (services.data ?? []).filter(
     (s) =>
@@ -161,6 +188,8 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
     unit: l?.unit ?? '',
     unitPrice: String(l?.unitPrice ?? ''),
     unitCost: String(l?.unitCost ?? ''),
+    minimumCharge: l?.minimumCharge,
+    customerApproved: l?.customerApproved,
   }));
   const patchLine = (i: number, p: Partial<GridLine>) => {
     const o = { shouldDirty: true };
@@ -170,26 +199,47 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
     if (p.unit !== undefined) setValue(`lines.${i}.unit`, p.unit, o);
     if (p.unitPrice !== undefined) setValue(`lines.${i}.unitPrice`, p.unitPrice, o);
     if (p.unitCost !== undefined) setValue(`lines.${i}.unitCost`, p.unitCost, o);
+    if ('minimumCharge' in p) setValue(`lines.${i}.minimumCharge`, p.minimumCharge, o);
+    if (p.customerApproved !== undefined) setValue(`lines.${i}.customerApproved`, p.customerApproved, o);
   };
   const suggest = (serviceId: string) =>
-    suggestServiceRate(serviceId, { origin: getValues('origin'), destination: getValues('destination') });
+    suggestLine(serviceId, { origin: getValues('origin'), destination: getValues('destination') }, fxRate);
 
   const save = (confirm: boolean) => async (v: FormOutput) => {
     setConfirmMode(confirm);
-    const so = await create.mutateAsync({
-      ...v,
-      mode: transport ? v.mode : undefined,
-      destination: transport ? v.destination : '',
-      enquiryId: prefill.enquiryId,
-      quotationId: prefill.quotationId,
-      contractId: prefill.contractId,
-      confirm,
-    });
-    toast({
-      title: `${so.number} ${confirm ? 'confirmed' : 'saved as draft'}`,
-      body: confirm ? 'Create the job (work order) to start the work.' : undefined,
-    });
-    void navigate({ to: '/sales-orders/$id', params: { id: so.id } });
+    setFxTouched(true);
+    if (rateError(fx.currency, fx.rate)) return;
+    if (confirm && !file) {
+      setFileError('Attach the customer’s confirmation to confirm — or save as draft.');
+      return;
+    }
+    try {
+      const res = await create.mutateAsync({
+        ...v,
+        mode: transport ? v.mode : undefined,
+        destination: transport ? v.destination : '',
+        enquiryId: prefill.enquiryId,
+        quotationId: prefill.quotationId,
+        contractId: prefill.contractId,
+        confirm,
+        confirmationFile: file,
+        ...(fx.currency !== 'AED' ? { currency: fx.currency, exchangeRate: fxRate } : {}),
+      });
+      const so = res.salesOrder;
+      toast(
+        res.confirmed
+          ? { title: `${so.number} confirmed`, body: 'Create the job (work order) to start the work.' }
+          : confirm
+            ? {
+                title: `${so.number} saved as draft — credit check`,
+                body: `${res.credit?.reasons.join('; ') ?? 'Credit check failed'}. Request a credit override on the order.`,
+              }
+            : { title: `${so.number} saved as draft` },
+      );
+      void navigate({ to: '/sales-orders/$id', params: { id: so.id } });
+    } catch (e) {
+      toast({ title: 'Could not save the sales order', body: (e as Error).message });
+    }
   };
 
   const onSaveDraft = handleSubmit(save(false));
@@ -251,6 +301,27 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
               error={errors.orderDate?.message}
               {...register('orderDate')}
             />
+            <div className="sm:col-span-2">
+              <ConfirmationFilePicker
+                value={file}
+                error={fileError}
+                onChange={(f) => {
+                  setFile(f);
+                  setFileError(undefined);
+                }}
+              />
+            </div>
+            {multiCurrency ? (
+              <CurrencyFields
+                currency={fx.currency}
+                rate={fx.rate}
+                rateError={fxError}
+                onChange={(next) => {
+                  setFxTouched(true);
+                  setFx(next);
+                }}
+              />
+            ) : null}
           </CardBody>
         </Card>
 
@@ -302,7 +373,7 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
         <Card>
           <CardHeader
             title="Price lines"
-            description="Type to find a service — cost and a suggested price come from the rate card. Unit cost is internal."
+            description={`Type to find a service — cost and a suggested price come from the rate card. Unit cost and margin are internal and never printed.${fx.currency !== 'AED' ? ` Amounts in ${fx.currency}.` : ''}`}
           />
           <CardBody>
             <PriceLinesGrid
@@ -331,14 +402,26 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
               onAdd={() => append(emptyLine)}
               onRemove={remove}
               suggest={suggest}
+              serviceMeta={serviceMeta}
+              currency={fx.currency}
             />
+            {fuelPct > 0 ? (
+              <p className="mt-3 flex items-center gap-2 rounded-lg bg-canvas px-3 py-2 text-body-s text-fg-secondary">
+                <Fuel aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />
+                Fuel surcharge {fuelPct}% on the transport subtotal (contract clause):{' '}
+                <strong className="tabular-nums">
+                  {fx.currency === 'AED' ? formatMoney(fuel) : `${fx.currency} ${fuel.toFixed(2)}`}
+                </strong>{' '}
+                — added as a line when you save.
+              </p>
+            ) : null}
             {errors.lines ? (
               <p role="alert" className="mt-2 text-caption font-medium text-danger">
                 {errors.lines.message ?? errors.lines.root?.message ?? 'Check the highlighted line fields.'}
               </p>
             ) : null}
             <div className="mt-6 border-t border-border-subtle pt-5">
-              <QuotationTotals t={t} />
+              <QuotationTotals t={t} currency={fx.currency} rate={fxRate} />
             </div>
           </CardBody>
         </Card>
@@ -362,7 +445,10 @@ function SalesOrderForm({ prefill }: { prefill: SalesOrderPrefill }) {
           summary={
             <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-body-s">
               <span>
-                Total <strong className="tabular-nums">{formatMoney(t.total)}</strong>
+                Total{' '}
+                <strong className="tabular-nums">
+                  {fx.currency === 'AED' ? formatMoney(t.total) : `${fx.currency} ${t.total.toFixed(2)}`}
+                </strong>
               </span>
               <span className="text-fg-muted">
                 margin <span className="tabular-nums">{formatMoney(t.margin)}</span> ({t.marginPct}%)
