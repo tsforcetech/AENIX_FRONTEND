@@ -11,6 +11,8 @@ import {
   SearchCheck,
   SlidersHorizontal,
   Truck,
+  Upload,
+  Warehouse as WarehouseIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Badge, StatusBadge, type Tone } from '@/shared/ui/Badge';
@@ -41,6 +43,9 @@ import {
 import { CustomerStockView, InboundView, OutboundView } from './DocViews';
 import { useArrivals, useInbound, useOutbound } from './docs';
 import { MovementDialog, type MovementKind } from './MovementDialog';
+import { BulkUploadDialog } from './BulkUploadDialog';
+import { AddWarehouseDialog } from './AddWarehouseDialog';
+import { useWarehouses, useWarehouseScope, WarehouseScope } from './sites';
 
 const route = getRouteApi('/_app/warehouse');
 const TYPES = ['Receipt', 'Dispatch', 'Transfer', 'Adjustment'] as const;
@@ -141,20 +146,26 @@ export function WarehousePage() {
   const search = route.useSearch();
   const navigate = useNavigate({ from: '/warehouse' });
   const view = search.view ?? 'stock';
-  const inbound = useInbound();
-  const outbound = useOutbound();
+  const siteId = search.wh;
+  const sites = useWarehouses();
+  const site = sites.data?.find((w) => w.id === siteId);
+  const siteLabel = site ? site.name : 'All warehouses';
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [addSiteOpen, setAddSiteOpen] = useState(false);
+  const inbound = useInbound(siteId);
+  const outbound = useOutbound(siteId);
   const inboundOpen = inbound.data?.filter((r) => r.stage !== 'Verified').length ?? 0;
   const outboundOpen = outbound.data?.filter((r) => r.request.status !== 'Closed').length ?? 0;
-  const kpis = useWarehouseKpis();
+  const kpis = useWarehouseKpis(siteId);
   const [dialog, setDialog] = useState<MovementKind | null>(null);
   const floor = useWarehouseFloorEnabled();
   const k = kpis.data;
 
   return (
-    <div>
+    <WarehouseScope.Provider value={siteId}>
       <PageHeader
         title="Warehouse"
-        description="JAFZA WH-1 · 3PL stock held for customers. Runs with or without a transport job."
+        description={`${siteLabel} · 3PL stock held for customers. Runs with or without a transport job.`}
         actions={
           <>
             {floor ? (
@@ -185,12 +196,54 @@ export function WarehousePage() {
             >
               New dispatch
             </Button>
-            <Button icon={<ArrowDownToLine aria-hidden="true" />} onClick={() => setDialog('Receipt')}>
+            <Button
+              variant="secondary"
+              icon={<ArrowDownToLine aria-hidden="true" />}
+              onClick={() => setDialog('Receipt')}
+            >
               New receipt
+            </Button>
+            <Button icon={<Upload aria-hidden="true" />} onClick={() => setUploadOpen(true)}>
+              Upload Excel
             </Button>
           </>
         }
       />
+
+      <section
+        aria-label="Choose warehouse"
+        className="mb-6 flex flex-wrap items-end gap-3 rounded-2xl border border-border-subtle bg-surface px-4 py-3"
+      >
+        <SelectField
+          label="Warehouse"
+          className="min-w-64"
+          value={siteId ?? ''}
+          placeholder="All warehouses"
+          options={(sites.data ?? [])
+            .filter((w) => w.active)
+            .map((w) => ({ value: w.id, label: `${w.name} · ${w.type === 'Own' ? 'own' : 'vendor-run'}` }))}
+          onChange={(e) =>
+            void navigate({
+              search: (p) => ({ ...p, wh: e.target.value || undefined, page: undefined, status: undefined }),
+            })
+          }
+        />
+        <p className="pb-2 text-caption text-fg-muted">
+          {site
+            ? site.type === 'Own'
+              ? `Own warehouse · ${site.city} · ${site.palletCapacity} pallet positions`
+              : `Run by a warehouse vendor · ${site.city} · ${site.palletCapacity} pallet positions`
+            : `${sites.data?.filter((w) => w.active).length ?? 0} warehouses — stock, receipts and releases of all sites`}
+        </p>
+        <Button
+          variant="ghost"
+          className="ml-auto"
+          icon={<WarehouseIcon aria-hidden="true" />}
+          onClick={() => setAddSiteOpen(true)}
+        >
+          Add warehouse
+        </Button>
+      </section>
 
       <section aria-label="Warehouse figures" className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
@@ -233,7 +286,7 @@ export function WarehousePage() {
         />
       </section>
 
-      <ArrivalsCard />
+      <ArrivalsCard siteId={siteId} />
 
       <Card>
         <div className="px-5 pt-3">
@@ -247,6 +300,7 @@ export function WarehousePage() {
                     v === 'movements' || v === 'inbound' || v === 'outbound' || v === 'customers'
                       ? v
                       : undefined,
+                  wh: siteId,
                 },
               })
             }
@@ -282,8 +336,15 @@ export function WarehousePage() {
         )}
       </Card>
 
-      <MovementDialog kind={dialog} onClose={() => setDialog(null)} />
-    </div>
+      <MovementDialog
+        kind={dialog}
+        onClose={() => setDialog(null)}
+        siteId={siteId}
+        siteLabel={site?.name ?? 'own warehouse'}
+      />
+      <BulkUploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} siteId={siteId} />
+      <AddWarehouseDialog open={addSiteOpen} onClose={() => setAddSiteOpen(false)} />
+    </WarehouseScope.Provider>
   );
 }
 
@@ -295,6 +356,7 @@ function StockView() {
     page: search.page,
     search: search.q,
     status: search.status,
+    siteId: useWarehouseScope(),
   });
   const expiring = (data?.counts?.Expiring ?? 0) + (data?.counts?.Expired ?? 0);
   return (
@@ -413,8 +475,8 @@ function InspectDialog({ lot, onClose }: { lot: StockRow; onClose: () => void })
 }
 
 /** W1: consignments expected in the next 7 days, by date and time (dock planning). */
-function ArrivalsCard() {
-  const { data } = useArrivals();
+function ArrivalsCard({ siteId }: { siteId?: string }) {
+  const { data } = useArrivals(siteId);
   if (!data?.length) return null;
   return (
     <Card className="mb-6">
@@ -464,6 +526,7 @@ function MovementsView() {
     page: search.page,
     status: search.status,
     search: search.q,
+    siteId: search.wh,
   });
 
   const columns: Column<MovementRow>[] = [

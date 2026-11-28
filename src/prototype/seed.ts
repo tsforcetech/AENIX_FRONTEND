@@ -46,6 +46,8 @@ import type {
   Vehicle,
   WarehouseLocation,
 } from '@/domain/types';
+import type { DepreciationRun, FixedAsset, WarehouseSite } from '@/domain/types';
+import { accumulatedTo } from '@/domain/fixedAssets';
 import { categoriesFromLines, milestoneLabels, primaryCategory } from '@/domain/workflow';
 import { invoiceTotals } from '@/domain/calc';
 
@@ -1754,6 +1756,9 @@ export const ledgerAccounts: LedgerAccount[] = [
   grp('g-ar', '1200', 'Accounts receivable', 'Assets', 'g-assets'),
   led('la-1300', '1300', 'VAT input recoverable', 'Assets', 'g-assets'),
   led('la-1250', '1250', 'Disbursements recoverable', 'Assets', 'g-assets'),
+  grp('g-fa', '1500', 'Fixed assets', 'Assets', 'g-assets'),
+  led('la-1510', '1510', 'Property and equipment — cost', 'Assets', 'g-fa'),
+  led('la-1590', '1590', 'Accumulated depreciation', 'Assets', 'g-fa'),
   led('la-1400', '1400', 'Unbilled revenue (accrued)', 'Assets', 'g-assets'),
   led('la-1260', '1260', 'Allowance for doubtful debts', 'Assets', 'g-assets'),
   grp('g-liab', '2000', 'Liabilities', 'Liabilities'),
@@ -1777,6 +1782,8 @@ export const ledgerAccounts: LedgerAccount[] = [
   led('la-6400', '6400', 'Bank charges', 'Expenses', 'g-exp', false),
   led('la-6500', '6500', 'Bad debts written off', 'Expenses', 'g-exp'),
   led('la-6600', '6600', 'Stock shortage / damage claims', 'Expenses', 'g-exp'),
+  led('la-6700', '6700', 'Depreciation', 'Expenses', 'g-exp'),
+  led('la-6800', '6800', 'Gain / loss on disposal of assets', 'Expenses', 'g-exp'),
   ...customers.map((c, i): LedgerAccount => ({
     id: c.ledgerAccountId,
     code: `1200-${String(i + 1).padStart(3, '0')}`,
@@ -2185,3 +2192,86 @@ approvalRequests.push({
     approverRole: 'Finance manager',
   },
 });
+
+// ---------- Fixed assets (owner decision 2026-11-28: register in AENIX; payroll stays outside) ----------
+function fa(
+  n: number,
+  name: string,
+  category: FixedAsset['category'],
+  acquisitionDate: string,
+  cost: number,
+  residualValue: number,
+  usefulLifeMonths: number,
+  location: string,
+  vehicleId?: string,
+): FixedAsset {
+  const base = { cost, residualValue, usefulLifeMonths, acquisitionDate };
+  return {
+    id: `fa-${n}`,
+    number: `FA-${String(n).padStart(3, '0')}`,
+    name,
+    category,
+    acquisitionDate,
+    cost,
+    residualValue,
+    usefulLifeMonths,
+    method: 'Straight-line',
+    location,
+    vehicleId,
+    accumulatedDepreciation: accumulatedTo(base, '2026-10'),
+    depreciatedTo: '2026-10',
+    status: 'Active',
+  };
+}
+
+/** Sample register; depreciation posted up to October 2026 (November is due). */
+export const fixedAssets: FixedAsset[] = [
+  fa(1, '3-ton truck DXB K 48213', 'Vehicles', '2024-03-10', 145000, 25000, 60, 'Fleet yard', 'veh-1'),
+  fa(2, '7-ton truck DXB L 11902', 'Vehicles', '2023-07-01', 210000, 35000, 72, 'Fleet yard', 'veh-2'),
+  fa(
+    3,
+    'Forklift 3-ton (diesel)',
+    'Material handling equipment',
+    '2025-01-20',
+    68000,
+    8000,
+    60,
+    'JAFZA WH-1',
+  ),
+  fa(
+    4,
+    'Selective pallet racking — aisles A to E',
+    'Racking and storage',
+    '2024-09-05',
+    185000,
+    0,
+    120,
+    'JAFZA WH-1',
+  ),
+  fa(5, 'Laptops and handheld scanners', 'IT equipment', '2025-06-15', 24000, 0, 36, 'Office and warehouse'),
+];
+
+export const depreciationRuns: DepreciationRun[] = [];
+
+/** Warehouses: own site and a site run by a warehouse vendor. Jobs with that vendor use its site. */
+export const warehouses: WarehouseSite[] = [
+  {
+    id: 'wh-1',
+    code: 'JAFZA-1',
+    name: 'JAFZA WH-1',
+    type: 'Own',
+    city: 'Jebel Ali Free Zone',
+    palletCapacity: 180,
+    active: true,
+  },
+  {
+    id: 'wh-2',
+    code: 'HGW-JA',
+    name: 'Harbor Gate — Jebel Ali',
+    type: 'Vendor',
+    vendorId: 'ven-7',
+    city: 'Jebel Ali',
+    palletCapacity: 400,
+    active: true,
+  },
+];

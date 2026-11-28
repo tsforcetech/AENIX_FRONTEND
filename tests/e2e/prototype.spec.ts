@@ -58,3 +58,31 @@ test('reload keeps the prototype session; sign out returns to login', async ({ p
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login/);
 });
+
+test('warehouse: switch warehouse and bulk-upload a product list from Excel/CSV', async ({ page }) => {
+  await signIn(page);
+  await page.goto('/warehouse');
+  await page
+    .getByLabel('Warehouse', { exact: true })
+    .selectOption({ label: 'Harbor Gate — Jebel Ali · vendor-run' });
+  await expect(page.getByText('Harbor Gate — Jebel Ali · 3PL stock')).toBeVisible();
+  await page.getByRole('button', { name: 'Upload Excel' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Upload Excel' });
+  await dialog.getByLabel('Customer').selectOption({ label: 'Horizon Retail Group' });
+  await dialog.getByLabel('Warehouse job').selectOption({ index: 1 });
+  await dialog.getByLabel('Container / ASN / truck reference').fill('MSKU 1234567');
+  await dialog.getByRole('button', { name: 'Choose file' }).click();
+  const csv =
+    'Item Code,Description,Qty,UOM,Batch\nHRG-COAT-M,Winter coats — M,40,Pcs,B-77\nHRG-SCRF-01,Wool scarves,25,Pcs,B-78\n';
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'horizon-pl.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(csv),
+  });
+  await page.getByRole('button', { name: /Import 2 lines/ }).click();
+  await expect(dialog.getByText('horizon-pl.csv')).toBeVisible();
+  await expect(dialog.getByText('65 units')).toBeVisible();
+  expect((await axe(page).analyze()).violations).toEqual([]);
+  await dialog.getByRole('button', { name: 'Save upload' }).click();
+  await expect(dialog.getByText('1 file uploaded in this session')).toBeVisible();
+});

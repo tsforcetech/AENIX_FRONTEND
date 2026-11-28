@@ -994,3 +994,56 @@ export interface Expense {
   approval?: ApprovalRecord;
   status: 'Draft' | 'Pending approval' | 'Posted';
 }
+
+// ---------- Fixed assets (owner decision 2026-11-28: register in AENIX; payroll stays outside) ----------
+export type AssetCategory =
+  | 'Vehicles'
+  | 'Material handling equipment'
+  | 'Racking and storage'
+  | 'IT equipment'
+  | 'Furniture and fittings';
+
+export interface FixedAsset {
+  id: Id;
+  number: string;
+  name: string;
+  category: AssetCategory;
+  acquisitionDate: IsoDate;
+  cost: number;
+  residualValue: number;
+  usefulLifeMonths: number;
+  method: 'Straight-line';
+  location: string;
+  /** Own-fleet vehicle this asset is. */
+  vehicleId?: Id;
+  supplier?: string;
+  /** Depreciation posted so far (AED) and the last month posted (YYYY-MM). */
+  accumulatedDepreciation: number;
+  depreciatedTo?: string;
+  status: 'Active' | 'Disposed';
+  disposal?: { date: IsoDate; proceeds: number; gainLoss: number; reason: string; journalId?: Id };
+}
+
+export interface DepreciationRun {
+  id: Id;
+  number: string;
+  period: string; // YYYY-MM
+  postedAt: IsoDateTime;
+  lines: { assetId: Id; amount: number }[];
+  total: number;
+  journalId?: Id;
+}
+
+// ---------- Warehouses (sites) — own or run by a warehouse vendor ----------
+export interface WarehouseSite {
+  id: Id;
+  code: string;
+  /** Name used on stock, movements and documents, e.g. "JAFZA WH-1". */
+  name: string;
+  type: 'Own' | 'Vendor';
+  /** Warehouse vendor that runs the site (type Vendor). */
+  vendorId?: Id;
+  city: string;
+  palletCapacity: number;
+  active: boolean;
+}

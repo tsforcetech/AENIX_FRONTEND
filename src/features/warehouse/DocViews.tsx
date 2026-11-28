@@ -1,4 +1,5 @@
 import { useNavigate } from '@tanstack/react-router';
+import { useWarehouseScope } from './sites';
 import { StatusBadge } from '@/shared/ui/Badge';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { DocRef } from '@/shared/ui/Money';
@@ -176,7 +177,7 @@ const outboundColumns: Column<OutboundRow>[] = [
 
 export function InboundView() {
   const navigate = useNavigate();
-  const { data, isLoading, error } = useInbound();
+  const { data, isLoading, error } = useInbound(useWarehouseScope());
   return (
     <DataTable
       caption="Inbound receipts: product lists and GRNs"
@@ -194,7 +195,7 @@ export function InboundView() {
 
 export function OutboundView() {
   const navigate = useNavigate();
-  const { data, isLoading, error } = useOutbound();
+  const { data, isLoading, error } = useOutbound(useWarehouseScope());
   return (
     <DataTable
       caption="Customer requests and PODs"
@@ -260,7 +261,7 @@ const stockColumns: Column<CustomerStockRow>[] = [
 
 export function CustomerStockView() {
   const navigate = useNavigate();
-  const { data, isLoading, error } = useCustomerStock();
+  const { data, isLoading, error } = useCustomerStock(useWarehouseScope());
   return (
     <DataTable
       caption="Stock by customer job"

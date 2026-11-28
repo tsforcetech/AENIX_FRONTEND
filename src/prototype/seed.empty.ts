@@ -57,3 +57,6 @@ export const drivers: typeof Seed.drivers = [];
 export const trips: typeof Seed.trips = [];
 export const bankStatementLines: typeof Seed.bankStatementLines = [];
 export const expenses: typeof Seed.expenses = [];
+export const fixedAssets: typeof Seed.fixedAssets = [];
+export const depreciationRuns: typeof Seed.depreciationRuns = [];
+export const warehouses: typeof Seed.warehouses = [];

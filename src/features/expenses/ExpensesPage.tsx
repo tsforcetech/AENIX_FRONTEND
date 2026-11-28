@@ -134,7 +134,8 @@ export function ExpensesPage() {
         Postings are illustrative and pending accountant sign-off.
       </p>
       <p className="mb-4 text-caption text-fg-muted">
-        Payroll and fixed assets stay outside AENIX until the owner decides.
+        Payroll stays outside AENIX: record the monthly salary journal from the payroll provider here (account
+        6200 Salaries). Fixed assets have their own register.
       </p>
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <KpiCard

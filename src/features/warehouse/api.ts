@@ -20,6 +20,8 @@ import {
  * when the Warehouse (Phase 5) contract is published. Stock invariants (no negative physical
  * stock, posted movements immutable) are enforced by the backend; mirrored here for the demo.
  */
+import { inSite, siteName } from './sites';
+
 export const WAREHOUSE = 'JAFZA WH-1';
 export const PALLET_CAPACITY = 180;
 const TODAY = '2026-11-23';
@@ -74,6 +76,8 @@ export interface MovementInput {
   reason?: string;
   lines: MovementLineInput[];
   post: boolean;
+  /** Warehouse (site) the movement belongs to; default = own warehouse. */
+  siteId?: string;
 }
 
 const prefix: Record<MovementType, string> = {
@@ -126,22 +130,26 @@ function applyToStock(stock: StockItem[], m: StockMovement): StockItem[] {
 }
 
 export const warehouseApi = {
-  kpis(): Promise<WarehouseKpis> {
+  kpis(siteId?: string): Promise<WarehouseKpis> {
     const db = protoDb.get();
-    const recent = db.stockMovements.filter((m) => m.date >= WEEK_START);
+    const items = db.stockItems.filter((i) => inSite(siteId, i));
+    const moves = db.stockMovements.filter((m) => inSite(siteId, m));
+    const recent = moves.filter((m) => m.date >= WEEK_START);
+    const sites = db.warehouses.filter((w) => w.active && (!siteId || w.id === siteId));
     return latency({
-      palletsUsed: db.stockItems.reduce((s, i) => s + i.pallets, 0),
-      palletsCapacity: PALLET_CAPACITY,
-      skus: db.stockItems.filter((s) => s.qtyOnHand > 0).length,
+      palletsUsed: items.reduce((s, i) => s + i.pallets, 0),
+      palletsCapacity: sites.length ? sites.reduce((s, w) => s + w.palletCapacity, 0) : PALLET_CAPACITY,
+      skus: items.filter((s) => s.qtyOnHand > 0).length,
       receiptsThisWeek: recent.filter((m) => m.type === 'Receipt').length,
       dispatchesThisWeek: recent.filter((m) => m.type === 'Dispatch').length,
-      draftMovements: db.stockMovements.filter((m) => m.status === 'Draft').length,
+      draftMovements: moves.filter((m) => m.status === 'Draft').length,
     });
   },
 
-  stock(params: ListParams): Promise<Page<StockRow>> {
+  stock(params: ListParams & { siteId?: string }): Promise<Page<StockRow>> {
     const db = protoDb.get();
-    const all: StockRow[] = [...db.stockItems]
+    const all: StockRow[] = db.stockItems
+      .filter((i) => inSite(params.siteId, i))
       .sort(
         (a, b) =>
           a.location.localeCompare(b.location) || (a.expiryDate ?? '').localeCompare(b.expiryDate ?? ''),
@@ -174,8 +182,10 @@ export const warehouseApi = {
     return latency({ ...page, counts });
   },
 
-  movements(params: ListParams): Promise<Page<MovementRow>> {
-    const rows = [...protoDb.get().stockMovements]
+  movements(params: ListParams & { siteId?: string }): Promise<Page<MovementRow>> {
+    const rows = protoDb
+      .get()
+      .stockMovements.filter((m) => inSite(params.siteId, m))
       .sort((a, b) => b.date.localeCompare(a.date) || b.number.localeCompare(a.number))
       .map(toMovementRow);
     return latency(
@@ -216,7 +226,7 @@ export const warehouseApi = {
           sku: l.newSku.sku.toUpperCase(),
           customerId: input.customerId,
           description: l.newSku.description,
-          warehouse: WAREHOUSE,
+          warehouse: siteName(input.siteId),
           location: l.newSku.location.toUpperCase(),
           qtyOnHand: 0,
           uom: l.newSku.uom,
@@ -241,7 +251,7 @@ export const warehouseApi = {
       customerId: input.customerId,
       workOrderId: input.workOrderId || undefined,
       date: TODAY,
-      warehouse: WAREHOUSE,
+      warehouse: siteName(input.siteId),
       lines: lines.map((l) => ({ stockItemId: l.stockItemId, quantity: l.quantity })),
       status: 'Draft',
       reference: input.type === 'Adjustment' ? `${input.reference} — ${input.reason}` : input.reference,
@@ -294,11 +304,11 @@ export const warehouseApi = {
   },
 };
 
-export function useWarehouseKpis() {
-  return useQuery({ queryKey: ['warehouse', 'kpis'], queryFn: warehouseApi.kpis });
+export function useWarehouseKpis(siteId?: string) {
+  return useQuery({ queryKey: ['warehouse', 'kpis', siteId], queryFn: () => warehouseApi.kpis(siteId) });
 }
 
-export function useStock(params: ListParams) {
+export function useStock(params: ListParams & { siteId?: string }) {
   return useQuery({
     queryKey: ['warehouse', 'stock', params],
     queryFn: () => warehouseApi.stock(params),
@@ -306,7 +316,7 @@ export function useStock(params: ListParams) {
   });
 }
 
-export function useMovements(params: ListParams) {
+export function useMovements(params: ListParams & { siteId?: string }) {
   return useQuery({
     queryKey: ['warehouse', 'movements', params],
     queryFn: () => warehouseApi.movements(params),

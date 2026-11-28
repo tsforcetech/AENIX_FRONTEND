@@ -25,6 +25,7 @@ import { approvalsRoutes } from '@/features/approvals/routes';
 import { auditRoutes } from '@/features/audit/routes';
 import { variancesRoutes } from '@/features/variances/routes';
 import { expensesRoutes } from '@/features/expenses/routes';
+import { fixedAssetsRoutes } from '@/features/fixed-assets/routes';
 import { appLayoutRoute, rootRoute } from './routes-base';
 
 const indexRoute = createRoute({
@@ -68,6 +69,7 @@ const routeTree = rootRoute.addChildren([
     ...auditRoutes(p),
     ...variancesRoutes(p),
     ...expensesRoutes(p),
+    ...fixedAssetsRoutes(p),
   ]),
 ]);
 

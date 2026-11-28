@@ -69,6 +69,7 @@ const staffPaths = [
   '/reports?tab=vendors',
   '/reports?tab=occupancy',
   '/reports?tab=pdc',
+  '/fixed-assets',
 ];
 const customerPaths = ['/portal', '/portal/approvals', '/portal/invoices'];
 const vendorPaths = ['/vendor-portal', '/vendor-portal/assignments', '/vendor-portal/bills'];
