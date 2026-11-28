@@ -16,6 +16,30 @@ export const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'Furniture and fittings',
 ];
 
+/**
+ * MASTERS M2: asset categories from the Asset categories master, with the default useful life
+ * and residual value (% of cost) that pre-fill a new asset.
+ */
+export function useAssetCategoryOptions() {
+  return useQuery({
+    queryKey: ['masters', 'options', 'assetCategories', 'defaults'],
+    queryFn: () =>
+      latency(
+        protoDb
+          .get()
+          .assetCategories.filter((c) => c.active)
+          .map((c) => ({
+            value: c.name,
+            label: c.name,
+            usefulLifeMonths: c.usefulLifeMonths,
+            residualPct: c.residualPct,
+          })),
+        40,
+      ),
+    staleTime: 30_000,
+  });
+}
+
 const ACC = {
   cost: '1510 Property and equipment — cost',
   accDep: '1590 Accumulated depreciation',
@@ -94,6 +118,7 @@ export const fixedAssetsApi = {
 
   create(input: NewAssetInput): Promise<FixedAsset> {
     if (!input.name.trim()) return Promise.reject(new Error('Enter the asset name'));
+    if (!input.category) return Promise.reject(new Error('Choose a category'));
     if (!(input.cost > 0)) return Promise.reject(new Error('Cost must be above 0'));
     if (input.residualValue < 0 || input.residualValue >= input.cost)
       return Promise.reject(new Error('Residual value must be 0 or more and below the cost'));

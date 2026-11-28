@@ -20,6 +20,8 @@ export interface GridLine {
   minimumCharge?: number;
   /** FLOW-003 T8: surcharge line accepted by the customer. */
   customerApproved?: boolean;
+  /** MASTERS M2: where the suggested price came from ("Customer rate", "Price list", "Cost + 20%"). */
+  priceSource?: string;
 }
 
 /** FLOW-003 S5/S6/T8: service master flags shown on the line. */
@@ -30,7 +32,8 @@ export interface GridServiceMeta {
 }
 
 export type GridLineErrors =
-  Partial<Record<Exclude<keyof GridLine, 'minimumCharge' | 'customerApproved'>, string>> | undefined;
+  | Partial<Record<Exclude<keyof GridLine, 'minimumCharge' | 'customerApproved' | 'priceSource'>, string>>
+  | undefined;
 
 type Col = 'serviceId' | 'description' | 'quantity' | 'unit' | 'unitPrice' | 'unitCost';
 
@@ -201,7 +204,7 @@ export function PriceLinesGrid({
                             ? { unitCost: s.unitCost }
                             : {}),
                           ...(num(l.unitPrice) === 0 && s.unitPrice !== undefined
-                            ? { unitPrice: s.unitPrice }
+                            ? { unitPrice: s.unitPrice, priceSource: s.priceSource }
                             : {}),
                         });
                       }}
@@ -266,10 +269,16 @@ export function PriceLinesGrid({
                       aria-label={`Line ${i + 1} unit price`}
                       inputMode="decimal"
                       value={l.unitPrice}
-                      onChange={(e) => onPatch(i, { unitPrice: e.target.value })}
+                      onChange={(e) => onPatch(i, { unitPrice: e.target.value, priceSource: undefined })}
                       onFocus={(e) => e.currentTarget.select()}
                       {...cell(i, 'unitPrice', 'text-right tabular-nums')}
                     />
+                    {l.priceSource ? (
+                      <span className="mt-1 block text-right text-caption text-fg-muted">
+                        <span className="sr-only">Line {i + 1} price from: </span>
+                        {l.priceSource}
+                      </span>
+                    ) : null}
                   </td>
                   {showCost ? (
                     <td className="py-1.5 pr-2">

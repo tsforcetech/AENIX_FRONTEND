@@ -1,7 +1,8 @@
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router';
-import { Banknote } from 'lucide-react';
+import { Banknote, PencilLine } from 'lucide-react';
+import { useState } from 'react';
 import { Badge, StatusBadge } from '@/shared/ui/Badge';
-import { ButtonLink } from '@/shared/ui/Button';
+import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { DataTable, type Column } from '@/shared/ui/DataTable';
 import { DescriptionList } from '@/shared/ui/DescriptionList';
@@ -10,6 +11,7 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { formatDate } from '@/shared/utils/format';
 import { useVendor, type VendorDetail } from './api';
+import { EditVendorDialog } from './EditVendorDialog';
 import { Rating } from './Rating';
 
 const route = getRouteApi('/_app/vendors/$id');
@@ -110,6 +112,15 @@ const rateColumns: Column<RateRow>[] = [
       <span className="whitespace-nowrap text-caption text-fg-muted">{`${formatDate(r.validFrom)} – ${formatDate(r.validTo)}`}</span>
     ),
   },
+  {
+    key: 'status',
+    header: 'Status',
+    cell: (r) => (
+      <Badge tone={r.status === 'Current' ? 'success' : r.status === 'Future' ? 'info' : 'neutral'}>
+        {r.status}
+      </Badge>
+    ),
+  },
 ];
 
 const assignmentColumns: Column<AssignmentRow>[] = [
@@ -170,6 +181,7 @@ export function VendorDetailPage() {
   const { id } = route.useParams();
   const navigate = useNavigate();
   const { data, isLoading, error } = useVendor(id);
+  const [editing, setEditing] = useState(false);
   if (error) return <StatusMessage kind="error" title="Vendor not found" />;
   if (isLoading || !data) return <StatusMessage kind="loading" title="Loading vendor…" />;
   const v = data.vendor;
@@ -189,9 +201,18 @@ export function VendorDetailPage() {
         }
         description={`${v.code} · ledger ${v.ledgerCode} · ${v.city}, ${v.country}`}
         actions={
-          <ButtonLink to="/payments/new" search={{ vendorId: v.id }} icon={<Banknote aria-hidden="true" />}>
-            New payment
-          </ButtonLink>
+          <>
+            <Button
+              variant="secondary"
+              icon={<PencilLine aria-hidden="true" />}
+              onClick={() => setEditing(true)}
+            >
+              Edit vendor
+            </Button>
+            <ButtonLink to="/payments/new" search={{ vendorId: v.id }} icon={<Banknote aria-hidden="true" />}>
+              New payment
+            </ButtonLink>
+          </>
         }
       />
       <section aria-label="Vendor balance" className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -247,7 +268,19 @@ export function VendorDetailPage() {
           </CardBody>
         </Card>
         <Card className="xl:col-span-2">
-          <CardHeader title="Contracted rates" description="Buy rates used for job costing" />
+          <CardHeader
+            title="Buying rates"
+            description="What this vendor charges us — used for job costing"
+            actions={
+              <Link
+                to="/services"
+                search={{ tab: 'buying', vendorId: v.id }}
+                className="text-body-s font-medium text-brand hover:underline"
+              >
+                Manage in Services › Buying rates
+              </Link>
+            }
+          />
           <div className="mt-3">
             <DataTable
               caption="Vendor rates"
@@ -310,6 +343,7 @@ export function VendorDetailPage() {
           </div>
         </Card>
       </div>
+      {editing ? <EditVendorDialog vendor={v} onClose={() => setEditing(false)} /> : null}
     </div>
   );
 }

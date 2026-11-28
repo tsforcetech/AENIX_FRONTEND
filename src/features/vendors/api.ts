@@ -4,6 +4,7 @@ import { billTotals } from '@/domain/calc';
 import type { LedgerAccount, Vendor, VendorCategory } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
+import { PROTO_TODAY } from '@/prototype/seed';
 import { latency, logActivity, newId, protoDb } from '@/prototype/store';
 
 /**
@@ -99,7 +100,13 @@ export const vendorsApi = {
       vendor: toRow(v),
       rates: db.vendorRates
         .filter((r) => r.vendorId === id)
-        .map((r) => ({ ...r, serviceName: lookupName.service(r.serviceId) })),
+        .map((r) => ({
+          ...r,
+          serviceName: lookupName.service(r.serviceId),
+          // MASTERS M2: current / future / expired on the prototype date.
+          status: (r.validTo < PROTO_TODAY ? 'Expired' : r.validFrom > PROTO_TODAY ? 'Future' : 'Current') as
+            'Current' | 'Future' | 'Expired',
+        })),
       assignments,
       bills: db.vendorBills
         .filter((b) => b.vendorId === id)
@@ -177,6 +184,90 @@ export const vendorsApi = {
 };
 
 export type VendorDetail = Awaited<ReturnType<typeof vendorsApi.get>>;
+
+/** MASTERS M2: editable vendor fields. */
+export interface VendorEditInput {
+  name: string;
+  category: VendorCategory;
+  contactName: string;
+  contactEmail: string;
+  paymentTermsDays: number;
+  status: Vendor['status'];
+}
+
+/** MASTERS M2: edit a vendor — every change is logged old → new. */
+export function updateVendor(id: string, input: VendorEditInput): Promise<Vendor> {
+  const old = protoDb.get().vendors.find((v) => v.id === id);
+  if (!old) return Promise.reject(new Error('Vendor not found.'));
+  const next: Vendor = {
+    ...old,
+    name: input.name.trim(),
+    category: input.category,
+    contactName: input.contactName.trim(),
+    contactEmail: input.contactEmail.trim(),
+    paymentTermsDays: input.paymentTermsDays,
+    status: input.status,
+  };
+  const fields: [string, string, string][] = [
+    ['Name', old.name, next.name],
+    ['Category', old.category, next.category],
+    ['Contact', old.contactName, next.contactName],
+    ['Email', old.contactEmail, next.contactEmail],
+    ['Payment terms (days)', String(old.paymentTermsDays), String(next.paymentTermsDays)],
+    ['Status', old.status, next.status],
+  ];
+  const changes = fields.filter(([, a, b]) => a !== b).map(([field, from, to]) => ({ field, from, to }));
+  if (!changes.length) return latency(old, 150);
+  protoDb.update((s) => ({
+    ...s,
+    vendors: s.vendors.map((v) => (v.id === id ? next : v)),
+    // Keep the payable sub-ledger name in step with the vendor name.
+    ledgerAccounts:
+      next.name !== old.name
+        ? s.ledgerAccounts.map((a) => (a.id === old.ledgerAccountId ? { ...a, name: next.name } : a))
+        : s.ledgerAccounts,
+  }));
+  logActivity({
+    entity: 'Settings',
+    entityId: id,
+    entityRef: old.code,
+    action: `edited vendor ${next.name}`,
+    changes,
+  });
+  return latency(next, 250);
+}
+
+/**
+ * MASTERS M2: vendor categories from the master. The vendor stores the category's system
+ * behaviour (`behaves`), which drives POs, warehouse sites and transport.
+ */
+export function useVendorCategoryOptions() {
+  return useQuery({
+    queryKey: ['masters', 'options', 'vendorCategories', 'behaves'],
+    queryFn: () =>
+      latency(
+        protoDb
+          .get()
+          .vendorCategories.filter((c) => c.active)
+          .map((c) => ({ value: c.id, label: c.name, behaves: c.behaves })),
+        40,
+      ),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateVendor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: VendorEditInput }) => updateVendor(id, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['vendors'] });
+      void qc.invalidateQueries({ queryKey: ['lookups', 'vendors'] });
+      void qc.invalidateQueries({ queryKey: ['ledger'] });
+      void qc.invalidateQueries({ queryKey: ['accounting'] });
+    },
+  });
+}
 
 export function useVendors(params: ListParams) {
   return useQuery({

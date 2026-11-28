@@ -4,6 +4,7 @@ import { useServiceComboOptions } from '@/shared/data/lookups';
 import { Button } from '@/shared/ui/Button';
 import { Dialog } from '@/shared/ui/Dialog';
 import { TextareaField, TextField } from '@/shared/ui/Field';
+import { ReasonField } from './master-fields';
 import { PriceLinesGrid, type GridLine, type GridLineErrors } from '@/shared/ui/PriceLinesGrid';
 import { useToast } from '@/shared/ui/Toast';
 import { formatMoney } from '@/shared/utils/format';
@@ -293,7 +294,10 @@ export function AmendDialog({
           serviceMeta={serviceMeta}
           currency={so.currency}
           suggest={(serviceId) =>
-            suggestLine(serviceId, { origin: so.origin, destination: so.destination }, fx)
+            suggestLine(serviceId, { origin: so.origin, destination: so.destination }, fx, {
+              customerId: so.customerId,
+              currency: so.currency,
+            })
           }
           onPatch={(i, p) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...p } : l)))}
           onAdd={() => {
@@ -397,7 +401,8 @@ export function CancelDialog({
       }
     >
       <div className="space-y-4">
-        <TextareaField
+        <ReasonField
+          kind="Cancellation"
           label="Reason"
           required
           placeholder="e.g. Customer postponed the shipment to next quarter"

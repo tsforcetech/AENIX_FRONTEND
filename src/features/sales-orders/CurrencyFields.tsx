@@ -1,9 +1,9 @@
 import type { Currency } from '@/domain/types';
 import { SelectField, TextField } from '@/shared/ui/Field';
-import { CURRENCIES, DEFAULT_RATES } from './commercial-api';
+import { activeCurrencies, rateFor } from '@/shared/data/currency';
 
 /**
- * FLOW-003 C10: document currency + exchange rate to AED (shown only when the company's
+ * FLOW-003 C10 / MASTERS M2: document currency (Currencies master) + exchange rate to AED (shown only when the company's
  * multi-currency module is on). Balances and ledgers stay in AED.
  */
 export function CurrencyFields({
@@ -17,16 +17,19 @@ export function CurrencyFields({
   onChange: (next: { currency: Currency; rate: string }) => void;
   rateError?: string;
 }) {
+  // MASTERS M2: active currencies from the Currencies master (keeps a saved, now-inactive code).
+  const active = activeCurrencies();
+  const codes = active.includes(currency) ? active : [...active, currency];
   return (
     <>
       <SelectField
         label="Currency"
         hint="Prices on the lines are in this currency"
-        options={CURRENCIES.map((c) => ({ value: c, label: c }))}
+        options={codes.map((c) => ({ value: c, label: c }))}
         value={currency}
         onChange={(e) => {
           const c = e.target.value as Currency;
-          onChange({ currency: c, rate: String(DEFAULT_RATES[c]) });
+          onChange({ currency: c, rate: String(rateFor(c)) });
         }}
       />
       {currency !== 'AED' ? (
@@ -34,7 +37,7 @@ export function CurrencyFields({
           label={`Exchange rate (1 ${currency} = AED)`}
           inputMode="decimal"
           required
-          hint={`Reference rate ${DEFAULT_RATES[currency]} — finance sets the daily rate`}
+          hint={`Rate in the Currencies master: ${rateFor(currency)} — finance sets the daily rate`}
           error={rateError}
           value={rate}
           onChange={(e) => onChange({ currency, rate: e.target.value })}

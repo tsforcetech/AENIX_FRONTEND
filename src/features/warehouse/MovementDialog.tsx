@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { useCustomerOptions } from '@/shared/data/lookups';
 import { Button } from '@/shared/ui/Button';
 import { Dialog } from '@/shared/ui/Dialog';
-import { inputClasses, SelectField, TextareaField, TextField } from '@/shared/ui/Field';
+import { inputClasses, SelectField, TextField } from '@/shared/ui/Field';
+import { ReasonField } from '@/features/sales-orders/master-fields';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useToast } from '@/shared/ui/Toast';
 import { useCreateMovement, useCustomerJobs, useCustomerStock, type MovementInput } from './api';
@@ -186,7 +187,8 @@ function MovementForm({ kind, siteId, onDone }: { kind: MovementKind; siteId?: s
           className={kind === 'Adjustment' ? 'sm:col-span-2' : undefined}
         />
         {kind === 'Adjustment' ? (
-          <TextareaField
+          <ReasonField
+            kind="Stock adjustment"
             label="Reason"
             required
             value={reason}

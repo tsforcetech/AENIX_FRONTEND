@@ -9,48 +9,74 @@ import type { GridLine, GridServiceMeta } from '@/shared/ui/PriceLinesGrid';
 import { BUSINESS_LOCALE } from '@/shared/utils/format';
 import { PROTO_TODAY } from '@/prototype/seed';
 import { latency, protoDb } from '@/prototype/store';
-import { cheapestValidRate, rateCardPrice } from './pricing';
+import { rateFor } from '@/shared/data/currency';
+import { suggestSellingPrice, type Lane } from './pricing';
 
 export { CURRENCIES, DEFAULT_RATES };
 
 /** Prototype "today" (sample data date) used for rate validity and follow-ups. */
 export const COMMERCIAL_TODAY = PROTO_TODAY;
 
-/**
- * C3: rate-card suggestion for a price line, in the document currency.
- * Cost = cheapest vendor rate valid today (lane match preferred); price = cost + 20%.
- */
-export function suggestLine(
-  serviceId: string,
-  lane?: { origin?: string; destination?: string },
-  exchangeRate = 1,
-): Partial<GridLine> {
+function sellingSuggestion(serviceId: string, lane?: Lane, customerId?: string) {
   const db = protoDb.get();
   const svc = db.services.find((s) => s.id === serviceId);
-  if (!svc) return {};
-  const cost = cheapestValidRate(db.vendorRates, serviceId, PROTO_TODAY, lane);
-  const fx = exchangeRate > 0 ? exchangeRate : 1;
-  const conv = (n: number) => Math.round((n / fx) * 100) / 100;
+  if (!svc) return undefined;
   return {
-    unit: svc.unit,
-    description: svc.name,
-    unitCost: cost !== undefined ? conv(cost) : undefined,
-    // Disbursements are rebilled at cost (no markup).
-    unitPrice: cost !== undefined ? conv(svc.isDisbursement ? cost : rateCardPrice(cost)) : undefined,
-    minimumCharge: svc.minimumCharge ? conv(svc.minimumCharge) : undefined,
+    svc,
+    ...suggestSellingPrice({
+      serviceId,
+      customerId: customerId || undefined,
+      onDate: PROTO_TODAY,
+      lane,
+      customerRates: db.customerRates,
+      vendorRates: db.vendorRates,
+      isDisbursement: svc.isDisbursement,
+      toAed: (n, c) => n * rateFor(c),
+    }),
   };
 }
 
-/** C2: rate-card price per unit in AED (undefined when the service has no valid vendor rate). */
-export function rateCardPriceAed(
+/**
+ * C3 / MASTERS M2: suggestion for a price line, in the document currency.
+ * Cost = cheapest vendor rate valid today (lane match preferred). Price, in order: the customer's
+ * own selling rate → the standard price list → cost + 20%. `priceSource` says which was used.
+ */
+export function suggestLine(
   serviceId: string,
-  lane?: { origin?: string; destination?: string },
-): number | undefined {
-  const db = protoDb.get();
-  const svc = db.services.find((s) => s.id === serviceId);
-  if (!svc || svc.isDisbursement) return undefined;
-  const cost = cheapestValidRate(db.vendorRates, serviceId, PROTO_TODAY, lane);
-  return cost !== undefined ? rateCardPrice(cost) : undefined;
+  lane?: Lane,
+  exchangeRate = 1,
+  opts?: { customerId?: string; currency?: Currency },
+): Partial<GridLine> {
+  const s = sellingSuggestion(serviceId, lane, opts?.customerId);
+  if (!s) return {};
+  const fx = exchangeRate > 0 ? exchangeRate : 1;
+  const conv = (n: number) => Math.round((n / fx) * 100) / 100;
+  const docCurrency = opts?.currency ?? 'AED';
+  // A selling rate already in the document currency is used as it is (no round trip via AED).
+  const unitPrice =
+    s.rate && s.rate.currency === docCurrency
+      ? s.rate.price
+      : s.priceAed !== undefined
+        ? conv(s.priceAed)
+        : undefined;
+  return {
+    unit: s.rate?.unit || s.svc.unit,
+    description: s.svc.name,
+    unitCost: s.costAed !== undefined ? conv(s.costAed) : undefined,
+    unitPrice,
+    priceSource: unitPrice !== undefined ? s.source : undefined,
+    minimumCharge: s.svc.minimumCharge ? conv(s.svc.minimumCharge) : undefined,
+  };
+}
+
+/**
+ * C2: list price per unit in AED that discounts are measured against — the customer's selling
+ * rate, else the price list, else cost + 20% (undefined for disbursements or with no rate at all).
+ */
+export function rateCardPriceAed(serviceId: string, lane?: Lane, customerId?: string): number | undefined {
+  const s = sellingSuggestion(serviceId, lane, customerId);
+  if (!s || s.svc.isDisbursement) return undefined;
+  return s.priceAed;
 }
 
 /** Service master flags by id, for the price-line grid (S5/S6/T8). */
