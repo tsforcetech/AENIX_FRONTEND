@@ -119,3 +119,14 @@ Owner request (2026-11-28): apply every gap from the gap analysis in the fronten
 | Cross-cutting | X1 roles matrix (proposed); X2 approval matrix and inbox; X3 audit log; X4 yearly numbering; X5 printable PO, voucher, statement, delivery note; X6 portal additions; X7 notification channels; X8 new reports                                                                                                                           | Approvals, Settings, Audit log, portals, reports                                                                              |
 
 Every new finance screen is marked **pending accountant sign-off**; roles are **proposed** until SEC-001. The backend contracts are listed as API-DEP-31…44 in `docs/API-DEPENDENCIES.md`; the backend handoff (HO-FLOW-003) is written after the owner confirms the frontend.
+
+### Owner decisions (2026-11-28)
+
+| Decision                 | Outcome in the system                                                                                                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Own trucks — possible    | **Own fleet** stays as an optional module (vehicles, drivers, trips); switch in Settings. Vendor transport keeps working.                                                                                    |
+| Own warehouse — possible | **Own warehouse floor** stays as an optional module (bins, put-away, picking, counts); switch in Settings. Vendor warehouses keep working.                                                                   |
+| Currency                 | **AED and foreign currencies** (multi-currency on); ledger in AED.                                                                                                                                           |
+| Payroll                  | **Outside AENIX** — WPS-compliant payroll provider; one salary journal / expense per month in AENIX (6200 Salaries).                                                                                         |
+| Fixed assets             | **Register in AENIX** (`/fixed-assets`): cost, straight-line monthly depreciation, book value, disposal with gain/loss; vehicles link to the fleet. Accountant to confirm method, lives and residual values. |
+| Approval limits          | Prototype defaults accepted (Settings → Approvals); can be changed there.                                                                                                                                    |

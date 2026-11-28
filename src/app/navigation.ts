@@ -19,6 +19,7 @@ import {
   Wallet,
   Warehouse,
   type LucideIcon,
+  Building,
   CarFront,
   CheckCheck,
   CreditCard,
@@ -89,7 +90,10 @@ export const staffNavigation: NavGroup[] = [
   },
   {
     label: 'Accounts',
-    items: [{ label: 'Accounting', to: '/accounting', icon: Landmark, phase: 8 }],
+    items: [
+      { label: 'Accounting', to: '/accounting', icon: Landmark, phase: 8 },
+      { label: 'Fixed assets', to: '/fixed-assets', icon: Building, phase: 8 },
+    ],
   },
   {
     label: 'Masters',

@@ -80,3 +80,11 @@ Append-only. Each entry: date, work package, branch/PR/SHAs, what changed, tests
 - **Checks (local):** format, lint, typecheck clean; unit tests 131/131; build and build:prototype OK; e2e 82 passed, 2 skipped (desktop-only shortcuts on mobile) — crawl of every screen incl. 14 new routes and new tabs with 0 WCAG 2.1 AA violations; production build still has no sample data and denies by default.
 - **Gates:** owner confirmation of the prototype; owner scope decisions (own fleet, own warehouse floor, multi-currency, payroll/fixed assets); accountant sign-off on all finance screens; SEC-001 for roles; DOBIS CR; then HO-FLOW-003 backend handoff and API-DEP-31…44 contracts.
 - **AENIX ledger:** matching AENIX entry to be added with HO-FLOW-003.
+
+### 2026-11-28 — FLOW-003 live; owner decisions; fixed assets (branch `feature/fe-flow-003b-fixed-assets`)
+
+- PR #4 merged to `main` as `611d48b` with owner approval ("publish live"); GitHub Pages deployed and verified.
+- Owner decisions: own fleet and own warehouse floor stay as optional modules; AED + foreign currency; payroll outside AENIX (monthly journal); fixed asset register in AENIX; default approval limits accepted.
+- Added `/fixed-assets` (register, straight-line depreciation run, disposal) with unit tests; API-DEP-45.
+- Checks: format, lint, typecheck clean; unit tests 135/135; build OK; e2e 83 passed, 2 skipped (0 WCAG 2.1 AA violations).
+- Next gate: owner confirmation, then HO-FLOW-003 backend handoff to Antigravity; accountant sign-off on finance screens.
