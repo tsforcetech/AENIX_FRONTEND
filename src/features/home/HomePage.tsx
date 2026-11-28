@@ -32,6 +32,7 @@ import {
   formatNumber,
   formatRelative,
 } from '@/shared/utils/format';
+import { TodayCards } from './HomeCards';
 import { JOB_KINDS, useHomeOverview, type HomeOverview, type JobKind } from './api';
 
 /** Categorical slots 1–5 in fixed order (validated); labels and counts always shown (slots 3–5 < 3:1). */
@@ -156,6 +157,8 @@ function HomeContent({ data }: { data: HomeOverview }) {
           trend={k.collectedTrend}
         />
       </section>
+
+      <TodayCards data={data} />
 
       <Pipeline stages={data.pipeline} />
 
