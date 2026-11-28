@@ -14,6 +14,7 @@ import {
 import { useCustomerOptions, useServiceOptions } from '@/shared/data/lookups';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
+import { PlaceField } from '@/features/sales-orders/master-fields';
 import { SelectField, TextareaField, TextField } from '@/shared/ui/Field';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToast } from '@/shared/ui/Toast';
@@ -185,14 +186,14 @@ export function NewEnquiryPage() {
                     }}
                   />
                 </div>
-                <TextField
+                <PlaceField
                   label="Origin"
                   required
                   placeholder="e.g. Shanghai"
                   error={errors.origin?.message}
                   {...register('origin')}
                 />
-                <TextField
+                <PlaceField
                   label="Destination"
                   required
                   placeholder="e.g. Jebel Ali"
@@ -219,7 +220,7 @@ export function NewEnquiryPage() {
               </>
             ) : null}
             {has('Service') ? (
-              <TextField
+              <PlaceField
                 label="Service location"
                 required={onlyService}
                 placeholder="e.g. DXB Cargo Village"

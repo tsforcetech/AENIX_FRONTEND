@@ -9,6 +9,7 @@ import { categoriesFromLines, serviceCategoryLabel } from '@/domain/workflow';
 import { locationLabel, ServiceTypesPicker } from '@/features/sales-orders/commercial-ui';
 import { suggestLine, useCommercialSettings, useServiceMeta } from '@/features/sales-orders/commercial-api';
 import { CurrencyFields, rateError } from '@/features/sales-orders/CurrencyFields';
+import { PlaceField } from '@/features/sales-orders/master-fields';
 import {
   useCustomerComboOptions,
   useCustomerOptions,
@@ -139,6 +140,8 @@ function QuotationForm({
     },
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'lines' });
+  // MASTERS M2: where each line's suggested price came from, by line key.
+  const [priceSources, setPriceSources] = useState<Record<string, string | undefined>>({});
   const watchedLines = useWatch({ control, name: 'lines' }) ?? [];
   const cats = useController({ control, name: 'serviceCategories' });
   const customer = useController({ control, name: 'customerId' });
@@ -160,7 +163,7 @@ function QuotationForm({
   );
 
   const emptyLine = { serviceId: '', description: '', quantity: 1, unit: '', unitPrice: 0, unitCost: 0 };
-  const gridLines: GridLine[] = watchedLines.map((l) => ({
+  const gridLines: GridLine[] = watchedLines.map((l, idx) => ({
     serviceId: l?.serviceId ?? '',
     description: l?.description ?? '',
     quantity: String(l?.quantity ?? ''),
@@ -169,6 +172,7 @@ function QuotationForm({
     unitCost: String(l?.unitCost ?? ''),
     minimumCharge: l?.minimumCharge,
     customerApproved: l?.customerApproved,
+    priceSource: priceSources[fields[idx]?.id ?? ''],
   }));
   const patchLine = (i: number, p: Partial<GridLine>) => {
     const o = { shouldDirty: true };
@@ -180,9 +184,16 @@ function QuotationForm({
     if (p.unitCost !== undefined) setValue(`lines.${i}.unitCost`, p.unitCost, o);
     if ('minimumCharge' in p) setValue(`lines.${i}.minimumCharge`, p.minimumCharge, o);
     if (p.customerApproved !== undefined) setValue(`lines.${i}.customerApproved`, p.customerApproved, o);
+    if ('priceSource' in p) {
+      const key = fields[i]?.id;
+      if (key) setPriceSources((m) => ({ ...m, [key]: p.priceSource }));
+    }
   };
   const suggest = (serviceId: string) =>
-    suggestLine(serviceId, { origin: getValues('origin'), destination: getValues('destination') }, fxRate);
+    suggestLine(serviceId, { origin: getValues('origin'), destination: getValues('destination') }, fxRate, {
+      customerId: getValues('customerId'),
+      currency: fx.currency,
+    });
 
   const save = (submit: boolean) => async (v: FormOutput) => {
     setSubmitMode(submit ? 'submit' : 'draft');
@@ -288,14 +299,14 @@ function QuotationForm({
                 {...register('mode')}
               />
             ) : null}
-            <TextField
+            <PlaceField
               label={transport ? 'Origin' : locationLabel(locationKind)}
               required
               error={errors.origin?.message}
               {...register('origin')}
             />
             {transport ? (
-              <TextField
+              <PlaceField
                 label="Destination"
                 required
                 error={errors.destination?.message}
@@ -326,7 +337,7 @@ function QuotationForm({
         <Card>
           <CardHeader
             title="Price lines"
-            description={`Type to find a service — cost and a suggested price come from the rate card. Unit cost and margin are internal and never printed.${fx.currency !== 'AED' ? ` Amounts in ${fx.currency}.` : ''}`}
+            description={`Type to find a service — the price comes from the customer’s rates, then the price list, then cost + 20%. Unit cost and margin are internal and never printed.${fx.currency !== 'AED' ? ` Amounts in ${fx.currency}.` : ''}`}
           />
           <CardBody>
             <PriceLinesGrid

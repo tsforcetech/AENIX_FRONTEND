@@ -1,7 +1,7 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
-import { FileText, Plus, Printer, Wallet } from 'lucide-react';
+import { FileText, PencilLine, Plus, Printer, Wallet } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import { StatusBadge } from '@/shared/ui/Badge';
+import { Badge, StatusBadge } from '@/shared/ui/Badge';
 import { Button, ButtonLink } from '@/shared/ui/Button';
 import { Card, CardBody } from '@/shared/ui/Card';
 import { CreditPanel } from '@/features/sales-orders/CreditPanel';
@@ -11,19 +11,23 @@ import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { Tabs } from '@/shared/ui/Tabs';
 import { formatDate, formatMoneyCompact } from '@/shared/utils/format';
+import { DataTable, type Column } from '@/shared/ui/DataTable';
+import { formatInCurrency } from '@/features/sales-orders/commercial-api';
 import { BalanceTiles, SalesOrderBalanceTable } from './AccountBalance';
+import { EditCustomerDialog } from './EditCustomerDialog';
 import { useCustomer, type CustomerDetail } from './api';
 import { PrintableStatement } from './PrintableStatement';
 import { StatementTable } from './StatementTable';
 
 const route = getRouteApi('/_app/customers/$id');
 
-type Tab = 'balance' | 'profile' | 'activity' | 'statement';
+type Tab = 'balance' | 'profile' | 'rates' | 'activity' | 'statement';
 
 export function CustomerDetailPage() {
   const { id } = route.useParams();
   const { data, isLoading, error } = useCustomer(id);
   const [tab, setTab] = useState<Tab>('balance');
+  const [editing, setEditing] = useState(false);
 
   if (error)
     return (
@@ -45,6 +49,13 @@ export function CustomerDetailPage() {
         description={`${c.code} · ledger ${c.ledgerCode} · ${c.industry} · ${c.city}, ${c.country}`}
         actions={
           <>
+            <Button
+              variant="secondary"
+              icon={<PencilLine aria-hidden="true" />}
+              onClick={() => setEditing(true)}
+            >
+              Edit customer
+            </Button>
             <Button variant="secondary" icon={<Printer aria-hidden="true" />} onClick={() => window.print()}>
               Print statement
             </Button>
@@ -96,6 +107,7 @@ export function CustomerDetailPage() {
             items={[
               { value: 'balance', label: 'Balance by sales order', count: balance.salesOrders.length },
               { value: 'profile', label: 'Profile' },
+              { value: 'rates', label: 'Selling rates', count: data.sellingRates.length },
               {
                 value: 'activity',
                 label: 'Activity',
@@ -120,7 +132,7 @@ export function CustomerDetailPage() {
                   label: 'Receivable ledger',
                   value: <span className="font-mono">{c.ledgerCode}</span>,
                 },
-                { label: 'Industry', value: c.industry },
+                { label: 'Category', value: c.industry },
                 { label: 'Location', value: `${c.city}, ${c.country}` },
                 { label: 'TRN', value: <span className="font-mono">{c.trnMasked}</span> },
                 { label: 'Credit limit', value: <Money amount={c.creditLimit} /> },
@@ -128,14 +140,17 @@ export function CustomerDetailPage() {
                 { label: 'Contact', value: c.contactName },
                 { label: 'Email', value: c.contactEmail },
                 { label: 'Phone', value: c.contactPhone },
+                { label: 'Postal address', value: c.postalAddress ?? '—' },
                 { label: 'Customer since', value: formatDate(c.createdAt) },
               ]}
             />
           </CardBody>
         ) : null}
+        {tab === 'rates' ? <SellingRatesList data={data} /> : null}
         {tab === 'activity' ? <ActivityLists data={data} /> : null}
         {tab === 'statement' ? <StatementTable lines={data.statement} /> : null}
       </Card>
+      {editing ? <EditCustomerDialog customer={c} onClose={() => setEditing(false)} /> : null}
     </div>
   );
 }
@@ -229,5 +244,67 @@ function ActivityLists({ data }: { data: CustomerDetail }) {
         ))}
       </MiniList>
     </CardBody>
+  );
+}
+
+type SellingRate = CustomerDetail['sellingRates'][number];
+
+const rateTone = { Current: 'success', Future: 'info', Expired: 'neutral' } as const;
+
+const sellingRateColumns: Column<SellingRate>[] = [
+  { key: 'service', header: 'Service', cell: (r) => <span className="font-medium">{r.serviceName}</span> },
+  {
+    key: 'lane',
+    header: 'Lane',
+    cell: (r) => (
+      <span className="whitespace-nowrap">
+        {r.origin || r.destination ? `${r.origin || 'Any'} → ${r.destination || 'Any'}` : 'Any lane'}
+      </span>
+    ),
+  },
+  { key: 'unit', header: 'Unit', hideOnMobile: true, cell: (r) => r.unit },
+  {
+    key: 'price',
+    header: 'Price',
+    align: 'right',
+    cell: (r) => <span className="tabular-nums">{formatInCurrency(r.price, r.currency)}</span>,
+  },
+  {
+    key: 'valid',
+    header: 'Validity',
+    hideOnMobile: true,
+    cell: (r) => (
+      <span className="whitespace-nowrap text-caption text-fg-muted">{`${formatDate(r.validFrom)} – ${formatDate(r.validTo)}`}</span>
+    ),
+  },
+  { key: 'status', header: 'Status', cell: (r) => <Badge tone={rateTone[r.status]}>{r.status}</Badge> },
+];
+
+/** MASTERS M2: the customer's own selling rates (read-only; edited in Services › Selling rates). */
+function SellingRatesList({ data }: { data: CustomerDetail }) {
+  return (
+    <div className="pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-5 pb-3">
+        <p className="text-body-s text-fg-muted">
+          Used first when pricing this customer’s quotations and orders; otherwise the standard price list
+          applies.
+        </p>
+        <Link
+          to="/services"
+          search={{ tab: 'selling', customerId: data.customer.id }}
+          className="text-body-s font-medium text-brand hover:underline"
+        >
+          Manage in Services › Selling rates
+        </Link>
+      </div>
+      <DataTable
+        caption={`Selling rates for ${data.customer.name}`}
+        columns={sellingRateColumns}
+        rows={data.sellingRates}
+        rowKey={(r) => r.id}
+        emptyTitle="No customer rates"
+        emptyDescription="The standard price list is used for this customer."
+      />
+    </div>
   );
 }

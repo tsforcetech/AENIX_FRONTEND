@@ -34,6 +34,21 @@ export interface CustomerInput {
   paymentTermsDays: number;
 }
 
+/** MASTERS M2: editable customer fields (TRN empty = keep the stored one). */
+export interface CustomerEditInput {
+  name: string;
+  industry: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  postalAddress: string;
+  trn: string;
+  creditLimit: number;
+  paymentTermsDays: number;
+  status: Customer['status'];
+  holdReason?: string;
+}
+
 function balanceOf(customerId: string) {
   const db = protoDb.get();
   return customerBalance(customerId, {
@@ -137,6 +152,18 @@ export const customersApi = {
         phone: db.company.phone,
         email: db.company.email,
       },
+      // MASTERS M2: the customer's own selling rates (read-only here; edited in Services › Selling rates).
+      sellingRates: db.customerRates
+        .filter((r) => r.customerId === id)
+        .map((r) => ({
+          ...r,
+          serviceName: db.services.find((x) => x.id === r.serviceId)?.name ?? '—',
+          status: (!r.active || r.validTo < PROTO_TODAY
+            ? 'Expired'
+            : r.validFrom > PROTO_TODAY
+              ? 'Future'
+              : 'Current') as 'Current' | 'Future' | 'Expired',
+        })),
       balance: balanceOf(id),
       credit: (() => {
         // C5: credit position (AED incl. VAT) — open balance + confirmed orders not yet invoiced.
@@ -208,6 +235,77 @@ export const customersApi = {
 };
 
 export type CustomerDetail = Awaited<ReturnType<typeof customersApi.get>>;
+
+/** MASTERS M2: edit a customer — every change is logged old → new. */
+export function updateCustomer(id: string, input: CustomerEditInput): Promise<Customer> {
+  const db = protoDb.get();
+  const old = db.customers.find((c) => c.id === id);
+  if (!old) return Promise.reject(new Error('Customer not found.'));
+  if (input.status === 'On hold' && old.status !== 'On hold' && (input.holdReason ?? '').trim().length < 3)
+    return Promise.reject(new Error('Give the reason for putting the customer on hold.'));
+  const next: Customer = {
+    ...old,
+    name: input.name.trim(),
+    industry: input.industry,
+    contactName: input.contactName.trim(),
+    contactEmail: input.contactEmail.trim(),
+    contactPhone: input.contactPhone.trim(),
+    postalAddress: input.postalAddress.trim() || undefined,
+    trnMasked: input.trn.trim() ? maskTrn(input.trn) : old.trnMasked,
+    creditLimit: input.creditLimit,
+    paymentTermsDays: input.paymentTermsDays,
+    status: input.status,
+  };
+  const fields: [string, string, string][] = [
+    ['Name', old.name, next.name],
+    ['Category', old.industry, next.industry],
+    ['Contact', old.contactName, next.contactName],
+    ['Email', old.contactEmail, next.contactEmail],
+    ['Phone', old.contactPhone, next.contactPhone],
+    ['Postal address', old.postalAddress ?? '—', next.postalAddress ?? '—'],
+    ['TRN', old.trnMasked, next.trnMasked],
+    ['Credit limit', String(old.creditLimit), String(next.creditLimit)],
+    ['Payment terms (days)', String(old.paymentTermsDays), String(next.paymentTermsDays)],
+    ['Status', old.status, next.status],
+  ];
+  const changes = fields.filter(([, a, b]) => a !== b).map(([field, from, to]) => ({ field, from, to }));
+  if (input.status === 'On hold' && old.status !== 'On hold')
+    changes.push({ field: 'Hold reason', from: '—', to: (input.holdReason ?? '').trim() });
+  if (!changes.length) return latency(old, 150);
+  protoDb.update((s) => ({
+    ...s,
+    customers: s.customers.map((c) => (c.id === id ? next : c)),
+    // Keep the receivable sub-ledger name in step with the customer name.
+    ledgerAccounts:
+      next.name !== old.name
+        ? s.ledgerAccounts.map((a) => (a.id === old.ledgerAccountId ? { ...a, name: next.name } : a))
+        : s.ledgerAccounts,
+  }));
+  logActivity({
+    entity: 'Settings',
+    entityId: id,
+    entityRef: old.code,
+    action:
+      input.status === 'On hold' && old.status !== 'On hold'
+        ? `put customer ${next.name} on hold: ${(input.holdReason ?? '').trim()}`
+        : `edited customer ${next.name}`,
+    changes,
+  });
+  return latency(next, 250);
+}
+
+export function useUpdateCustomer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: CustomerEditInput }) => updateCustomer(id, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['customers'] });
+      void qc.invalidateQueries({ queryKey: ['lookups', 'customers'] });
+      void qc.invalidateQueries({ queryKey: ['ledger'] });
+      void qc.invalidateQueries({ queryKey: ['accounting'] });
+    },
+  });
+}
 
 export function useCustomers(params: ListParams) {
   return useQuery({

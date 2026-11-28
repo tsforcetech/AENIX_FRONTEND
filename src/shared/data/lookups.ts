@@ -12,6 +12,9 @@ export interface Option {
 
 const STALE = 5 * 60_000;
 
+/** MASTERS M2: inactive services are not offered on new quotations, orders or jobs (missing = active). */
+export const isActiveService = (s: { active?: boolean }) => s.active !== false;
+
 export function useCustomerOptions() {
   return useQuery({
     queryKey: ['lookups', 'customers'],
@@ -45,7 +48,10 @@ export function useServiceOptions() {
     staleTime: STALE,
     queryFn: () =>
       latency(
-        protoDb.get().services.map((s) => ({ value: s.id, label: s.name, unit: s.unit, mode: s.mode })),
+        protoDb
+          .get()
+          .services.filter(isActiveService)
+          .map((s) => ({ value: s.id, label: s.name, unit: s.unit, mode: s.mode })),
         60,
       ),
   });
@@ -111,14 +117,17 @@ export function useServiceComboOptions() {
     staleTime: STALE,
     queryFn: () =>
       latency(
-        protoDb.get().services.map((s) => ({
-          value: s.id,
-          label: s.name,
-          hint: `${s.code} · ${s.mode === 'Customs' ? 'Direct service' : s.mode} · per ${s.unit.toLowerCase()}`,
-          keywords: `${s.code} ${s.mode} ${s.description}`,
-          mode: s.mode,
-          unit: s.unit,
-        })),
+        protoDb
+          .get()
+          .services.filter(isActiveService)
+          .map((s) => ({
+            value: s.id,
+            label: s.name,
+            hint: `${s.code} · ${s.mode === 'Customs' ? 'Direct service' : s.mode} · per ${s.unit.toLowerCase()}`,
+            keywords: `${s.code} ${s.mode} ${s.description}`,
+            mode: s.mode,
+            unit: s.unit,
+          })),
         60,
       ),
   });

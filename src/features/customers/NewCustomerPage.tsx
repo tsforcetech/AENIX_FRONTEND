@@ -7,23 +7,14 @@ import { Card, CardBody, CardHeader } from '@/shared/ui/Card';
 import { SelectField, TextField } from '@/shared/ui/Field';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { useToast } from '@/shared/ui/Toast';
+import { useMasterOptions } from '@/features/masters/lookups';
+import { usePaymentTermOptions } from '@/features/sales-orders/master-fields';
+import { StatusMessage } from '@/shared/ui/StatusMessage';
 import { useCreateCustomer } from './api';
-
-const INDUSTRIES = [
-  'Construction',
-  'General trading',
-  'Retail',
-  'Healthcare',
-  'Food & beverage',
-  'Industrial',
-  'Electronics',
-  'Consumer goods',
-  'Other',
-];
 
 const schema = z.object({
   name: z.string().trim().min(2, 'Enter the legal name').max(120),
-  industry: z.string().min(1, 'Choose an industry'),
+  industry: z.string().min(1, 'Choose a category'),
   city: z.string().trim().min(2, 'Enter the city').max(60),
   country: z.string().trim().min(2, 'Enter the country').max(60),
   trn: z.union([
@@ -43,6 +34,20 @@ type FormInput = z.input<typeof schema>;
 type FormOutput = z.output<typeof schema>;
 
 export function NewCustomerPage() {
+  // MASTERS M2: category and payment terms come from the masters; wait so the selects show defaults.
+  const categories = useMasterOptions('customerCategories');
+  const terms = usePaymentTermOptions();
+  if (categories.isLoading || terms.isLoading) return <StatusMessage kind="loading" title="Loading…" />;
+  return <NewCustomerForm categories={categories.data ?? []} terms={terms.options} />;
+}
+
+function NewCustomerForm({
+  categories,
+  terms,
+}: {
+  categories: { value: string; label: string }[];
+  terms: { value: string; label: string }[];
+}) {
   const navigate = useNavigate();
   const toast = useToast();
   const create = useCreateCustomer();
@@ -83,10 +88,11 @@ export function NewCustomerPage() {
               {...register('name')}
             />
             <SelectField
-              label="Industry"
+              label="Category"
               required
-              placeholder="Select industry"
-              options={INDUSTRIES.map((i) => ({ value: i, label: i }))}
+              placeholder="Select category"
+              hint="From the Customer categories master"
+              options={categories}
               error={errors.industry?.message}
               {...register('industry')}
             />
@@ -137,11 +143,10 @@ export function NewCustomerPage() {
               error={errors.creditLimit?.message}
               {...register('creditLimit')}
             />
-            <TextField
-              label="Payment terms (days)"
-              type="number"
-              inputMode="numeric"
+            <SelectField
+              label="Payment terms"
               required
+              options={terms}
               error={errors.paymentTermsDays?.message}
               {...register('paymentTermsDays')}
             />

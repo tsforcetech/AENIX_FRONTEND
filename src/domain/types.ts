@@ -74,6 +74,17 @@ export interface Service {
   isSurcharge?: boolean;
   /** FLOW-003 S6/W13: minimum charge per order line in AED (0 / undefined = none). */
   minimumCharge?: number;
+  // MASTERS M2
+  /** Service type master id (sets `mode`). */
+  serviceTypeId?: Id;
+  /** Default tax code (Tax codes master id). */
+  taxCodeId?: Id;
+  /** Income / cost ledger accounts (default from the service type). */
+  incomeAccountId?: Id;
+  costAccountId?: Id;
+  /** Inactive services are not offered on new quotations, orders or jobs (missing = active). */
+  active?: boolean;
+  // end MASTERS M2
 }
 
 export interface VendorRate {

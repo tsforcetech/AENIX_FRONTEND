@@ -3,7 +3,7 @@
  * Shared by quotations, sales orders and contracts (same feature group).
  */
 import { linesRevenue } from '@/domain/calc';
-import type { IsoDate, PriceLine, VendorRate } from '@/domain/types';
+import type { CustomerRate, IsoDate, PriceLine, VendorRate } from '@/domain/types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const r1 = (n: number) => Math.round(n * 10) / 10;
@@ -34,6 +34,84 @@ export function cheapestValidRate(
 
 export function rateCardPrice(cost: number): number {
   return r2(cost * RATE_CARD_MARKUP);
+}
+
+/** MASTERS M2: where a suggested selling price came from (shown on the price line). */
+export type PriceSource = 'Customer rate' | 'Price list' | 'Cost + 20%' | 'At cost';
+
+export interface Lane {
+  origin?: string;
+  destination?: string;
+}
+
+const normText = (v?: string) => (v ?? '').trim().toLowerCase();
+
+/** A selling rate with a lane applies only to that lane; one without a lane applies to any lane. */
+function laneFit(r: Pick<CustomerRate, 'origin' | 'destination'>, lane?: Lane): 'lane' | 'any' | null {
+  const o = normText(r.origin);
+  const d = normText(r.destination);
+  if (!o && !d) return 'any';
+  if (!lane) return null;
+  return (!o || o === normText(lane.origin)) && (!d || d === normText(lane.destination)) ? 'lane' : null;
+}
+
+/**
+ * MASTERS M2: best valid selling rate for a service — the customer's own rate first, then the
+ * standard price list (no customer). A lane-specific rate beats a general one; then the lowest price.
+ */
+export function pickSellingRate(
+  rates: readonly CustomerRate[],
+  q: { serviceId: string; customerId?: string; onDate: IsoDate; lane?: Lane },
+): { rate: CustomerRate; source: 'Customer rate' | 'Price list' } | undefined {
+  const valid = rates.filter(
+    (r) => r.active && r.serviceId === q.serviceId && r.validFrom <= q.onDate && r.validTo >= q.onDate,
+  );
+  const best = (pool: readonly CustomerRate[]) => {
+    const fits = pool.flatMap((r) => {
+      const fit = laneFit(r, q.lane);
+      return fit ? [{ r, fit }] : [];
+    });
+    const lane = fits.filter((x) => x.fit === 'lane');
+    const use = lane.length ? lane : fits;
+    return use.length ? use.reduce((a, b) => (b.r.price < a.r.price ? b : a)).r : undefined;
+  };
+  const own = q.customerId ? best(valid.filter((r) => r.customerId === q.customerId)) : undefined;
+  if (own) return { rate: own, source: 'Customer rate' };
+  const list = best(valid.filter((r) => !r.customerId));
+  return list ? { rate: list, source: 'Price list' } : undefined;
+}
+
+/**
+ * MASTERS M2: suggested selling price per unit in AED, in this order:
+ * customer rate → standard price list → cheapest valid vendor rate + 20%.
+ * Disbursements are rebilled at cost. `toAed` converts a selling rate's currency to AED.
+ */
+export function suggestSellingPrice(input: {
+  serviceId: string;
+  customerId?: string;
+  onDate: IsoDate;
+  lane?: Lane;
+  customerRates: readonly CustomerRate[];
+  vendorRates: readonly VendorRate[];
+  isDisbursement?: boolean;
+  toAed?: (amount: number, currency: string) => number;
+}): { priceAed?: number; costAed?: number; source?: PriceSource; rate?: CustomerRate } {
+  const costAed = cheapestValidRate(input.vendorRates, input.serviceId, input.onDate, input.lane);
+  if (input.isDisbursement)
+    return costAed !== undefined ? { priceAed: costAed, costAed, source: 'At cost' } : { costAed };
+  const pick = pickSellingRate(input.customerRates, input);
+  if (pick) {
+    const conv = input.toAed ?? ((n: number) => n);
+    return {
+      priceAed: r2(conv(pick.rate.price, pick.rate.currency)),
+      costAed,
+      source: pick.source,
+      rate: pick.rate,
+    };
+  }
+  return costAed !== undefined
+    ? { priceAed: rateCardPrice(costAed), costAed, source: 'Cost + 20%' }
+    : { costAed };
 }
 
 /** C2: discount % of `unitPrice` below the rate-card `listPrice` (0 when at or above list, or no list). */
