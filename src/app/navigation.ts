@@ -19,6 +19,11 @@ import {
   Wallet,
   Warehouse,
   type LucideIcon,
+  CarFront,
+  CheckCheck,
+  CreditCard,
+  History,
+  TriangleAlert,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -35,9 +40,15 @@ export interface NavGroup {
 }
 
 export const staffNavigation: NavGroup[] = [
-  { label: 'Overview', items: [{ label: 'Home', to: '/home', icon: Home, phase: 10 }] },
   {
-    label: 'Commercial',
+    label: 'Overview',
+    items: [
+      { label: 'Home', to: '/home', icon: Home, phase: 10 },
+      { label: 'Approvals', to: '/approvals', icon: CheckCheck, phase: 10 },
+    ],
+  },
+  {
+    label: 'Sales',
     items: [
       { label: 'Enquiries', to: '/enquiries', icon: MessageSquareText, phase: 3 },
       { label: 'Quotations', to: '/quotations', icon: FileText, phase: 3 },
@@ -50,19 +61,35 @@ export const staffNavigation: NavGroup[] = [
     items: [
       { label: 'Jobs (work orders)', to: '/work-orders', icon: Truck, phase: 4 },
       { label: 'Purchase orders', to: '/purchase-orders', icon: ShoppingBag, phase: 4 },
-      { label: 'Warehouse', to: '/warehouse', icon: Warehouse, phase: 5 },
+      { label: 'Fleet and trips', to: '/fleet', icon: CarFront, phase: 4 },
+    ],
+  },
+  {
+    label: 'Warehouse',
+    items: [
+      { label: 'Stock and inbounds', to: '/warehouse', icon: Warehouse, phase: 5 },
+      { label: 'Variances and claims', to: '/variances', icon: TriangleAlert, phase: 5 },
       { label: 'Storage billing', to: '/storage-billing', icon: Boxes, phase: 6 },
     ],
   },
   {
-    label: 'Finance',
+    label: 'Receivables',
     items: [
       { label: 'Invoices', to: '/invoices', icon: Receipt, phase: 7 },
-      { label: 'Purchase invoices', to: '/vendor-bills', icon: ClipboardList, phase: 7 },
-      { label: 'Receipts', to: '/collections', icon: Wallet, phase: 7 },
-      { label: 'Payments', to: '/payments', icon: Banknote, phase: 7 },
-      { label: 'Accounting', to: '/accounting', icon: Landmark, phase: 8 },
+      { label: 'Receipts and PDC', to: '/collections', icon: Wallet, phase: 7 },
     ],
+  },
+  {
+    label: 'Payables',
+    items: [
+      { label: 'Purchase invoices', to: '/vendor-bills', icon: ClipboardList, phase: 7 },
+      { label: 'Payments', to: '/payments', icon: Banknote, phase: 7 },
+      { label: 'Expenses', to: '/expenses', icon: CreditCard, phase: 8 },
+    ],
+  },
+  {
+    label: 'Accounts',
+    items: [{ label: 'Accounting', to: '/accounting', icon: Landmark, phase: 8 }],
   },
   {
     label: 'Masters',
@@ -72,7 +99,13 @@ export const staffNavigation: NavGroup[] = [
       { label: 'Services & rates', to: '/services', icon: Tags, phase: 2 },
     ],
   },
-  { label: 'Insights', items: [{ label: 'Reports', to: '/reports', icon: BarChart3, phase: 10 }] },
+  {
+    label: 'Insights',
+    items: [
+      { label: 'Reports', to: '/reports', icon: BarChart3, phase: 10 },
+      { label: 'Audit log', to: '/audit', icon: History, phase: 10 },
+    ],
+  },
 ];
 
 export const settingsNav: NavItem = { label: 'Settings', to: '/settings', icon: Settings, phase: 1 };

@@ -31,6 +31,21 @@ import type {
   CompanyProfile,
   ServiceCategory,
 } from '@/domain/types';
+import type {
+  AccrualRun,
+  ApprovalRequest,
+  ApprovalRule,
+  BankStatementLine,
+  CreditNote,
+  CycleCount,
+  DebitNote,
+  Driver,
+  Expense,
+  Trip,
+  Variance,
+  Vehicle,
+  WarehouseLocation,
+} from '@/domain/types';
 import { categoriesFromLines, milestoneLabels, primaryCategory } from '@/domain/workflow';
 import { invoiceTotals } from '@/domain/calc';
 
@@ -138,6 +153,43 @@ export const services: Service[] = [
   s(10, 'Cargo insurance', 'Customs', 'Shipment', 'All-risk cover on declared value'),
   s(11, 'Dry storage', 'Warehouse', 'Sq.ft', 'Dry storage charged by floor area per period'),
   s(12, '3 Ton forklift / handling', 'Warehouse', 'Hour', 'Forklift and labour charged by the hour'),
+  // FLOW-003 T8: standard surcharges (need the customer's approval on the line)
+  { ...s(13, 'Waiting / detention', 'Road', 'Hour', 'Truck waiting beyond 2 free hours'), isSurcharge: true },
+  {
+    ...s(14, 'Container demurrage', 'Sea', 'Day', 'Port / line demurrage beyond free days'),
+    isSurcharge: true,
+  },
+  { ...s(15, 'Extra drop', 'Road', 'Drop', 'Additional delivery stop'), isSurcharge: true },
+  {
+    ...s(16, 'After-hours delivery', 'Road', 'Trip', 'Delivery outside 8:00–18:00 or on Friday'),
+    isSurcharge: true,
+  },
+  // FLOW-003 S5/A9: disbursements (paid for the customer, rebilled at cost, not revenue)
+  {
+    ...s(
+      17,
+      'Customs duty (disbursement)',
+      'Customs',
+      'Declaration',
+      "Duty paid on the customer's behalf, rebilled at cost",
+    ),
+    isDisbursement: true,
+  },
+  {
+    ...s(
+      18,
+      'Port / DO charges (disbursement)',
+      'Customs',
+      'Shipment',
+      'Port, delivery-order and terminal fees rebilled at cost',
+    ),
+    isDisbursement: true,
+  },
+  // FLOW-003 S6: service with a minimum charge
+  {
+    ...s(19, 'Labour — packing / repacking', 'Warehouse', 'Hour', 'Packing, labelling and repacking labour'),
+    minimumCharge: 200,
+  },
 ];
 
 function s(n: number, name: string, mode: Service['mode'], unit: string, description: string): Service {
@@ -1701,6 +1753,9 @@ export const ledgerAccounts: LedgerAccount[] = [
   led('la-1130', '1130', 'PDC received (cheques in hand)', 'Assets', 'g-cash'),
   grp('g-ar', '1200', 'Accounts receivable', 'Assets', 'g-assets'),
   led('la-1300', '1300', 'VAT input recoverable', 'Assets', 'g-assets'),
+  led('la-1250', '1250', 'Disbursements recoverable', 'Assets', 'g-assets'),
+  led('la-1400', '1400', 'Unbilled revenue (accrued)', 'Assets', 'g-assets'),
+  led('la-1260', '1260', 'Allowance for doubtful debts', 'Assets', 'g-assets'),
   grp('g-liab', '2000', 'Liabilities', 'Liabilities'),
   grp('g-ap', '2100', 'Accounts payable', 'Liabilities', 'g-liab'),
   led('la-2200', '2200', 'VAT output payable', 'Liabilities', 'g-liab'),
@@ -1716,6 +1771,12 @@ export const ledgerAccounts: LedgerAccount[] = [
   led('la-5100', '5100', 'Direct job costs — subcontracted', 'Expenses', 'g-exp'),
   led('la-6100', '6100', 'Office rent', 'Expenses', 'g-exp', false),
   led('la-6200', '6200', 'Salaries', 'Expenses', 'g-exp', false),
+  led('la-5200', '5200', 'Direct job costs — own fleet', 'Expenses', 'g-exp'),
+  led('la-5300', '5300', 'Direct job costs — own labour', 'Expenses', 'g-exp'),
+  led('la-6300', '6300', 'Office and general expenses', 'Expenses', 'g-exp', false),
+  led('la-6400', '6400', 'Bank charges', 'Expenses', 'g-exp', false),
+  led('la-6500', '6500', 'Bad debts written off', 'Expenses', 'g-exp'),
+  led('la-6600', '6600', 'Stock shortage / damage claims', 'Expenses', 'g-exp'),
   ...customers.map((c, i): LedgerAccount => ({
     id: c.ledgerAccountId,
     code: `1200-${String(i + 1).padStart(3, '0')}`,
@@ -1768,4 +1829,288 @@ export const company: CompanyProfile = {
   },
   invoicePrefix: 'AEN',
   grnPrefix: 'GRN',
+  numberingResetYearly: false,
+  lockedUntil: '2026-09-30',
+  modules: { ownFleet: true, ownWarehouseFloor: true, multiCurrency: true },
+  notificationChannels: {
+    'Purchase order issued': { email: true, whatsapp: true, inApp: true },
+    'GRN ready': { email: true, whatsapp: false, inApp: true },
+    'POD uploaded': { email: true, whatsapp: false, inApp: true },
+    'Invoice posted': { email: true, whatsapp: false, inApp: true },
+    'Payment reminder': { email: true, whatsapp: true, inApp: false },
+    'Approval needed': { email: true, whatsapp: false, inApp: true },
+  },
 };
+
+// ===================== FLOW-003 sample data =====================
+
+/** X2: approval matrix (prototype defaults — owner to confirm). */
+export const approvalRules: ApprovalRule[] = [
+  {
+    id: 'apr-1',
+    docType: 'Quotation discount %',
+    threshold: 10,
+    approverRole: 'Sales manager',
+    active: true,
+  },
+  {
+    id: 'apr-2',
+    docType: 'Quotation margin % below',
+    threshold: 12,
+    approverRole: 'Sales manager',
+    active: true,
+  },
+  { id: 'apr-3', docType: 'Credit override', threshold: 0, approverRole: 'Finance manager', active: true },
+  {
+    id: 'apr-4',
+    docType: 'Sales order change',
+    threshold: 5000,
+    approverRole: 'Sales manager',
+    active: true,
+  },
+  {
+    id: 'apr-5',
+    docType: 'Purchase order',
+    threshold: 25000,
+    approverRole: 'Operations manager',
+    active: true,
+  },
+  {
+    id: 'apr-6',
+    docType: 'Vendor invoice variance',
+    threshold: 0,
+    approverRole: 'Finance manager',
+    active: true,
+  },
+  {
+    id: 'apr-7',
+    docType: 'Payment voucher',
+    threshold: 20000,
+    approverRole: 'Finance manager',
+    active: true,
+  },
+  {
+    id: 'apr-8',
+    docType: 'Stock adjustment (qty)',
+    threshold: 10,
+    approverRole: 'Operations manager',
+    active: true,
+  },
+  {
+    id: 'apr-9',
+    docType: 'Variance outcome',
+    threshold: 0,
+    approverRole: 'Operations manager',
+    active: true,
+  },
+  { id: 'apr-10', docType: 'Write-off', threshold: 0, approverRole: 'General manager', active: true },
+  { id: 'apr-11', docType: 'Credit note', threshold: 2000, approverRole: 'Finance manager', active: true },
+  { id: 'apr-12', docType: 'Expense', threshold: 5000, approverRole: 'Finance manager', active: true },
+];
+
+export const approvalRequests: ApprovalRequest[] = [];
+export const variances: Variance[] = [];
+export const debitNotes: DebitNote[] = [];
+export const creditNotes: CreditNote[] = [];
+export const cycleCounts: CycleCount[] = [];
+export const accrualRuns: AccrualRun[] = [];
+
+/** W4: bin locations (own warehouse floor). Codes match the existing stock locations. */
+export const warehouseLocations: WarehouseLocation[] = [
+  ...[
+    'A-01-03',
+    'A-01-04',
+    'A-02-01',
+    'B-04-02',
+    'B-04-05',
+    'C-01-01',
+    'C-01-02',
+    'C-01-06',
+    'D-03-01',
+    'E-01-02',
+  ].map((code, i): WarehouseLocation => ({
+    id: `loc-${i + 1}`,
+    warehouse: 'JAFZA WH-1',
+    code,
+    zone: code.startsWith('D') ? 'Chilled' : 'Ambient',
+    capacityPallets: 30,
+    active: true,
+  })),
+  {
+    id: 'loc-11',
+    warehouse: 'JAFZA WH-1',
+    code: 'F-FLOOR-01',
+    zone: 'Bulk floor',
+    capacityPallets: 80,
+    active: true,
+  },
+  {
+    id: 'loc-12',
+    warehouse: 'JAFZA WH-1',
+    code: 'Q-01',
+    zone: 'Quarantine',
+    capacityPallets: 20,
+    active: true,
+  },
+  {
+    id: 'loc-13',
+    warehouse: 'JAFZA WH-1',
+    code: 'DSP-01',
+    zone: 'Dispatch',
+    capacityPallets: 15,
+    active: true,
+  },
+];
+
+/** T6: own fleet (fictional plates). */
+export const vehicles: Vehicle[] = [
+  {
+    id: 'veh-1',
+    plate: 'DXB K 48213',
+    type: '3-ton truck',
+    capacityKg: 3000,
+    registrationExpiry: '2027-03-14',
+    insuranceExpiry: '2027-03-14',
+    status: 'Available',
+    odometerKm: 84210,
+  },
+  {
+    id: 'veh-2',
+    plate: 'DXB L 11902',
+    type: '7-ton truck',
+    capacityKg: 7000,
+    registrationExpiry: '2026-12-10',
+    insuranceExpiry: '2026-12-10',
+    status: 'On trip',
+    odometerKm: 132400,
+  },
+  {
+    id: 'veh-3',
+    plate: 'SHJ 3 55017',
+    type: 'Trailer (40ft)',
+    capacityKg: 25000,
+    registrationExpiry: '2027-06-30',
+    insuranceExpiry: '2027-01-31',
+    status: 'Maintenance',
+    odometerKm: 241880,
+  },
+  {
+    id: 'veh-4',
+    plate: 'DXB J 70345',
+    type: 'Pickup',
+    capacityKg: 1000,
+    registrationExpiry: '2027-08-01',
+    insuranceExpiry: '2027-08-01',
+    status: 'Available',
+    odometerKm: 40115,
+  },
+];
+
+export const drivers: Driver[] = [
+  {
+    id: 'drv-1',
+    name: 'Imran Qureshi',
+    licenceNo: 'DL-1048822',
+    licenceExpiry: '2028-02-01',
+    phone: '+971 50 000 0101',
+    status: 'Available',
+  },
+  {
+    id: 'drv-2',
+    name: 'Joseph Mathew',
+    licenceNo: 'DL-2093311',
+    licenceExpiry: '2026-12-20',
+    phone: '+971 50 000 0102',
+    status: 'On trip',
+  },
+  {
+    id: 'drv-3',
+    name: 'Hassan Ali',
+    licenceNo: 'DL-3381207',
+    licenceExpiry: '2027-09-15',
+    phone: '+971 50 000 0103',
+    status: 'Off duty',
+  },
+];
+
+export const trips: Trip[] = [];
+
+/** A13: sample bank statement lines (fictional) for reconciliation. */
+export const bankStatementLines: BankStatementLine[] = [
+  {
+    id: 'bsl-1',
+    bankAccount: '1110 Bank — current account',
+    date: '2026-11-03',
+    description: 'Inward transfer',
+    reference: 'TT-88213',
+    amount: 18450,
+  },
+  {
+    id: 'bsl-2',
+    bankAccount: '1110 Bank — current account',
+    date: '2026-11-05',
+    description: 'Cheque deposit',
+    reference: 'CHQ-004512',
+    amount: 9975,
+  },
+  {
+    id: 'bsl-3',
+    bankAccount: '1110 Bank — current account',
+    date: '2026-11-09',
+    description: 'Outward transfer',
+    reference: 'PV-0005',
+    amount: -7350,
+  },
+  {
+    id: 'bsl-4',
+    bankAccount: '1110 Bank — current account',
+    date: '2026-11-15',
+    description: 'Bank charges',
+    reference: 'CHG-NOV',
+    amount: -105,
+  },
+  {
+    id: 'bsl-5',
+    bankAccount: '1110 Bank — current account',
+    date: '2026-11-18',
+    description: 'Inward transfer',
+    reference: 'TT-90127',
+    amount: 26250,
+  },
+  {
+    id: 'bsl-6',
+    bankAccount: '1110 Bank — current account',
+    date: '2026-11-20',
+    description: 'DEWA',
+    reference: 'DD-DEWA-11',
+    amount: -2310,
+  },
+];
+
+/** A18: overhead expenses outside jobs (fictional). */
+export const expenses: Expense[] = [
+  {
+    id: 'exp-1',
+    number: 'EXP-001',
+    date: '2026-11-01',
+    accountId: 'la-6100',
+    description: 'Office rent — November',
+    amount: 12500,
+    vatRate: 0.05,
+    paidFrom: 'Bank',
+    payee: 'GBH Business Center',
+    status: 'Posted',
+  },
+  {
+    id: 'exp-2',
+    number: 'EXP-002',
+    date: '2026-11-12',
+    accountId: 'la-6300',
+    description: 'Stationery and printer toner',
+    amount: 420,
+    vatRate: 0.05,
+    paidFrom: 'Petty cash',
+    payee: 'Office supplies shop',
+    status: 'Posted',
+  },
+];

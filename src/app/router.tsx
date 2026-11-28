@@ -20,6 +20,11 @@ import { servicesRoutes } from '@/features/services/routes';
 import { reportsRoutes } from '@/features/reports/routes';
 import { settingsRoutes } from '@/features/settings/routes';
 import { portalRoutes } from '@/features/portal/routes';
+import { fleetRoutes } from '@/features/fleet/routes';
+import { approvalsRoutes } from '@/features/approvals/routes';
+import { auditRoutes } from '@/features/audit/routes';
+import { variancesRoutes } from '@/features/variances/routes';
+import { expensesRoutes } from '@/features/expenses/routes';
 import { appLayoutRoute, rootRoute } from './routes-base';
 
 const indexRoute = createRoute({
@@ -58,6 +63,11 @@ const routeTree = rootRoute.addChildren([
     ...reportsRoutes(p),
     ...settingsRoutes(p),
     ...portalRoutes(p),
+    ...fleetRoutes(p),
+    ...approvalsRoutes(p),
+    ...auditRoutes(p),
+    ...variancesRoutes(p),
+    ...expensesRoutes(p),
   ]),
 ]);
 
