@@ -1033,3 +1033,17 @@ export interface DepreciationRun {
   total: number;
   journalId?: Id;
 }
+
+// ---------- Warehouses (sites) — own or run by a warehouse vendor ----------
+export interface WarehouseSite {
+  id: Id;
+  code: string;
+  /** Name used on stock, movements and documents, e.g. "JAFZA WH-1". */
+  name: string;
+  type: 'Own' | 'Vendor';
+  /** Warehouse vendor that runs the site (type Vendor). */
+  vendorId?: Id;
+  city: string;
+  palletCapacity: number;
+  active: boolean;
+}

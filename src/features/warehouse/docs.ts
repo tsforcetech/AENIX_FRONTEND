@@ -4,6 +4,7 @@ import type { CustomerRequest, Grn, PackingList } from '@/domain/types';
 import { lookupName } from '@/shared/data/lookups';
 import { grnResult, inboundStage, podResult } from '@/features/work-orders/api';
 import { latency, protoDb } from '@/prototype/store';
+import { siteOfJob } from './sites';
 
 /** Cross-job document views for the warehouse team (prototype adapter over work orders). */
 export interface InboundRow {
@@ -46,10 +47,11 @@ const stageMap: Record<ReturnType<typeof inboundStage>, InboundRow['stage']> = {
 };
 
 /** Every inbound receipt across all jobs — goods arrive many times per storage job. */
-function inbound(): InboundRow[] {
+function inbound(siteId?: string): InboundRow[] {
   return protoDb
     .get()
-    .workOrders.flatMap((w) =>
+    .workOrders.filter((w) => !siteId || siteOfJob(w) === siteId)
+    .flatMap((w) =>
       w.inbounds.map((ib) => {
         const r = grnResult(ib);
         return {
@@ -95,10 +97,10 @@ export interface CustomerStockRow {
 }
 
 /** Running stock per customer job (from every GRN and POD). */
-function customerStock(): CustomerStockRow[] {
+function customerStock(siteId?: string): CustomerStockRow[] {
   return protoDb
     .get()
-    .workOrders.filter((w) => w.inbounds.length > 0)
+    .workOrders.filter((w) => w.inbounds.length > 0 && (!siteId || siteOfJob(w) === siteId))
     .map((w) => {
       const st = jobStock(w);
       const sum = (k: 'received' | 'damaged' | 'delivered' | 'reserved' | 'onHand' | 'available') =>
@@ -122,10 +124,11 @@ function customerStock(): CustomerStockRow[] {
     .sort((a, b) => b.onHand - a.onHand);
 }
 
-function outbound(): OutboundRow[] {
+function outbound(siteId?: string): OutboundRow[] {
   return protoDb
     .get()
-    .workOrders.flatMap((w) =>
+    .workOrders.filter((w) => !siteId || siteOfJob(w) === siteId)
+    .flatMap((w) =>
       w.customerRequests.map((req) => {
         const r = podResult(req);
         return {
@@ -156,18 +159,24 @@ function arrivals(): InboundRow[] {
     );
 }
 
-export function useArrivals() {
-  return useQuery({ queryKey: ['warehouse', 'arrivals'], queryFn: () => latency(arrivals()) });
+export function useArrivals(siteId?: string) {
+  return useQuery({
+    queryKey: ['warehouse', 'arrivals', siteId],
+    queryFn: () => latency(arrivals().filter((r) => !siteId || inbound(siteId).some((i) => i.id === r.id))),
+  });
 }
 
-export function useInbound() {
-  return useQuery({ queryKey: ['warehouse', 'inbound'], queryFn: () => latency(inbound()) });
+export function useInbound(siteId?: string) {
+  return useQuery({ queryKey: ['warehouse', 'inbound', siteId], queryFn: () => latency(inbound(siteId)) });
 }
 
-export function useOutbound() {
-  return useQuery({ queryKey: ['warehouse', 'outbound'], queryFn: () => latency(outbound()) });
+export function useOutbound(siteId?: string) {
+  return useQuery({ queryKey: ['warehouse', 'outbound', siteId], queryFn: () => latency(outbound(siteId)) });
 }
 
-export function useCustomerStock() {
-  return useQuery({ queryKey: ['warehouse', 'customer-stock'], queryFn: () => latency(customerStock()) });
+export function useCustomerStock(siteId?: string) {
+  return useQuery({
+    queryKey: ['warehouse', 'customer-stock', siteId],
+    queryFn: () => latency(customerStock(siteId)),
+  });
 }

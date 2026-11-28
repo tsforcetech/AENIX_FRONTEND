@@ -130,3 +130,8 @@ Every new finance screen is marked **pending accountant sign-off**; roles are **
 | Payroll                  | **Outside AENIX** — WPS-compliant payroll provider; one salary journal / expense per month in AENIX (6200 Salaries).                                                                                         |
 | Fixed assets             | **Register in AENIX** (`/fixed-assets`): cost, straight-line monthly depreciation, book value, disposal with gain/loss; vehicles link to the fleet. Accountant to confirm method, lives and residual values. |
 | Approval limits          | Prototype defaults accepted (Settings → Approvals); can be changed there.                                                                                                                                    |
+
+### Warehouse switch and bulk upload (2026-11-28)
+
+- **Choose warehouse** on the warehouse screen: all warehouses, the own warehouse (JAFZA WH-1) or a vendor-run site. Stock, KPIs, arrivals, receipts, releases and movements follow the choice. **Add warehouse** creates a new own or vendor-run site. A job belongs to the site of its warehouse vendor; otherwise to the own warehouse.
+- **Upload Excel** on the warehouse screen: product list / ASN (creates the inbound), GRN (for an inbound waiting for its GRN), release request, or POD (closes a request). Pick the customer and job, choose the file, map the columns once (remembered per customer / warehouse) and save. Several files can be uploaded one after another. The same checks as on the job apply (PL vs GRN, request vs POD, stock never negative).

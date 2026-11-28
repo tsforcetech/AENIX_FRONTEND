@@ -6,6 +6,8 @@ import { WarehousePage } from './WarehousePage';
 
 export interface WarehouseSearch extends ListSearch {
   view?: 'movements' | 'inbound' | 'outbound' | 'customers';
+  /** Selected warehouse (site id); none = all warehouses. */
+  wh?: string;
 }
 
 function validateWarehouseSearch(s: Record<string, unknown>): WarehouseSearch {
@@ -15,6 +17,7 @@ function validateWarehouseSearch(s: Record<string, unknown>): WarehouseSearch {
       s.view === 'movements' || s.view === 'inbound' || s.view === 'outbound' || s.view === 'customers'
         ? s.view
         : undefined,
+    wh: typeof s.wh === 'string' && /^[a-z0-9-]{1,40}$/i.test(s.wh) ? s.wh : undefined,
   };
 }
 

@@ -49,6 +49,7 @@ function initialState() {
     expenses: structuredClone(seed.expenses),
     fixedAssets: structuredClone(seed.fixedAssets),
     depreciationRuns: structuredClone(seed.depreciationRuns),
+    warehouses: structuredClone(seed.warehouses),
     session: null as SessionPrincipal | null,
   };
 }
@@ -60,7 +61,7 @@ export type ProtoDb = ReturnType<typeof initialState>;
  * is kept in this tab's sessionStorage so a reload does not lose the demo. Never used outside
  * prototype mode; real sessions follow ADR-004 and never touch web storage.
  */
-const STORAGE_KEY = 'aenix-prototype-db-v7'; // bump when the sample schema changes
+const STORAGE_KEY = 'aenix-prototype-db-v8'; // bump when the sample schema changes
 
 function load(): ProtoDb {
   if (!PROTOTYPE_MODE) return initialState();

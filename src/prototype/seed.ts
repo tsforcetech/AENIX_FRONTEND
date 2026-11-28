@@ -46,7 +46,7 @@ import type {
   Vehicle,
   WarehouseLocation,
 } from '@/domain/types';
-import type { DepreciationRun, FixedAsset } from '@/domain/types';
+import type { DepreciationRun, FixedAsset, WarehouseSite } from '@/domain/types';
 import { accumulatedTo } from '@/domain/fixedAssets';
 import { categoriesFromLines, milestoneLabels, primaryCategory } from '@/domain/workflow';
 import { invoiceTotals } from '@/domain/calc';
@@ -2252,3 +2252,26 @@ export const fixedAssets: FixedAsset[] = [
 ];
 
 export const depreciationRuns: DepreciationRun[] = [];
+
+/** Warehouses: own site and a site run by a warehouse vendor. Jobs with that vendor use its site. */
+export const warehouses: WarehouseSite[] = [
+  {
+    id: 'wh-1',
+    code: 'JAFZA-1',
+    name: 'JAFZA WH-1',
+    type: 'Own',
+    city: 'Jebel Ali Free Zone',
+    palletCapacity: 180,
+    active: true,
+  },
+  {
+    id: 'wh-2',
+    code: 'HGW-JA',
+    name: 'Harbor Gate — Jebel Ali',
+    type: 'Vendor',
+    vendorId: 'ven-7',
+    city: 'Jebel Ali',
+    palletCapacity: 400,
+    active: true,
+  },
+];

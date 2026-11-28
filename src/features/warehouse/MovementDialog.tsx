@@ -14,7 +14,7 @@ export type MovementKind = MovementInput['type'];
 const copy: Record<MovementKind, { title: string; description: string; qtyLabel: string }> = {
   Receipt: {
     title: 'New receipt (GRN)',
-    description: 'Goods received into JAFZA WH-1. A transport job is optional.',
+    description: 'Goods received into stock. A transport job is optional.',
     qtyLabel: 'Qty received',
   },
   Dispatch: {
@@ -52,21 +52,31 @@ const blankLine = (): Line => ({
   location: '',
 });
 
-export function MovementDialog({ kind, onClose }: { kind: MovementKind | null; onClose: () => void }) {
+export function MovementDialog({
+  kind,
+  onClose,
+  siteId,
+  siteLabel,
+}: {
+  kind: MovementKind | null;
+  onClose: () => void;
+  siteId?: string;
+  siteLabel: string;
+}) {
   return (
     <Dialog
       open={!!kind}
       onClose={onClose}
       size="lg"
       title={kind ? copy[kind].title : ''}
-      description={kind ? copy[kind].description : undefined}
+      description={kind ? `${copy[kind].description} Warehouse: ${siteLabel}.` : undefined}
     >
-      {kind ? <MovementForm key={kind} kind={kind} onDone={onClose} /> : null}
+      {kind ? <MovementForm key={kind} kind={kind} siteId={siteId} onDone={onClose} /> : null}
     </Dialog>
   );
 }
 
-function MovementForm({ kind, onDone }: { kind: MovementKind; onDone: () => void }) {
+function MovementForm({ kind, siteId, onDone }: { kind: MovementKind; siteId?: string; onDone: () => void }) {
   const customers = useCustomerOptions();
   const [customerId, setCustomerId] = useState('');
   const [workOrderId, setWorkOrderId] = useState('');
@@ -110,6 +120,7 @@ function MovementForm({ kind, onDone }: { kind: MovementKind; onDone: () => void
         reference: reference.trim(),
         reason: reason.trim() || undefined,
         post,
+        siteId,
         lines: lines.map((l) =>
           l.stockItemId === '__new'
             ? {

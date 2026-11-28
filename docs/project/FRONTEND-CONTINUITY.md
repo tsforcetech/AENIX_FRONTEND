@@ -88,3 +88,5 @@ Append-only. Each entry: date, work package, branch/PR/SHAs, what changed, tests
 - Added `/fixed-assets` (register, straight-line depreciation run, disposal) with unit tests; API-DEP-45.
 - Checks: format, lint, typecheck clean; unit tests 135/135; build OK; e2e 83 passed, 2 skipped (0 WCAG 2.1 AA violations).
 - Next gate: owner confirmation, then HO-FLOW-003 backend handoff to Antigravity; accountant sign-off on finance screens.
+
+- 2026-11-28 (same branch, after owner feedback on the warehouse screen): warehouse switcher + add warehouse; **Upload Excel** for PL / GRN / release request / POD from the warehouse screen. Checks: unit 138/138; e2e 85 passed, 2 skipped (new test uploads a CSV product list on desktop and mobile with 0 axe violations).
