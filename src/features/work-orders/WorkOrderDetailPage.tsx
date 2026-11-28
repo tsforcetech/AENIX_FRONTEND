@@ -1,5 +1,4 @@
 import { getRouteApi, Link } from '@tanstack/react-router';
-import clsx from 'clsx';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -23,7 +22,6 @@ import { servicesLabel } from '@/domain/workflow';
 import { DocRef, Money } from '@/shared/ui/Money';
 import { PageHeader } from '@/shared/ui/PageHeader';
 import { StatusMessage } from '@/shared/ui/StatusMessage';
-import { MilestoneTimeline } from '@/shared/ui/Timeline';
 import { useToast } from '@/shared/ui/Toast';
 import { formatDate, formatDateTime, formatNumber } from '@/shared/utils/format';
 import {
@@ -37,6 +35,13 @@ import {
 import { CustomerRequestsCard, InboundCard, JobStockCard, PurchasingCard } from './JobDocuments';
 import { AssignVendorDialog } from './AssignVendorDialog';
 import { SourceBadge } from './SourceBadge';
+import { ChargesCard } from './ChargesCard';
+import { CompletionNotesCard, InternalCostsCard, ProfitCard } from './CostsCards';
+import { DocumentChecklistCard } from './DocumentChecklistCard';
+import { MilestonesCard } from './MilestonesCard';
+import { OwnVehicleCard } from './OwnVehicleCard';
+import { StopsCard } from './StopsCard';
+import { useJobExtras } from './transport-api';
 
 const route = getRouteApi('/_app/work-orders/$id');
 
@@ -51,6 +56,7 @@ export function WorkOrderDetailPage() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
   const complete = useCompleteWorkOrder();
+  const { data: extras } = useJobExtras(id);
 
   if (error)
     return (
@@ -62,7 +68,10 @@ export function WorkOrderDetailPage() {
     );
   if (isLoading || !wo) return <StatusMessage kind="loading" title="Loading job…" />;
 
-  const running = ['Confirmed', 'In progress', 'In transit'].includes(wo.status);
+  const isTransport = wo.serviceCategories.includes('Transport');
+  const missingDocs = extras?.missingDocuments ?? [];
+  // FLOW-003 C9: any open job can be cancelled with a reason until it is invoiced or completed.
+  const canCancel = wo.status !== 'Cancelled' && wo.status !== 'Completed' && !wo.invoiceId;
   const canInvoice = (wo.status === 'Delivered' || wo.status === 'Completed') && !wo.invoiceId;
   const onError = (e: unknown) =>
     toast({ title: 'Action not allowed', body: e instanceof Error ? e.message : 'Please try again.' });
@@ -95,12 +104,22 @@ export function WorkOrderDetailPage() {
             {wo.priority !== 'Normal' ? (
               <Badge tone={wo.priority === 'Urgent' ? 'danger' : 'warning'}>{wo.priority}</Badge>
             ) : null}
+            {missingDocs.length && wo.status !== 'Cancelled' ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-warning-subtle px-2 py-0.5 text-caption font-medium text-warning"
+                title={missingDocs.join(', ')}
+              >
+                <AlertTriangle aria-hidden="true" className="size-3.5" />
+                {missingDocs.length} document{missingDocs.length === 1 ? '' : 's'} missing
+                <span className="sr-only">: {missingDocs.join(', ')}</span>
+              </span>
+            ) : null}
           </div>
         }
         description={`${wo.customerName} · created ${formatDateTime(wo.createdAt)} by ${wo.owner}`}
         actions={
           <>
-            {wo.status === 'Draft' || wo.status === 'Confirmed' ? (
+            {canCancel ? (
               <Button
                 variant="ghost"
                 icon={<XCircle aria-hidden="true" />}
@@ -216,47 +235,12 @@ export function WorkOrderDetailPage() {
 
           <CustomerRequestsCard wo={wo} />
 
-          <Card>
-            <CardHeader title="Price lines" description="Customer charges for this job (AED, excl. VAT)" />
-            <CardBody className="overflow-x-auto pt-3">
-              <table className="w-full min-w-[560px] text-left text-body-s">
-                <caption className="sr-only">Price lines</caption>
-                <thead>
-                  <tr className="border-b border-border-subtle text-caption uppercase tracking-wide text-fg-muted">
-                    <th scope="col" className="py-2 font-medium">
-                      Description
-                    </th>
-                    <th scope="col" className="py-2 text-right font-medium">
-                      Qty
-                    </th>
-                    <th scope="col" className="py-2 text-right font-medium">
-                      Unit price
-                    </th>
-                    <th scope="col" className="py-2 text-right font-medium">
-                      Amount
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {wo.lines.map((l) => (
-                    <tr key={l.id} className="border-b border-border-subtle last:border-0">
-                      <td className="py-2.5">{l.description}</td>
-                      <td className="py-2.5 text-right tabular-nums">
-                        {formatNumber(l.quantity)}{' '}
-                        <span className="text-caption text-fg-muted">{l.unit}</span>
-                      </td>
-                      <td className="py-2.5 text-right">
-                        <Money amount={l.unitPrice} />
-                      </td>
-                      <td className="py-2.5 text-right font-medium">
-                        <Money amount={l.quantity * l.unitPrice} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </CardBody>
-          </Card>
+          {/* FLOW-003 WP-C: stops, documents, charges with surcharges, completion notes, internal costs */}
+          {isTransport ? <StopsCard wo={wo} /> : null}
+          {extras ? <DocumentChecklistCard wo={wo} extras={extras} /> : null}
+          {extras ? <ChargesCard wo={wo} extras={extras} /> : null}
+          {extras ? <CompletionNotesCard wo={wo} extras={extras} /> : null}
+          {extras ? <InternalCostsCard wo={wo} extras={extras} /> : null}
 
           <Card>
             <CardHeader
@@ -304,50 +288,11 @@ export function WorkOrderDetailPage() {
         </div>
 
         <div className="min-w-0 space-y-6">
-          <Card>
-            <CardHeader
-              title="Milestones"
-              description={`${wo.progress}% complete`}
-              actions={
-                running ? (
-                  <Button
-                    size="sm"
-                    busy={action.isPending}
-                    onClick={() =>
-                      action.mutate(
-                        { id: wo.id, kind: 'advance' },
-                        {
-                          onSuccess: (w) =>
-                            toast({
-                              title: 'Milestone completed',
-                              body: `${w.number} is now ${w.status.toLowerCase()}.`,
-                            }),
-                          onError,
-                        },
-                      )
-                    }
-                  >
-                    Mark next done
-                  </Button>
-                ) : null
-              }
-            />
-            <CardBody>
-              {wo.status === 'Draft' ? (
-                <p className="mb-4 rounded-lg bg-warning-subtle px-3 py-2 text-caption text-warning">
-                  Confirm the job to start tracking milestones.
-                </p>
-              ) : null}
-              {wo.status === 'Cancelled' ? (
-                <p className="mb-4 rounded-lg bg-surface-muted px-3 py-2 text-caption text-fg-muted">
-                  This job was cancelled.
-                </p>
-              ) : null}
-              <MilestoneTimeline milestones={wo.milestones} />
-            </CardBody>
-          </Card>
+          <MilestonesCard wo={wo} />
 
-          <FinancialsCard wo={wo} />
+          {extras ? <ProfitCard extras={extras} /> : null}
+
+          {isTransport && extras ? <OwnVehicleCard wo={wo} extras={extras} /> : null}
 
           {wo.status === 'Completed' ? <NextStepsCard wo={wo} /> : null}
 
@@ -392,7 +337,7 @@ export function WorkOrderDetailPage() {
           open={cancelOpen}
           onClose={() => setCancelOpen(false)}
           title={`Cancel ${wo.number}?`}
-          description="Cancelled jobs stay on record for audit. This cannot be undone in the prototype."
+          description="Open vendor purchase orders and planned own-vehicle trips are cancelled too. Cancelled jobs stay on record for audit; this cannot be undone in the prototype."
           footer={
             <>
               <Button variant="secondary" onClick={() => setCancelOpen(false)}>
@@ -630,58 +575,6 @@ function JobHero({ wo }: { wo: WorkOrderDetail }) {
             { label: 'Owner', value: wo.owner },
           ]}
         />
-      </CardBody>
-    </Card>
-  );
-}
-
-function FinancialsCard({ wo }: { wo: WorkOrderDetail }) {
-  const margin = wo.revenue - wo.cost;
-  return (
-    <Card>
-      <CardHeader title="Job financials" description="AED, excluding VAT" />
-      <CardBody>
-        <dl className="space-y-2.5 text-body-s">
-          <div className="flex justify-between">
-            <dt className="text-fg-muted">Revenue</dt>
-            <dd className="font-medium">
-              <Money amount={wo.revenue} />
-            </dd>
-          </div>
-          <div className="flex justify-between">
-            <dt className="text-fg-muted">
-              {wo.vendorAssignments.length ? 'Vendor cost (agreed)' : 'Cost (estimated)'}
-            </dt>
-            <dd>
-              <Money amount={wo.cost} />
-            </dd>
-          </div>
-          <div className="flex justify-between border-t border-border-subtle pt-2.5">
-            <dt className="font-semibold">Margin</dt>
-            <dd className={clsx('font-semibold', wo.marginPct < 15 ? 'text-warning' : 'text-success')}>
-              <Money amount={margin} />
-            </dd>
-          </div>
-        </dl>
-        <div className="mt-4">
-          <div className="flex justify-between text-caption text-fg-muted">
-            <span>Margin</span>
-            <span className="font-medium tabular-nums text-fg">{wo.marginPct}%</span>
-          </div>
-          <div
-            className="mt-1.5 h-2 overflow-hidden rounded-full bg-surface-muted"
-            role="meter"
-            aria-valuenow={wo.marginPct}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label="Margin percentage"
-          >
-            <div
-              className={clsx('h-full rounded-full', wo.marginPct < 15 ? 'bg-warning' : 'bg-success')}
-              style={{ width: `${Math.max(0, Math.min(100, wo.marginPct))}%` }}
-            />
-          </div>
-        </div>
       </CardBody>
     </Card>
   );
