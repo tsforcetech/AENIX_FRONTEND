@@ -7,6 +7,7 @@ import type {
   DocLine,
   Grn,
   Inbound,
+  JobStop,
   Milestone,
   PackingList,
   Pod,
@@ -23,7 +24,7 @@ import type {
 import { nextDocNumber } from '@/domain/numbering';
 import { reconcile } from '@/domain/reconcile';
 import { jobStock } from '@/domain/stock';
-import { milestoneLabels, primaryCategory, SERVICE_CATEGORIES } from '@/domain/workflow';
+import { deliveryStopsDone, milestoneLabels, primaryCategory, SERVICE_CATEGORIES } from '@/domain/workflow';
 import { lookupName } from '@/shared/data/lookups';
 import { paginate, type ListParams, type Page } from '@/shared/data/paging';
 import { latency, logActivity, newId, nowIso, protoDb } from '@/prototype/store';
@@ -246,16 +247,23 @@ function buildMilestones(
 /**
  * Status follows milestone progress. Transport: 0–1 done Confirmed, 2–3 In progress, 4+ In transit,
  * all Delivered. Warehouse / direct service: 0–1 Confirmed, then In progress, all Delivered.
+ * FLOW-003 T4: a job with delivery stops is Delivered only when every delivery stop is Done.
  */
-function statusForProgress(done: number, total: number, category: ServiceCategory): WorkOrderStatus {
-  if (done >= total) return 'Delivered';
+export function statusForProgress(
+  done: number,
+  total: number,
+  category: ServiceCategory,
+  stops?: JobStop[],
+): WorkOrderStatus {
+  if (done >= total && deliveryStopsDone(stops)) return 'Delivered';
+  if (done >= total) return category === 'Transport' ? 'In transit' : 'In progress';
   if (category === 'Transport' && done >= 4) return 'In transit';
   if (done >= 2) return 'In progress';
   return 'Confirmed';
 }
 
 /** Mark the milestone with this label done (and the next one current) if it is the current one. */
-function advanceIfCurrent(w: WorkOrder, label: string): WorkOrder {
+export function advanceIfCurrent(w: WorkOrder, label: string): WorkOrder {
   const idx = w.milestones.findIndex((m) => m.status === 'Current' && m.label === label);
   if (idx < 0) return w;
   const milestones: Milestone[] = w.milestones.map((m, i) =>
@@ -263,7 +271,7 @@ function advanceIfCurrent(w: WorkOrder, label: string): WorkOrder {
   );
   const done = milestones.filter((m) => m.status === 'Done').length;
   const status = ['Confirmed', 'In progress', 'In transit'].includes(w.status)
-    ? statusForProgress(done, milestones.length, w.serviceCategory)
+    ? statusForProgress(done, milestones.length, w.serviceCategory, w.stops)
     : w.status;
   return { ...w, milestones, status };
 }
@@ -556,7 +564,11 @@ export const workOrdersApi = {
         i === idx ? { ...m, status: 'Done', at: nowIso() } : i === idx + 1 ? { ...m, status: 'Current' } : m,
       );
       const done = milestones.filter((m) => m.status === 'Done').length;
-      return { ...w, milestones, status: statusForProgress(done, milestones.length, w.serviceCategory) };
+      return {
+        ...w,
+        milestones,
+        status: statusForProgress(done, milestones.length, w.serviceCategory, w.stops),
+      };
     });
     logActivity({
       entity: 'Work order',
@@ -567,16 +579,51 @@ export const workOrdersApi = {
     return latency(updated, 200);
   },
 
+  /**
+   * FLOW-003 C9: cancel with a reason. Not allowed once invoiced or completed. Open vendor POs
+   * (Draft / Issued / Accepted) and planned own-fleet trips are cancelled with the job.
+   */
   cancel(id: string, reason: string): Promise<WorkOrder> {
     const wo = findOrThrow(id);
-    if (wo.status !== 'Draft' && wo.status !== 'Confirmed')
-      return Promise.reject(new Error('Only draft or confirmed jobs can be cancelled'));
-    const updated = patch(id, (w) => ({ ...w, status: 'Cancelled' }));
+    const db = protoDb.get();
+    if (!reason.trim()) return Promise.reject(new Error('Give a reason for cancelling the job'));
+    if (wo.status === 'Cancelled') return Promise.reject(new Error('The job is already cancelled'));
+    const invoiced =
+      !!wo.invoiceId || db.invoices.some((i) => i.workOrderId === id && i.status !== 'Cancelled');
+    if (invoiced)
+      return Promise.reject(new Error('The job is invoiced — it cannot be cancelled. Raise a credit note.'));
+    if (wo.status === 'Completed') return Promise.reject(new Error('Completed jobs cannot be cancelled.'));
+    const started = db.trips.find((t) => t.workOrderId === id && t.status === 'Started');
+    if (started)
+      return Promise.reject(
+        new Error(`Trip ${started.number} is on the road — complete or cancel it before cancelling the job.`),
+      );
+    const openPos = db.purchaseOrders.filter(
+      (p) => p.workOrderId === id && ['Draft', 'Issued', 'Accepted'].includes(p.status),
+    );
+    const plannedTrips = db.trips.filter((t) => t.workOrderId === id && t.status === 'Planned');
+    protoDb.update((s) => ({
+      ...s,
+      purchaseOrders: s.purchaseOrders.map((p) =>
+        openPos.some((o) => o.id === p.id) ? { ...p, status: 'Cancelled' as const } : p,
+      ),
+      trips: s.trips.map((t) =>
+        plannedTrips.some((x) => x.id === t.id) ? { ...t, status: 'Cancelled' as const } : t,
+      ),
+    }));
+    const updated = patch(id, (w) => ({ ...w, status: 'Cancelled', cancelReason: reason.trim() }));
+    const extra = [
+      openPos.length ? `${openPos.length} PO${openPos.length === 1 ? '' : 's'} cancelled` : '',
+      plannedTrips.length
+        ? `${plannedTrips.length} trip${plannedTrips.length === 1 ? '' : 's'} cancelled`
+        : '',
+    ].filter(Boolean);
     logActivity({
       entity: 'Work order',
       entityId: id,
       entityRef: wo.number,
-      action: `cancelled the job (${reason})`,
+      action: `cancelled the job (${reason.trim()})${extra.length ? ` — ${extra.join(', ')}` : ''}`,
+      changes: [{ field: 'Status', from: wo.status, to: 'Cancelled' }],
     });
     return latency(updated, 200);
   },
@@ -1027,6 +1074,7 @@ function useInvalidate() {
     void qc.invalidateQueries({ queryKey: ['sales-orders'] });
     void qc.invalidateQueries({ queryKey: ['warehouse'] });
     void qc.invalidateQueries({ queryKey: ['purchase-orders'] });
+    void qc.invalidateQueries({ queryKey: ['fleet'] });
   };
 }
 
